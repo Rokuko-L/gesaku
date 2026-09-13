@@ -17,6 +17,7 @@ set_project_name under a lock, not a per-request context.
 import asyncio
 import json
 import os
+import re
 import sys
 import threading
 from datetime import datetime, timezone
@@ -176,6 +177,23 @@ def create_project(req: CreateProject):
         cli += ["--notes", notes_arg]
 
     p.mkdir(parents=True, exist_ok=True)
+    # Persist launch knobs so a later resume can recover genre if foundation
+    # dies before writing active_genre.json.
+    try:
+        paths.save_json_atomic(
+            {
+                "genre": req.genre.strip(),
+                "chapters": req.chapters,
+                "wordsPerChapter": req.wordsPerChapter,
+                "revisionCycles": req.revisionCycles,
+                "perspective": req.perspective,
+                "proseMode": req.proseMode,
+                "savedAt": datetime.now(timezone.utc).isoformat(),
+            },
+            p / "launch.json",
+        )
+    except OSError:
+        pass
     try:
         meta = run_manager.launch(p, cli)
     except RuntimeError as e:
@@ -188,6 +206,108 @@ def run_stop(project: str | None = Query(None)):
     _, p = project_dir(project)
     stopped = run_manager.stop(p)
     return {"ok": True, "stopped": stopped}
+
+
+class StartRun(BaseModel):
+    project: str | None = None
+    revisionCycles: int | None = Field(default=None, ge=0, le=6)
+    genre: str = ""
+    chapters: int | None = Field(default=None, ge=4, le=200)
+    wordsPerChapter: int | None = Field(default=None, ge=500, le=8000)
+    perspective: str | None = None
+    proseMode: str | None = None
+
+
+def _load_launch(p: Path) -> dict:
+    launch = p / "launch.json"
+    if not launch.exists():
+        return {}
+    try:
+        data = json.loads(launch.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _infer_genre(p: Path) -> str:
+    """Genre for a resume when active_genre.json was never written (crash before foundation finished)."""
+    g = (_load_launch(p) or {}).get("genre") or ""
+    if str(g).strip():
+        return str(g).strip()
+    for src in (p / "seed.txt", SEEDS_DIR / f"{p.name}.txt"):
+        if not src.exists():
+            continue
+        try:
+            text = src.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        m = re.search(r"(?im)^Genre:\s*(.+)$", text)
+        if m:
+            return m.group(1).strip()
+    return ""
+
+
+@app.post("/api/run/start")
+def run_start(req: StartRun | None = None):
+    """Resume an existing project's pipeline (no --from-scratch).
+
+    state.json picks up the current phase. Genre/chapter shape come from
+    launch.json (saved at create) when regenerating a missing active_genre.json.
+    An existing active_genre.json is never clobbered by a plain resume.
+    """
+    name, p = project_dir(req.project if req else None)
+    if run_manager.status(p)["running"]:
+        raise HTTPException(409, f"project '{name}' already has a running pipeline")
+
+    launch = _load_launch(p)
+    cli = ["--project", name]
+    cycles = (req.revisionCycles if req else None)
+    if cycles is not None:
+        cli += ["--revision-cycles", str(cycles)]
+
+    has_genre_file = (p / "active_genre.json").exists() or (paths.get_root_dir() / "active_genre.json").exists()
+
+    if not has_genre_file:
+        genre = ((req.genre if req else "") or "").strip() or _infer_genre(p)
+        if not genre:
+            raise HTTPException(
+                400,
+                f"project '{name}' has no active_genre.json and no genre on file — "
+                "pass genre in the request or add a 'Genre:' line to seed.txt",
+            )
+        cli += ["--genre", genre]
+        chapters = req.chapters if req and req.chapters else launch.get("chapters")
+        wpc = req.wordsPerChapter if req and req.wordsPerChapter else launch.get("wordsPerChapter")
+        perspective = (req.perspective if req and req.perspective is not None else launch.get("perspective")) or ""
+        prose_mode = (req.proseMode if req and req.proseMode is not None else launch.get("proseMode")) or ""
+        if chapters:
+            cli += ["--chapters", str(int(chapters))]
+        if wpc:
+            cli += ["--words-per-chapter", str(int(wpc))]
+        if perspective:
+            cli += ["--perspective", str(perspective)]
+        if prose_mode:
+            cli += ["--prose-mode", str(prose_mode)]
+        # Persist so the next resume does not have to re-infer.
+        try:
+            merged = {
+                **launch,
+                "genre": genre,
+                "chapters": chapters or launch.get("chapters"),
+                "wordsPerChapter": wpc or launch.get("wordsPerChapter"),
+                "perspective": perspective or launch.get("perspective"),
+                "proseMode": prose_mode or launch.get("proseMode"),
+                "savedAt": datetime.now(timezone.utc).isoformat(),
+            }
+            paths.save_json_atomic(merged, p / "launch.json")
+        except OSError:
+            pass
+
+    try:
+        meta = run_manager.launch(p, cli)
+    except RuntimeError as e:
+        raise HTTPException(409, str(e)) from e
+    return {"ok": True, "project": name, **run_snapshot(p), "logPath": meta.get("logPath")}
 
 
 @app.get("/api/run-status")

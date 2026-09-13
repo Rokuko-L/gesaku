@@ -19,7 +19,7 @@ from core.genre import load_genre
 load_dotenv()
 
 def call_writer(prompt, max_tokens=get_max_tokens_with_thinking(16000)):
-    return call_llm(prompt=prompt, model_key="writer", max_tokens=max_tokens, timeout=300)
+    return call_llm(prompt=prompt, model_key="writer", max_tokens=max_tokens, timeout=900)
 
 FOUNDATION_CANON_PROMPT = paths.load_prompt("foundation_canon")
 

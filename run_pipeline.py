@@ -155,23 +155,26 @@ def run_foundation(state: dict) -> dict:
         state["iteration"] = i
 
         # 1. Generate planning documents
+        # Thinking models on a local proxy routinely exceed 600s for world/
+        # character bibles; the old 600s cap killed gen_world mid-call.
+        FOUNDATION_STEP_TIMEOUT = 1800
         step("Generating world bible...")
-        uv_run("foundation/gen_world.py", timeout=600)
+        uv_run("foundation/gen_world.py", timeout=FOUNDATION_STEP_TIMEOUT)
 
         step("Generating characters...")
-        uv_run("foundation/gen_characters.py", timeout=600)
+        uv_run("foundation/gen_characters.py", timeout=FOUNDATION_STEP_TIMEOUT)
 
         step("Generating title tournament...")
         current_title = load_state().get("title", "")
         if not current_title or current_title == "Untitled":
-            uv_run("foundation/gen_title.py", timeout=600)
+            uv_run("foundation/gen_title.py", timeout=FOUNDATION_STEP_TIMEOUT)
 
         # Canon before outline so plant hygiene can use sealed-fact denylist.
         step("Generating canon...")
-        uv_run("foundation/gen_canon.py", timeout=600)
+        uv_run("foundation/gen_canon.py", timeout=FOUNDATION_STEP_TIMEOUT)
 
         step("Generating outline (part 1)...")
-        uv_run("foundation/gen_outline.py", timeout=900)
+        uv_run("foundation/gen_outline.py", timeout=max(900, FOUNDATION_STEP_TIMEOUT))
 
         # Validate Chapter 1 premise beats (pre-draft gate)
         outline_path = paths.get_outline_path()
@@ -1898,7 +1901,11 @@ def run_pipeline(args):
 
                 # Step 1: Initialize genre configuration
                 active_genre_path = paths.get_active_genre_path()
-                if (not active_genre_path.exists() or args.from_scratch or args.genre) and args.genre:
+                # Only (re)build genre when missing or --from-scratch. Passing
+                # --genre on a normal resume used to force a regen and clobber
+                # an existing active_genre.json (chapter count / prompts).
+                should_init_genre = args.from_scratch or not active_genre_path.exists()
+                if should_init_genre and args.genre:
                     banner("STEP 1: Initializing genre configuration")
                     cmd = [sys.executable, str(root_dir / "foundation" / "gen_genre_framework.py")]
                     if args.genre:
@@ -1916,6 +1923,21 @@ def run_pipeline(args):
                     subprocess.run(cmd, check=True, timeout=900)
                     from core.genre import reload_genre
                     reload_genre()
+                    # Genre is the source of truth for chapter count once written.
+                    # Sync immediately — the startup sync already ran (and no-op'd
+                    # if this file did not exist yet).
+                    try:
+                        genre_cfg = load_genre()
+                        genre_total = int(
+                            genre_cfg["generation"]["outline"]["estimated_chapters"]
+                        )
+                        if genre_total and genre_total != state.get("chapters_total"):
+                            state["chapters_total"] = genre_total
+                            save_state(state)
+                            print(f"  chapters_total synced from genre config → {genre_total}")
+                    except (FileNotFoundError, KeyError, TypeError, ValueError) as e:
+                        print(f"  WARN: could not sync chapters_total from genre: {e}",
+                              file=sys.stderr)
                     print("Genre config ready.\n")
 
                 state = run_foundation(state)
