@@ -32,6 +32,24 @@ def validate_block_output(text, start, end):
         return False, f"Missing detailed outlines for: {', '.join(missing)}"
     return True, ""
 
+def extract_chapter_outlines(block_text, start, end):
+    """Isolate each chapter's outline. Missing chapters become a soft error.
+
+    The previous all-or-nothing regex required every header; a single
+    mis-numbered chapter killed the whole foundation run after the LLM
+    had already produced a usable block.
+    """
+    found = {}
+    missing = []
+    for ch in range(start, end + 1):
+        pattern = rf'###\s*\*?\*?\s*(?:Chapter|Ch\.?)\s*\*?\*?\s*{ch}\b.*?(?=###\s*\*?\*?\s*(?:Chapter|Ch\.?)\s*\*?\*?\s*(?:\d+)\b|## Act|## Foreshadowing|$)'
+        match = re.search(pattern, block_text, re.IGNORECASE | re.DOTALL)
+        if match:
+            found[ch] = match.group(0).strip()
+        else:
+            missing.append(ch)
+    return found, missing
+
 def _act_ranges(total_chapters):
     """Proportional 3-act boundaries (~25/50/25) valid for any chapter count.
 
@@ -438,14 +456,35 @@ CRITICAL RULES:
             print(f"ERROR: Failed to expand Block Ch {start}-{end} after 3 attempts: {last_err}", file=sys.stderr)
             sys.exit(1)
 
-        # Parse and save the block chapters to detailed_outlines
-        for ch in range(start, end + 1):
-            pattern = rf'###\s*\*?\*?\s*(?:Chapter|Ch\.?)\s*\*?\*?\s*{ch}\b.*?(?=###\s*\*?\*?\s*(?:Chapter|Ch\.?)\s*\*?\*?\s*(?:\d+)\b|## Act|## Foreshadowing|$)'
-            match = re.search(pattern, block_result, re.IGNORECASE | re.DOTALL)
-            if match:
-                detailed_outlines[ch] = match.group(0).strip()
-            else:
-                print(f"ERROR: Could not isolate Chapter {ch} outline from block output.", file=sys.stderr)
+        # Parse block chapters. Keep any that isolated cleanly; retry only
+        # the missing ones so one bad header does not kill the whole run.
+        extracted, missing = extract_chapter_outlines(block_result, start, end)
+        if missing:
+            print(f"  WARN: Block Ch {start}-{end} missing chapters {missing}; retrying those once...",
+                  file=sys.stderr)
+            retry_prompt = block_prompt + (
+                f"\n\nPREVIOUS OUTPUT WAS MISSING: {missing}. "
+                "Output ONLY the detailed outlines for those chapters, each starting "
+                "with '### Chapter N: [Title]'."
+            )
+            try:
+                retry_res = call_writer(retry_prompt)
+                more, still_missing = extract_chapter_outlines(retry_res, start, end)
+                extracted.update(more)
+                missing = still_missing
+            except Exception as e:
+                print(f"  WARN: retry for missing chapters failed: {e}", file=sys.stderr)
+
+        detailed_outlines.update(extracted)
+        if missing:
+            print(f"  WARN: Block Ch {start}-{end} still missing {missing} after retry; continuing.",
+                  file=sys.stderr)
+            if not extracted:
+                print(f"ERROR: Block Ch {start}-{end} produced no isolatable chapters.", file=sys.stderr)
+                if detailed_outlines:
+                    full_outline_text = f"# {title.upper()}\n\n" + roadmap_content + "\n\n## DETAILED CHAPTER OUTLINES\n\n" + \
+                                        "\n\n---\n\n".join(detailed_outlines[ch] for ch in sorted(detailed_outlines.keys()))
+                    outline_path.write_text(full_outline_text, encoding="utf-8")
                 sys.exit(1)
 
         # Save active block progress in outline.md immediately
