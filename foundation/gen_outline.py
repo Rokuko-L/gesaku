@@ -233,12 +233,20 @@ FORMAT REQUIREMENT:
 Your output must be structured markdown. Start the roadmap section with "## HIGH-LEVEL ROADMAP" and the ledger section with "## GLOBAL PLOT THREADS LEDGER".
 Each chapter entry must start with "### Chapter N:".
 """
+        # Roadmap generation is expensive on a thinking proxy. Tonel drift is a
+        # quality signal, not a hard gate — after retries we keep the last
+        # structurally valid roadmap instead of killing the whole foundation.
         roadmap_content = ""
-        for attempt in range(1, 4):
+        best_drift_feedback = ""
+        max_roadmap_attempts = int(os.getenv("GESAKU_OUTLINE_ROADMAP_ATTEMPTS", "6"))
+        for attempt in range(1, max_roadmap_attempts + 1):
             try:
                 res = call_writer(roadmap_prompt)
             except TruncationError as e:
                 print(f"  WARN: Roadmap attempt {attempt} truncated ({e}), retrying...", file=sys.stderr)
+                continue
+            except Exception as e:
+                print(f"  WARN: Roadmap attempt {attempt} failed: {e}", file=sys.stderr)
                 continue
             if "## HIGH-LEVEL ROADMAP" in res and "## GLOBAL PLOT THREADS LEDGER" in res:
                 # Run the tonal drift check
@@ -248,14 +256,19 @@ Each chapter entry must start with "### Chapter N:".
                     break
                 else:
                     print(f"  WARN: Roadmap attempt {attempt} failed tonal drift check:\n{feedback}", file=sys.stderr)
+                    best_drift_feedback = feedback
                     # Add drift feedback to prompt for self-correction
                     roadmap_prompt += f"\n\nERROR ON ATTEMPT {attempt}: {feedback}\nEnsure that the proposed outline maintains a consistent tone, stakes register, and world/magic rules between Act 1 and Acts 2/3."
+                    if attempt == max_roadmap_attempts:
+                        print("  WARN: accepting last structurally valid roadmap despite tonal drift (quality gate, not fatal).",
+                              file=sys.stderr)
+                        roadmap_content = res
             else:
                 print(f"  WARN: Roadmap missing expected headers (## HIGH-LEVEL ROADMAP and/or ## GLOBAL PLOT THREADS LEDGER) on attempt {attempt}, retrying...", file=sys.stderr)
         if not roadmap_content:
             print("ERROR: Failed to generate valid roadmap.", file=sys.stderr)
             sys.exit(1)
-            
+
         roadmap_path.write_text(roadmap_content, encoding="utf-8")
 
     # Phase 2: Block Expansion
