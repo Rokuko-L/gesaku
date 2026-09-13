@@ -125,6 +125,27 @@ def parse_validated(model_cls: type[BaseModel], text: str, context: str = "") ->
         ) from exc
 
 
+class MicroPlantCandidate(BaseModel):
+    """One concrete prose detail that could pay off in a later chapter."""
+
+    text: str = Field(min_length=1, max_length=240)
+    kind: str = Field(default="object", max_length=24)
+
+
+class MicroPlantExtract(BaseModel):
+    """Judge output for post-keep micro-plant extraction."""
+
+    new_plants: list[MicroPlantCandidate] = Field(default_factory=list)
+    harvested_ids: list[str] = Field(default_factory=list)
+
+    @field_validator("new_plants", mode="before")
+    @classmethod
+    def _cap_plants(cls, v):
+        if isinstance(v, list):
+            return v[:4]
+        return v
+
+
 def parse_validated_json_file(path, model_cls: type[BaseModel], context: str = "") -> BaseModel:
     """Load and validate a JSON file (e.g. eval logs written by earlier phases)."""
     data = json.loads(path.read_text(encoding="utf-8"))

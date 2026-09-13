@@ -53,8 +53,15 @@ def main():
     # Load old version if exists
     old_path = chapters_dir / f"ch_{ch_num:02d}.md"
     old_text = old_path.read_text(encoding="utf-8") if old_path.exists() else "(no existing draft)"
-    
+
     title = get_novel_title()
+
+    # Soft optional callbacks from prose-emergent plants (never a MUST).
+    try:
+        from core import micro_plants as mp
+        callback_block = mp.soft_inject_block(mp.load_callbacks(), ch_num)
+    except Exception:
+        callback_block = ""
 
     # Pull the latest eval's AI-pattern findings so the revision removes them
     ai_feedback = ""
@@ -109,6 +116,7 @@ THE EXISTING DRAFT (use as raw material -- keep what works, cut what doesn't):
 
 ANTI-PATTERN RULES:
 {load_genre()["generation"]["anti_pattern_rules"]}
+{callback_block}
 {ai_feedback}
 
 FORMATTING:

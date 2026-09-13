@@ -374,6 +374,23 @@ def update_canon_from_eval(ch: int, attempt_num: int = None, eval_log_path=None)
         print(f"  WARN: Could not extract canon entries from eval log: {e}", file=sys.stderr)
 
 
+def on_chapter_kept(ch: int, reextract: bool = False) -> None:
+    """Fail-soft post-keep hook: extract prose-emergent micro-plants.
+
+    Never blocks drafting/revision. Distinct from outline-tag `state["debts"]`.
+    """
+    script = "pipeline/extract_micro_plants.py"
+    cmd = f'"{sys.executable}" {script} {ch}'
+    if reextract:
+        cmd += " --reextract"
+    try:
+        rep = run_tool(cmd, timeout=120, check=False)
+        if rep.returncode != 0:
+            step(f"micro-plant extract skipped for ch{ch} (rc={rep.returncode})")
+    except Exception as e:
+        step(f"micro-plant extract failed for ch{ch}: {e}")
+
+
 REVISION_CANON_HEADER = "## Revision Sync"
 
 
@@ -599,6 +616,7 @@ def run_drafting(state: dict) -> dict:
 
                 # Append canon entries from the eval JSON LOG FILE
                 update_canon_from_eval(ch, attempt_num=attempt, eval_log_path=eval_log_path)
+                on_chapter_kept(ch)
                 _maybe_run_reveal_retrofit(state, ch)
 
                 drafted = True
@@ -642,6 +660,7 @@ def run_drafting(state: dict) -> dict:
                     state["chapters_drafted"] = ch
                     save_state(state)
                     update_canon_from_eval(ch, attempt_num=attempt, eval_log_path=eval_log_path)
+                    on_chapter_kept(ch)
                     _maybe_run_reveal_retrofit(state, ch)
                     drafted = True
                     break
@@ -683,6 +702,7 @@ def run_drafting(state: dict) -> dict:
                                 state["chapters_drafted"] = ch
                                 save_state(state)
                                 update_canon_from_eval(ch, attempt_num=attempt, eval_log_path=eval_log_path)
+                                on_chapter_kept(ch)
                                 _maybe_run_reveal_retrofit(state, ch)
                                 drafted = True
                                 break
@@ -728,6 +748,7 @@ def run_drafting(state: dict) -> dict:
                 # Append canon entries of the best attempt even when force-kept
                 update_canon_from_eval(ch, attempt_num=best_attempt_num,
                                        eval_log_path=attempt_log_paths.get(best_attempt_num))
+                on_chapter_kept(ch)
                 _maybe_run_reveal_retrofit(state, ch)
             else:
                 if best_draft_content is None:
@@ -1186,6 +1207,8 @@ def run_revision(
                                f"Cycle {cycle}: {r['question']} regressed {r['pre_score']}->{r['post_score']}")
             if kept_this_cycle:
                 resync_canon_after_cycle(kept_this_cycle, cycle)
+                for r in kept_this_cycle:
+                    on_chapter_kept(r["ch_num"], reextract=True)
         elif not skip_targeted_revisions:
             step("No strong consensus items found from panel")
         else:

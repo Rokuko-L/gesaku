@@ -571,6 +571,34 @@ def run_pipeline(seed_path, tag="run1"):
 
 ---
 
+## Prose-emergent micro-plants (open callbacks)
+
+Separate from outline-tag debts (`state["debts"]` / `[Plant: slug]`).
+
+- After every **kept** chapter (all four drafting keep paths + targeted revision
+  keeps), `run_pipeline.on_chapter_kept` runs
+  `pipeline/extract_micro_plants.py <ch>` (fail-soft; never blocks the keep).
+- Extract asks the judge for **at most 1** concrete callback candidate
+  (object / phrase / promise / injury) and which open callback ids were paid off
+  with changed meaning.
+- Store: `projects/<name>/open_callbacks.json` via `core/micro_plants.py`
+  (atomic writes; max 8 open; expire after 12 chapters; near-dup filter).
+- **Drafting does not inject callbacks.** Soft optional list appears only in
+  `pipeline/gen_revision.py` (`soft_inject_block`) with
+  “prefer nothing over a forced reference.”
+- Targeted revision keeps re-extract with `--reextract` (drops plants whose
+  `source_chapter` matches the revised chapter).
+
+Export `pipeline/build_outline.py` clusters free-text plants/harvests by token
+Jaccard + union-find (near-duplicates collapse; plant only links to a later or
+same-chapter harvest). Statuses: `paid off` (plant+harvest), `open` (plant
+only), `recalled` (harvest only). The webui ledger surfaces planned major
+threads, the clustered emergent ledger, and open callbacks.
+
+Offline tests: `scratch/test_micro_plants.py`.
+
+---
+
 *This pipeline was derived from 60+ commits, 5 revision cycles,
 2 reader panels, 2 adversarial edits, and ~20 hours of agent time
 producing a 75,000-word fantasy novel.*

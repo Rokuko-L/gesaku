@@ -23,6 +23,8 @@ core/             Shared library — no pipeline-specific logic
 │                   sealed foundation (visible_from) + denylist terms
 ├── plant_hygiene.py Outline plant hygiene: pre-reveal leak regex + action-plant
 │                   coverage floor
+├── micro_plants.py  Prose-emergent micro-plant store (open_callbacks.json) +
+│                   plant↔harvest clustering for the rebuilt ledger
 ├── outline.py      Outline text ops: chapter headings, premise beats,
 │                   plants/harvests validation, debt extraction
 ├── textstats.py    Context windows (tail/head), repetition detection
