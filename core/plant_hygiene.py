@@ -59,7 +59,13 @@ def check_pre_reveal_leaks(
     denylist: list[str] | None = None,
     reveal_chapter: int | None = None,
 ) -> list[str]:
-    """Return human-readable leak reports for pre-reveal chapters."""
+    """Return human-readable leak reports for pre-reveal chapters.
+
+    Single tokens (names, common nouns) are too noisy: "lily" or "demon"
+    appearing in a pre-reveal outline is not a leak — every chapter mentions
+    the protagonist. Meaning frames and multi-word sealed phrases are the
+    real signal.
+    """
     if reveal_chapter is None or reveal_chapter <= 1:
         return []
     denylist = denylist or []
@@ -75,11 +81,11 @@ def check_pre_reveal_leaks(
             )
         low = body.lower()
         for term in denylist:
+            # Only treat multi-word sealed phrases as leaks. A one-word
+            # denylist entry is almost always an ordinary content word.
+            if " " not in term.strip():
+                continue
             if term in low:
-                # Multi-word denylist terms already cover many frames; skip
-                # single-token duplicates of the built-in meaning frames.
-                if term in MEANING_FRAMES.pattern.lower() and len(term.split()) == 1:
-                    continue
                 problems.append(
                     f"ch{n}: sealed-term {term!r} appears in pre-reveal outline"
                 )
