@@ -1,6 +1,4 @@
 import projects from '../fixtures/projects.json'
-import runState from '../fixtures/run-state.json'
-import scoreHistory from '../fixtures/score-history.json'
 import llmEvents from '../fixtures/llm-events.json'
 import settings from '../fixtures/settings.json'
 import chapters from '../fixtures/chapters.json'
@@ -69,11 +67,29 @@ export const api = {
   },
 
   async getRunState(project) {
-    return live(`/api/run-state${q(project)}`, runState)
+    // Offline fallback must not invent a live run — only a dead/idle shell.
+    const offline = {
+      project: project || '',
+      phase: 'idle',
+      iteration: 0,
+      foundationScore: 0,
+      loreScore: 0,
+      chaptersTotal: 0,
+      chaptersDone: 0,
+      revisionCycle: 0,
+      running: false,
+      pid: null,
+      startedAt: null,
+      runStartedAt: null,
+      exitCode: null,
+    }
+    return live(`/api/run-state${q(project)}`, offline)
   },
 
   async getScoreHistory(project) {
-    return live(`/api/score-history${q(project)}`, scoreHistory)
+    // Project-scoped: never fall back to the offline demo fixture — a fake
+    // 7.60 is worse than an empty chart. Empty means "nothing judged yet".
+    return live(`/api/score-history${q(project)}`, [])
   },
 
   async listLlmEvents(project) {
@@ -159,6 +175,14 @@ export const api = {
   /** Terminate the project's live run. */
   stopRun(project) {
     return send(`/api/run/stop${q(project)}`)
+  },
+
+  /**
+   * Resume / continue an existing project's pipeline (no from-scratch).
+   * state.json picks up the current phase.
+   */
+  startRun(project, payload = {}) {
+    return send('/api/run/start', { project: project ?? null, ...payload })
   },
 
   /**

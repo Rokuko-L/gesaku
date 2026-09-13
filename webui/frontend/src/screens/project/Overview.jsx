@@ -88,10 +88,12 @@ function MiniScores({ scores }) {
 }
 
 export default function Overview({ project }) {
-  const { runState, stopRun } = useApp()
+  const { runState, stopRun, resumeRun } = useApp()
   const [scores, setScores] = useState([])
   const [meta, setMeta] = useState(null)
   const [stopping, setStopping] = useState(false)
+  const [starting, setStarting] = useState(false)
+  const [startError, setStartError] = useState('')
 
   useEffect(() => {
     document.title = `gesaku · ${project}`
@@ -101,6 +103,10 @@ export default function Overview({ project }) {
 
   const running = runState?.running ?? false
   const lastKept = [...scores].reverse().find((s) => s.kept)
+  const hasProgress = (runState?.chaptersDone ?? 0) > 0
+    || (runState?.foundationScore ?? 0) > 0
+    || (runState?.phase && runState.phase !== 'foundation' && runState.phase !== 'idle')
+  const startLabel = hasProgress ? 'resume run' : 'start run'
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
@@ -119,6 +125,44 @@ export default function Overview({ project }) {
               onClick={async () => { setStopping(true); await stopRun(); setStopping(false) }}>
               {stopping ? 'stopping…' : 'stop run'}
             </Button>
+          </div>
+        </Card>
+      )}
+
+      {!running && (
+        <Card className="flex flex-wrap items-center justify-between gap-4 border-line p-4">
+          <div className="min-w-0">
+            <p className="font-mono text-xs text-fog-300">
+              no live process
+              {runState?.exitCode != null && runState.exitCode !== 0 && (
+                <span className="text-bad"> · last exit {runState.exitCode}</span>
+              )}
+            </p>
+            <p className="mt-1 font-prose text-[11px] leading-relaxed text-fog-500">
+              {hasProgress
+                ? 'Resume continues from the current phase in state.json — it does not wipe the project.'
+                : 'Start launches the pipeline from foundation. Genre and notes come from this project\'s files.'}
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {startError && (
+              <p className="max-w-md border border-bad/40 bg-bad/10 px-2 py-1 font-mono text-[11px] text-bad">{startError}</p>
+            )}
+            <Button variant="accent" disabled={starting}
+              onClick={async () => {
+                setStarting(true)
+                setStartError('')
+                try {
+                  await resumeRun(project)
+                } catch (e) {
+                  setStartError(e?.message || String(e))
+                } finally {
+                  setStarting(false)
+                }
+              }}>
+              {starting ? 'launching…' : `${startLabel} ▸`}
+            </Button>
+            <Button onClick={() => navigate(projectRoute(project, 'pipeline'))}>pipeline dashboard ›</Button>
           </div>
         </Card>
       )}

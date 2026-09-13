@@ -71,12 +71,18 @@ function PipelineStatus({ runState, scores }) {
 }
 
 function RunTab({ project }) {
-  const { runState, logLines, live, stopRun } = useApp()
+  const { runState, logLines, live, stopRun, resumeRun } = useApp()
   const [scores, setScores] = useState([])
   const [filter, setFilter] = useState('all')
   const [stopping, setStopping] = useState(false)
+  const [starting, setStarting] = useState(false)
+  const [startError, setStartError] = useState('')
   const logRef = useRef(null)
   const running = runState?.running ?? false
+  const hasProgress = (runState?.chaptersDone ?? 0) > 0
+    || (runState?.foundationScore ?? 0) > 0
+    || (runState?.phase && runState.phase !== 'foundation' && runState.phase !== 'idle')
+  const startLabel = hasProgress ? '[ resume run ]' : '[ start run ]'
 
   useEffect(() => {
     api.getScoreHistory(project).then(setScores).catch(() => {})
@@ -112,8 +118,42 @@ function RunTab({ project }) {
               <span className="text-fog-500">stream</span>
               <span className={live ? 'text-good' : 'text-fog-500'}>{live ? 'sse live' : 'polling'}</span>
             </p>
+            {runState?.exitCode != null && !running && (
+              <p className="flex justify-between">
+                <span className="text-fog-500">last exit</span>
+                <span className={runState.exitCode === 0 ? 'text-good' : 'text-bad'}>
+                  code {runState.exitCode}
+                </span>
+              </p>
+            )}
           </div>
-          <div className="mt-4 flex gap-2">
+          {!running && runState?.exitCode != null && runState.exitCode !== 0 && (
+            <p className="mt-3 border border-bad/40 bg-bad/10 p-2 font-prose text-[11px] leading-relaxed text-fog-300">
+              The last run exited with code {runState.exitCode} and is not live. Scores and logs
+              below only reflect whatever it wrote before dying — open the project's
+              <span className="font-mono"> logs/</span> folder for the full traceback.
+            </p>
+          )}
+          <div className="mt-4 flex flex-wrap gap-2">
+            {!running && (
+              <Button
+                variant="accent"
+                disabled={starting}
+                onClick={async () => {
+                  setStarting(true)
+                  setStartError('')
+                  try {
+                    await resumeRun(project)
+                  } catch (e) {
+                    setStartError(e?.message || String(e))
+                  } finally {
+                    setStarting(false)
+                  }
+                }}
+              >
+                {starting ? 'launching…' : startLabel}
+              </Button>
+            )}
             <Button
               variant="danger"
               disabled={!running || stopping}
@@ -122,15 +162,28 @@ function RunTab({ project }) {
               {stopping ? 'terminating…' : '[ terminate run ]'}
             </Button>
           </div>
+          {startError && (
+            <p className="mt-2 border border-bad/40 bg-bad/10 p-2 font-mono text-[11px] text-bad">
+              {startError}
+            </p>
+          )}
           <p className="mt-3 font-prose text-[11px] leading-relaxed text-fog-500">
             logs persist under the project's logs/ folder — nothing is lost by closing this page.
+            Resume continues from state.json (current phase) without wiping the project.
           </p>
         </Card>
       </div>
 
       <Card className="flex min-h-0 flex-col overflow-hidden lg:col-span-8">
         <div className="flex shrink-0 items-center justify-between border-b border-line px-4 py-2.5">
-          <SectionHead>stdout_stream <Hint>Raw output of the running pipeline. New lines stream in live while a run is active.</Hint></SectionHead>
+          <SectionHead>
+            stdout_stream{' '}
+            <Hint below>
+              Raw output of the running pipeline. New lines stream in live while a run is active.
+              If this is empty and process says not running, the run already exited — check the
+              project's logs/ folder for the fatal error.
+            </Hint>
+          </SectionHead>
           <div className="flex gap-1">
             {['all', 'errors'].map((f) => (
               <button

@@ -73,6 +73,15 @@ export function AppProvider({ children }) {
     return res
   }, [refreshProjects])
 
+  const resumeRun = useCallback(async (project) => {
+    const name = project ?? projectRef.current
+    if (!name) throw new Error('no project selected')
+    const res = await api.startRun(name)
+    refreshProjects()
+    api.getRunState(name).then(setRunState).catch(() => {})
+    return res
+  }, [refreshProjects])
+
   const stopRun = useCallback(async () => {
     const project = projectRef.current
     if (project) await api.stopRun(project)
@@ -88,8 +97,9 @@ export function AppProvider({ children }) {
     llmEvents,
     setProject,
     launchProject,
+    resumeRun,
     stopRun,
-  }), [projects, refreshProjects, runState, live, logLines, llmEvents, setProject, launchProject, stopRun])
+  }), [projects, refreshProjects, runState, live, logLines, llmEvents, setProject, launchProject, resumeRun, stopRun])
 
   return <AppCtx.Provider value={value}>{children}</AppCtx.Provider>
 }
