@@ -19,7 +19,8 @@ from core import paths
 load_dotenv()
 
 def call_writer(prompt, max_tokens=get_max_tokens_with_thinking(16000)):
-    return call_llm(prompt=prompt, model_key="writer", max_tokens=max_tokens, beta_context=True, timeout=600)
+    # Local thinking-proxy outline blocks routinely need >600s.
+    return call_llm(prompt=prompt, model_key="writer", max_tokens=max_tokens, beta_context=True, timeout=1200)
 
 def validate_block_output(text, start, end):
     missing = []
@@ -258,8 +259,10 @@ Each chapter entry must start with "### Chapter N:".
         roadmap_path.write_text(roadmap_content, encoding="utf-8")
 
     # Phase 2: Block Expansion
-    # We will expand in blocks of 10 chapters
-    block_size = 10
+    # Larger blocks (10) blew past local-proxy timeouts for a 24-chapter
+    # thinking model. Smaller chunks finish and checkpoint outline.md so a
+    # resume does not restart from chapter 1.
+    block_size = int(os.getenv("GESAKU_OUTLINE_BLOCK_SIZE", "4"))
     blocks = []
     for start in range(1, total_chapters + 1, block_size):
         end = min(start + block_size - 1, total_chapters)
@@ -365,11 +368,17 @@ CRITICAL RULES:
             block_prompt += f"\n\nYOUR PREVIOUS ATTEMPT FOR CHAPTER 1 HAD THESE ERRORS:\n{args.retry_feedback}\nMake sure Chapter 1 includes the PREMISE BEATS section in correct format."
 
         block_result = ""
+        last_err = ""
         for attempt in range(1, 4):
             try:
                 res = call_writer(block_prompt)
             except TruncationError as e:
+                last_err = f"truncated: {e}"
                 print(f"  WARN: Block Ch {start}-{end} attempt {attempt} truncated ({e}), retrying...", file=sys.stderr)
+                continue
+            except Exception as e:
+                last_err = str(e)
+                print(f"  WARN: Block Ch {start}-{end} attempt {attempt} failed: {e}", file=sys.stderr)
                 continue
             passed, err = validate_block_output(res, start, end)
             if passed and reveal_chapter and reveal_chapter > 1:
@@ -382,11 +391,20 @@ CRITICAL RULES:
             if passed:
                 block_result = res
                 break
+            last_err = err
             print(f"  WARN: Block Ch {start}-{end} validation failed on attempt {attempt}/3: {err}. Retrying...", file=sys.stderr)
             block_prompt += f"\n\nERROR ON ATTEMPT {attempt}: {err}\nEnsure you write detailed outlines for all chapters from {start} to {end}."
-            
+
         if not block_result:
-            print(f"ERROR: Failed to expand Block Ch {start}-{end}.", file=sys.stderr)
+            # Partial outline.md is better than a silent missing file: the
+            # caller can resume and skip already-expanded blocks.
+            if detailed_outlines:
+                full_outline_text = f"# {title.upper()}\n\n" + roadmap_content + "\n\n## DETAILED CHAPTER OUTLINES\n\n" + \
+                                    "\n\n---\n\n".join(detailed_outlines[ch] for ch in sorted(detailed_outlines.keys()))
+                outline_path.write_text(full_outline_text, encoding="utf-8")
+                print(f"  (saved partial outline.md with {len(detailed_outlines)} chapters before exit)",
+                      file=sys.stderr)
+            print(f"ERROR: Failed to expand Block Ch {start}-{end} after 3 attempts: {last_err}", file=sys.stderr)
             sys.exit(1)
 
         # Parse and save the block chapters to detailed_outlines

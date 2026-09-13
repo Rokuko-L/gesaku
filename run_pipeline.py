@@ -156,8 +156,9 @@ def run_foundation(state: dict) -> dict:
 
         # 1. Generate planning documents
         # Thinking models on a local proxy routinely exceed 600s for world/
-        # character bibles; the old 600s cap killed gen_world mid-call.
-        FOUNDATION_STEP_TIMEOUT = 1800
+        # character bibles and outline blocks; the old 600s cap killed
+        # gen_world / gen_outline mid-call.
+        FOUNDATION_STEP_TIMEOUT = int(os.getenv("GESAKU_FOUNDATION_TIMEOUT", "3600"))
         step("Generating world bible...")
         uv_run("foundation/gen_world.py", timeout=FOUNDATION_STEP_TIMEOUT)
 
@@ -174,7 +175,9 @@ def run_foundation(state: dict) -> dict:
         uv_run("foundation/gen_canon.py", timeout=FOUNDATION_STEP_TIMEOUT)
 
         step("Generating outline (part 1)...")
-        uv_run("foundation/gen_outline.py", timeout=max(900, FOUNDATION_STEP_TIMEOUT))
+        # Block-level LLM calls for a 24-chapter thinking model easily exceed
+        # 30 minutes when the proxy retries/timeouts stack.
+        uv_run("foundation/gen_outline.py", timeout=max(3600, FOUNDATION_STEP_TIMEOUT))
 
         # Validate Chapter 1 premise beats (pre-draft gate)
         outline_path = paths.get_outline_path()
