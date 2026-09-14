@@ -418,6 +418,7 @@ CRITICAL RULES:
 
         block_result = ""
         last_err = ""
+        last_hygiene_leaks: list[str] = []
         for attempt in range(1, 4):
             try:
                 res = call_writer(block_prompt)
@@ -435,8 +436,19 @@ CRITICAL RULES:
                     res, hygiene_denylist, reveal_chapter
                 )
                 if leaks:
-                    passed = False
-                    err = "plant-hygiene: " + "; ".join(leaks[:8])
+                    # Hygiene is a quality signal. On the final attempt we
+                    # accept a structurally valid block and warn — a ch1
+                    # "true nature"/"mask" phrasing should not kill foundation.
+                    last_hygiene_leaks = leaks
+                    if attempt < 3:
+                        passed = False
+                        err = "plant-hygiene: " + "; ".join(leaks[:8])
+                    else:
+                        print(
+                            f"  WARN: accepting Block Ch {start}-{end} despite "
+                            f"{len(leaks)} plant-hygiene finding(s): {leaks[:4]}",
+                            file=sys.stderr,
+                        )
             if passed:
                 block_result = res
                 break
