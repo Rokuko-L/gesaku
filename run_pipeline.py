@@ -261,7 +261,7 @@ def run_foundation(state: dict) -> dict:
 
         # 2. Evaluate
         step("Evaluating foundation...")
-        eval_result = uv_run("pipeline/evaluate.py --phase=foundation", timeout=300)
+        eval_result = uv_run("pipeline/evaluate.py --phase=foundation", timeout=900)
         score = parse_score(eval_result.stdout, "overall_score")
         lore = parse_lore_score(eval_result.stdout)
 
@@ -599,7 +599,7 @@ def run_drafting(state: dict) -> dict:
             step(f"Drafted {word_count} words")
 
             # Evaluate
-            eval_result = uv_run(f"pipeline/evaluate.py --chapter={ch}", timeout=300)
+            eval_result = uv_run(f"pipeline/evaluate.py --chapter={ch}", timeout=900)
             score = parse_score(eval_result.stdout, "overall_score")
             step(f"Chapter {ch} score: {score}")
 
@@ -694,7 +694,7 @@ def run_drafting(state: dict) -> dict:
                         if rep.returncode == 0:
                             rep_wc = len(ch_file.read_text(encoding="utf-8").split())
                             step(f"Repaired Ch {ch} ({rep_wc}w) — re-evaluating...")
-                            rep_eval = uv_run(f"pipeline/evaluate.py --chapter={ch}", timeout=300)
+                            rep_eval = uv_run(f"pipeline/evaluate.py --chapter={ch}", timeout=900)
                             rep_score = parse_score(rep_eval.stdout, "overall_score")
                             step(f"Repaired Ch {ch} score: {rep_score}")
                             if rep_score >= chapter_gate:
@@ -978,7 +978,7 @@ def run_revision(
         if run_adv or run_cuts:
             # Evaluate current baseline score (before Step 1/2 edits)
             step("Evaluating baseline novel score before Cycle edits...")
-            baseline_eval = uv_run("pipeline/evaluate.py --full", timeout=600)
+            baseline_eval = uv_run("pipeline/evaluate.py --full", timeout=1800)
             cycle_baseline_score = parse_score(baseline_eval.stdout, "novel_score")
             if cycle_baseline_score < 0:
                 cycle_baseline_score = parse_score(baseline_eval.stdout, "overall_score")
@@ -1008,7 +1008,7 @@ def run_revision(
                 
                 # Evaluate full novel score after Step 1
                 step("Evaluating novel score after Adversarial Edits...")
-                post_adv_eval = uv_run("pipeline/evaluate.py --full", timeout=600)
+                post_adv_eval = uv_run("pipeline/evaluate.py --full", timeout=1800)
                 post_adv_score = parse_score_any(post_adv_eval.stdout, "novel_score", "overall_score")
                 
                 step(f"Adversarial edits score shift: {cycle_baseline_score} -> {post_adv_score}")
@@ -1040,7 +1040,7 @@ def run_revision(
                 
                 # Evaluate full novel score after Step 2
                 step("Evaluating novel score after Mechanical Cuts...")
-                post_cuts_eval = uv_run("pipeline/evaluate.py --full", timeout=600)
+                post_cuts_eval = uv_run("pipeline/evaluate.py --full", timeout=1800)
                 post_cuts_score = parse_score_any(post_cuts_eval.stdout, "novel_score", "overall_score")
 
                 step(f"Mechanical cuts score shift: {post_adv_score} -> {post_cuts_score}")
@@ -1104,7 +1104,7 @@ def run_revision(
                 ch_num = item["chapter"]
                 question = item["question"]
                 try:
-                    pre_eval = uv_run(f"pipeline/evaluate.py --chapter={ch_num}", timeout=300)
+                    pre_eval = uv_run(f"pipeline/evaluate.py --chapter={ch_num}", timeout=900)
                     pre_score = parse_score(pre_eval.stdout, "overall_score")
 
                     brief_file = briefs_dir / f"ch{ch_num:02d}_cycle{cycle}_{question}.md"
@@ -1133,7 +1133,7 @@ def run_revision(
                     step(f"Revising Ch {ch_num} with brief {brief_file.name}...")
                     uv_run(f'pipeline/gen_revision.py {ch_num} "{brief_file}"', timeout=600)
 
-                    post_eval = uv_run(f"pipeline/evaluate.py --chapter={ch_num}", timeout=300)
+                    post_eval = uv_run(f"pipeline/evaluate.py --chapter={ch_num}", timeout=900)
                     post_score = parse_score(post_eval.stdout, "overall_score")
                     eval_log_path = None
                     m = re.search(r"eval_log:\s*(\S+)", post_eval.stdout)
@@ -1223,7 +1223,7 @@ def run_revision(
         # -- Step 6: Full novel evaluation --
         if not skip_full_novel_eval:
             step("Running full novel evaluation...")
-            full_eval = uv_run("pipeline/evaluate.py --full", timeout=600)
+            full_eval = uv_run("pipeline/evaluate.py --full", timeout=1800)
             try:
                 novel_score = parse_score_any(full_eval.stdout, "novel_score", "overall_score")
             except ValueError as e:
@@ -1233,7 +1233,7 @@ def run_revision(
             if novel_score is None or novel_score <= 0.0:
                 # 0.0 is almost always a judge failure — retry once
                 step("Novel score missing/0.0 detected, retrying evaluation...")
-                retry_eval = uv_run("pipeline/evaluate.py --full", timeout=600)
+                retry_eval = uv_run("pipeline/evaluate.py --full", timeout=1800)
                 try:
                     novel_score = parse_score_any(retry_eval.stdout, "novel_score", "overall_score")
                 except ValueError as e:
@@ -1361,7 +1361,7 @@ def run_revision(
                         
                         # Evaluate pre-revision score
                         step(f"Evaluating Ch {ch_num} before revision...")
-                        pre_eval = uv_run(f"pipeline/evaluate.py --chapter={ch_num}", timeout=300)
+                        pre_eval = uv_run(f"pipeline/evaluate.py --chapter={ch_num}", timeout=900)
                         pre_score = parse_score(pre_eval.stdout, "overall_score")
                         
                         step(f"Revising Ch {ch_num} from review brief...")
@@ -1369,7 +1369,7 @@ def run_revision(
                         
                         # Evaluate post-revision score
                         step(f"Evaluating Ch {ch_num} after revision...")
-                        post_eval = uv_run(f"pipeline/evaluate.py --chapter={ch_num}", timeout=300)
+                        post_eval = uv_run(f"pipeline/evaluate.py --chapter={ch_num}", timeout=900)
                         post_score = parse_score(post_eval.stdout, "overall_score")
                         
                         # Compare against historical best
@@ -1413,7 +1413,7 @@ def run_revision(
             apply_cuts_py = paths.get_root_dir() / "apply_cuts.py"
             if apply_cuts_py.exists():
                 # Evaluate score before cuts
-                pre_cuts_eval = uv_run("pipeline/evaluate.py --full", timeout=600)
+                pre_cuts_eval = uv_run("pipeline/evaluate.py --full", timeout=1800)
                 pre_cuts_score = parse_score_any(pre_cuts_eval.stdout, "novel_score", "overall_score")
 
                 run_tool(
@@ -1421,7 +1421,7 @@ def run_revision(
                     timeout=300)
 
                 # Evaluate score after cuts
-                post_cuts_eval = uv_run("pipeline/evaluate.py --full", timeout=600)
+                post_cuts_eval = uv_run("pipeline/evaluate.py --full", timeout=1800)
                 post_cuts_score = parse_score_any(post_cuts_eval.stdout, "novel_score", "overall_score")
 
                 step(f"Mechanical cuts score shift: {pre_cuts_score} -> {post_cuts_score}")
