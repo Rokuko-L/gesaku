@@ -605,7 +605,7 @@ def run_drafting(state: dict) -> dict:
             eval_result = None
             score = None
             for eval_try in range(1, 4):
-                eval_result = uv_run(f"pipeline/evaluate.py --chapter={ch}", timeout=1800)
+                eval_result = uv_run(f"pipeline/evaluate.py --chapter={ch}", timeout=2400)
                 try:
                     score = parse_score(eval_result.stdout, "overall_score")
                     break
