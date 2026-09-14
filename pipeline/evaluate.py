@@ -430,7 +430,7 @@ def call_judge(prompt, max_tokens=2000):
                    "\n\nPROSE MODE RULE: Score against this pack. Penalize staccato 1–4 word "
                    "paragraph stacks, empty emotion labels, diary-summary interiority, wrong "
                    "narrative distance, and repeated stock metaphors. Quote offenders.")
-    return call_llm(prompt=prompt, system=system, model_key="judge", max_tokens=max_tokens, beta_context=True, timeout=180)
+    return call_llm(prompt=prompt, system=system, model_key="judge", max_tokens=max_tokens, beta_context=True, timeout=1800)
 
 
 def call_judge_json(prompt, max_tokens=8000, retries=3, model=None):

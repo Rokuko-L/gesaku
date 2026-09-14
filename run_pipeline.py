@@ -29,6 +29,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -599,8 +600,21 @@ def run_drafting(state: dict) -> dict:
             step(f"Drafted {word_count} words")
 
             # Evaluate
-            eval_result = uv_run(f"pipeline/evaluate.py --chapter={ch}", timeout=900)
-            score = parse_score(eval_result.stdout, "overall_score")
+            # A timed-out eval is not a fatal drafting error — retry the eval
+            # before giving up on a scored keep.
+            eval_result = None
+            score = None
+            for eval_try in range(1, 4):
+                eval_result = uv_run(f"pipeline/evaluate.py --chapter={ch}", timeout=1800)
+                try:
+                    score = parse_score(eval_result.stdout, "overall_score")
+                    break
+                except ValueError as e:
+                    if eval_try < 3:
+                        step(f"eval parse failed for Ch {ch} (try {eval_try}/3): {e} — retrying eval")
+                        time.sleep(5 * eval_try)
+                        continue
+                    raise
             step(f"Chapter {ch} score: {score}")
 
             # Pin the exact eval log of THIS attempt (evaluate.py prints 'eval_log: <path>')
