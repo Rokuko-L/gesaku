@@ -226,7 +226,7 @@ def cmd_review(args):
     parsed["title"] = title
     parsed["word_count"] = len(manuscript.split())
     
-    log_path.write_text(json.dumps(parsed, indent=2, default=str))
+    paths.save_json_atomic(parsed, log_path)
     print(f"\nReview saved to {log_path}", file=sys.stderr)
     
     # Save human-readable copy

@@ -34,7 +34,10 @@ core/             Shared library — no pipeline-specific logic
 └── mock_llm.py     Offline LLM mock for tests (MockLLM.install())
 
 pipeline/         Orchestration and per-stage tooling
-├── pipeline_infra.py Git plumbing, registry/state persistence, score parsing
+├── pipeline_infra.py Git plumbing, registry/state persistence, score parsing;
+│                   single owner for timeouts (timeout_for), chapter count
+│                   (resolve_chapters_total), tolerances, and best-novel
+│                   tracking (record_novel_score / best_novel_checkpoint)
 ├── evaluate.py       Scoring engine: mechanical slop + LLM judge (judge_view)
 ├── retrofit_reveal.py Post-reveal rewrite of ch 1..R-1 (coverage-gated)
 └── ...               drafting/revision/export stage scripts
@@ -109,5 +112,11 @@ Never treat these as agent docs, never "clean them up":
    `OutputValidationError.feedback` back into self-correction retries.
 3. Static prompts live in `prompts/*.md`.
 4. Tests must pass offline (`mock_llm.MockLLM`); suites in `scratch/`.
-5. Atomic JSON writes only (tmp + rename).
+5. Atomic JSON writes only (tmp + rename) — including sidecars and eval logs.
 6. Import from the concern module directly — there is no umbrella module.
+   Dependency direction is `core ← foundation/pipeline ← run_pipeline`;
+   `foundation/` must not import `pipeline/`.
+7. One owner per fact: the genre config owns the chapter count, `pipeline_infra`
+   owns timeouts and tolerances. Mirror, never re-derive.
+8. Config knobs live in one named table (`timeout_for`, `*_threshold`,
+   `*_tolerance`) — no per-call-site magic numbers.

@@ -18,6 +18,7 @@ via discovery: `uv run python -m unittest discover -s scratch -p "test_*.py"`.
 | `scratch/test_canon_scoping.py` | sealed foundation views, As-of chapter filter, denylist terms | unittest |
 | `scratch/test_plant_coverage.py` | pre-reveal outline leak regex + action-plant coverage floor | unittest |
 | `scratch/test_retrofit_gate.py` | retrofit coverage block + non-blocking continuity report | unittest |
+| `scratch/test_refactor_smoke.py` | de-duct-tape invariants: genre owns chapter count, best-novel peak tracking, foundation checkpoint skip, named timeout budgets, `gen_brief` raises instead of exiting (7 tests) | unittest |
 
 Script-style suites exit non-zero on failure and print `[PASS]/[FAIL]` lines.
 

@@ -269,12 +269,12 @@ def run_foundation(state: dict) -> dict:
             uv_run(f'foundation/gen_outline.py --retry-feedback "{error}.{format_hint}"', timeout=timeout_for("standard"))
 
         # Write premise validation sidecar
-        prem_val_path = paths.get_project_dir() / "premise_validation.json"
-        prem_val_path.write_text(json.dumps({
+        prem_val_path = paths.get_premise_validation_path()
+        paths.save_json_atomic({
             "passed": premise_passed,
             "attempts": oa if premise_passed else MAX_OUTLINE_ATTEMPTS,
             "last_error": "" if premise_passed else premise_last_error,
-        }, indent=2), encoding="utf-8")
+        }, prem_val_path)
 
         part2_ok = _foundation_part2_ok(outline_path, total_ch)
         if outline_ok and part2_ok:
@@ -303,7 +303,7 @@ def run_foundation(state: dict) -> dict:
             hy_ok, hy_err, hy_side = plant_hygiene_mod.validate_outline_plant_hygiene(
                 outline_text, canon_text, characters_text
             )
-            (paths.get_project_dir() / "plant_hygiene.json").write_text(
+            paths.get_plant_hygiene_path().write_text(
                 json.dumps(hy_side, indent=2), encoding="utf-8"
             )
             if not hy_ok:
@@ -595,7 +595,7 @@ def run_drafting(state: dict) -> dict:
     # we do NOT ship sub-garbage as canon.
     chapter_gate = chapter_threshold()
     max_attempts = max_chapter_attempts()
-    force_keep_floor = chapter_gate - 2.0
+    force_keep_floor = chapter_gate - force_keep_margin()
 
     chapters_dir = paths.get_chapters_dir()  # also creates the directory
 
@@ -620,7 +620,7 @@ def run_drafting(state: dict) -> dict:
                     # Quote-safe: shlex.split() in run_tool handles spaces, but
                     # the feedback may contain newlines/quotes -- write to a
                     # temp file and pass the path instead.
-                    fb_path = paths.get_project_dir() / f"retry_feedback_ch{ch:02d}.txt"
+                    fb_path = paths.get_retry_feedback_path(ch)
                     fb_path.write_text(retry_feedback, encoding="utf-8")
                     cmd = (f"\"{sys.executable}\" pipeline/draft_chapter.py {ch} "
                            f"--retry-feedback \"{fb_path}\"")
@@ -697,7 +697,7 @@ def run_drafting(state: dict) -> dict:
                 attempt_log_paths[attempt] = eval_log_path
 
             if score >= chapter_gate:
-                fb_path = paths.get_project_dir() / f"retry_feedback_ch{ch:02d}.txt"
+                fb_path = paths.get_retry_feedback_path(ch)
                 fb_path.unlink(missing_ok=True)
                 commit_hash = git_add_commit(
                     f"ch{ch:02d}: score {score}, {word_count}w")
@@ -790,7 +790,7 @@ def run_drafting(state: dict) -> dict:
                             step(f"Repaired Ch {ch} score: {rep_score}")
                             if rep_score >= chapter_gate:
                                 step(f"Repair lifted Ch {ch} over the bar — keeping")
-                                fb_path = paths.get_project_dir() / f"retry_feedback_ch{ch:02d}.txt"
+                                fb_path = paths.get_retry_feedback_path(ch)
                                 fb_path.unlink(missing_ok=True)
                                 commit_hash = git_add_commit(
                                     f"ch{ch:02d}: slop-repair keep, score {rep_score}, {rep_wc}w")
@@ -855,7 +855,7 @@ def run_drafting(state: dict) -> dict:
                               f"or word count {best_word_count} below {min_words}")
                 step(f"WARNING: Chapter {ch} failed all {max_attempts} attempts ({reason}). "
                      f"Marking chapter as SKIPPED in state — it will be absent from the manuscript.")
-                (paths.get_project_dir() / f"retry_feedback_ch{ch:02d}.txt").unlink(missing_ok=True)
+                paths.get_retry_feedback_path(ch).unlink(missing_ok=True)
                 log_result("skipped", f"ch{ch:02d}", best_score, best_word_count,
                            "skipped", reason)
                 state["chapters_drafted"] = ch
@@ -948,7 +948,7 @@ def build_eval_feedback(eval_log_path):
     slop_penalty = slop.get("slop_penalty") or 0.0
     tic_penalty = slop.get("prose_tic_penalty") or 0.0
     near_clean = (raw_score >= chapter_threshold()
-                  and adjusted_score >= chapter_threshold() - 1.0
+                  and adjusted_score >= chapter_threshold() - near_clean_margin()
                   and slop_penalty < 2.0 and tic_penalty < 1.0)
 
     if not lines:
@@ -1056,7 +1056,7 @@ def run_revision(
 
     prev_score = state.get("novel_score")  # None = never scored
     start_cycle = state.get("revision_cycle", 0) + 1
-    tolerance = 0.8
+    tolerance = revision_tolerance()
 
     for cycle in range(start_cycle, max_cycles + 1):
         banner(f"Revision Cycle {cycle}/{max_cycles}", "-")
@@ -1137,7 +1137,7 @@ def run_revision(
 
                 step(f"Mechanical cuts score shift: {post_adv_score} -> {post_cuts_score}")
                 
-                if post_cuts_score >= (post_adv_score - 0.05):
+                if post_cuts_score >= (post_adv_score - cuts_tolerance()):
                     run_tool("git add -A", cwd=str(paths.get_project_dir()))
                     commit_hash = git_add_commit(
                         f"revision cycle {cycle}: apply mechanical cuts {post_adv_score}->{post_cuts_score}"
@@ -1148,7 +1148,7 @@ def run_revision(
                     post_cuts_commit = commit_hash
                     record_novel_score(state, post_cuts_score, post_cuts_commit)
                 else:
-                    step(f"Mechanical cuts made the novel worse ({post_cuts_score} < {post_adv_score - 0.05}), reverting cuts")
+                    step(f"Mechanical cuts made the novel worse ({post_cuts_score} < {post_adv_score - cuts_tolerance()}), reverting cuts")
                     git_reset_hard("HEAD")
                     log_result("reverted", f"rev-cycle-{cycle}-cuts", post_cuts_score,
                                count_words_in_chapters(), "discard",
@@ -1528,11 +1528,11 @@ def run_revision(
 
                 step(f"Mechanical cuts score shift: {pre_cuts_score} -> {post_cuts_score}")
 
-                if post_cuts_score >= (pre_cuts_score - 0.05):
+                if post_cuts_score >= (pre_cuts_score - cuts_tolerance()):
                     run_tool("git add -A", cwd=str(paths.get_project_dir()))
                     git_add_commit(f"review round {rnd}: mechanical cleanup {pre_cuts_score}->{post_cuts_score}")
                 else:
-                    step(f"Mechanical cuts made the novel worse ({post_cuts_score} < {pre_cuts_score - 0.05}), reverting cuts")
+                    step(f"Mechanical cuts made the novel worse ({post_cuts_score} < {pre_cuts_score - cuts_tolerance()}), reverting cuts")
                     git_reset_hard("HEAD")
             
             step(f"Review round {rnd} complete.")

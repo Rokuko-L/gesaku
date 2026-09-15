@@ -33,14 +33,30 @@ Plus:
 - `load_prompt(name)` — cached read of `prompts/<name>.md`
 - `format_prompt(template, **kwargs)` — replaces `{key}` and `{{key}}`
 
+## Sidecar / Artifact Helpers (pure)
+
+Every per-project artifact has a helper — never build the path inline:
+
+| Helper | File |
+|---|---|
+| `get_premise_validation_path()` | `premise_validation.json` (ch1 premise-beat gate result) |
+| `get_plant_hygiene_path()` | `plant_hygiene.json` (sealed-term leaks + action-plant coverage) |
+| `get_retrofit_report_path()` | `retrofit_report.json` (post-reveal outcome + continuity scan) |
+| `get_retry_feedback_path(ch)` | `retry_feedback_chNN.txt` (feedback for the next draft attempt) |
+| `get_repetition_check_path()` | `chapters/repetition_check.json` |
+| `get_outline_roadmap_path()` | `.outline_roadmap.md` (intermediate) |
+| `get_outline_part1_path()` | `.outline_part1.md` (intermediate) |
+| `get_open_callbacks_path()` | `open_callbacks.json` (micro-plant ledger) |
+| `get_llm_events_path()` | `llm_events.jsonl` (call telemetry) |
+
 ## Rules
 
 1. New file types get a helper here, not inline `Path` math in callers.
 2. Any user-derived name must pass through `set_project_name`.
 3. Tests may patch internals directly: `paths._root_dir`,
    `paths._project_name` (see `scratch/test_utils.py`).
-4. Writes to shared JSON (registry, state, active_genre) must be atomic
-   (`paths.save_json_atomic`).
+4. Writes to shared JSON (registry, state, active_genre, eval logs, sidecars)
+   must be atomic (`paths.save_json_atomic`).
 
 Related: [llm-client.md](llm-client.md) ·
 [../pipeline/state-and-git.md](../pipeline/state-and-git.md) ·

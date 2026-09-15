@@ -12,7 +12,7 @@ import re
 import json
 from pathlib import Path
 from dotenv import load_dotenv
-from core.genre import load_genre
+from core.genre import load_genre, chapters_total as genre_chapters_total
 from core import paths
 
 load_dotenv()
@@ -33,7 +33,7 @@ def validate_block_output(text, start, end):
 def main():
     root = paths.get_root_dir()
     outline_path = paths.get_outline_path()
-    roadmap_path = paths.get_project_dir() / ".outline_roadmap.md"
+    roadmap_path = paths.get_outline_roadmap_path()
 
     if not outline_path.exists():
         print(f"ERROR: outline.md not found at {outline_path} — run gen_outline.py first", file=sys.stderr)
@@ -58,11 +58,15 @@ def main():
     
     try:
         state = json.loads((paths.get_project_dir() / "state.json").read_text(encoding="utf-8"))
-        total_chapters = state.get("chapters_total", 30)
         title = state.get("title", "Untitled Novel")
     except Exception:
-        total_chapters = genre_cfg.get("generation", {}).get("outline", {}).get("estimated_chapters", 30)
+        state = {}
         title = "Untitled Novel"
+    total_chapters = (
+        genre_chapters_total()
+        or int(state.get("chapters_total") or 0)
+        or 24
+    )
 
     # Extract all unpolished chapters (only from Detailed section)
     unpolished_chapters = {}
@@ -169,7 +173,7 @@ Each chapter outline must start with a heading: "### Chapter N: [Chapter Title]"
     outline_path.write_text(full_outline_text, encoding="utf-8")
     
     # Save a copy as .outline_part1.md for backwards compatibility
-    (paths.get_project_dir() / ".outline_part1.md").write_text(full_outline_text, encoding="utf-8")
+    paths.get_outline_part1_path().write_text(full_outline_text, encoding="utf-8")
     
     print("Outline refinement complete!", file=sys.stderr)
 

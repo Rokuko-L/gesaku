@@ -206,7 +206,7 @@ def main() -> int:
 
     plant_names = canon_mod.action_plant_characters(parsed, characters_text)
     coverage = plant_hygiene.action_plant_coverage(outline_text, plant_names, reveal)
-    side_path = paths.get_project_dir() / "retrofit_report.json"
+    side_path = paths.get_retrofit_report_path()
     chapters = {}
     chapters_dir = paths.get_chapters_dir()
     for p in sorted(chapters_dir.glob("ch_*.md")):
@@ -228,7 +228,7 @@ def main() -> int:
         report["blocked"] = True
         report["reason"] = "under-planted: " + "; ".join(coverage.get("problems", []))
         print(f"RETROFIT BLOCKED — {report['reason']}", file=sys.stderr)
-        side_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        paths.save_json_atomic(report, side_path)
         return 2
 
     for n in range(1, reveal):
@@ -236,7 +236,7 @@ def main() -> int:
             if not args.dry_run:
                 report["retrofitted"].append(n)
 
-    side_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    paths.save_json_atomic(report, side_path)
     print(
         f"Retrofit {'dry-run ' if args.dry_run else ''}complete for ch1..{reveal - 1}; "
         f"report: {side_path}",

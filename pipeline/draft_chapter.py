@@ -287,7 +287,7 @@ Write continuous prose with no section breaks between beats — the transition
 between beats should be a natural prose transition, not a labeled divider.
 """
         # Check premise validation flag
-        prem_val_path = paths.get_project_dir() / "premise_validation.json"
+        prem_val_path = paths.get_premise_validation_path()
         if prem_val_path.exists():
             prem_val = json.loads(prem_val_path.read_text(encoding="utf-8"))
             if not prem_val.get("passed"):
@@ -403,8 +403,8 @@ Write the chapter now. Full text, beginning to end.
         rep_regen, rep_feedback, rep_sidecar = check_structural_repetition(result)
 
         # Write sidecar
-        rep_path = chapters_dir / "repetition_check.json"
-        rep_path.write_text(json.dumps(rep_sidecar, indent=2), encoding="utf-8")
+        rep_path = paths.get_repetition_check_path()
+        paths.save_json_atomic(rep_sidecar, rep_path)
 
         if not rep_regen or attempt == MAX_REP_ATTEMPTS:
             break

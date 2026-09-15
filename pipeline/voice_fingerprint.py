@@ -202,8 +202,7 @@ def main():
     
     # Save full results
     out_path = paths.get_edit_logs_dir() / "voice_fingerprint.json"
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump({"chapters": results, "outliers": outliers}, f, indent=2)
+    paths.save_json_atomic({"chapters": results, "outliers": outliers}, out_path)
     print(f"\nSaved to {out_path}")
 
 if __name__ == "__main__":

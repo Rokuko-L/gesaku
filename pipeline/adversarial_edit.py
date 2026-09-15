@@ -56,8 +56,7 @@ def edit_chapter(ch_num):
     
     # Save log
     log_path = edit_log_dir / f"ch{ch_num:02d}_cuts.json"
-    with open(log_path, "w", encoding="utf-8") as f:
-        json.dump(result, f, indent=2)
+    paths.save_json_atomic(result, log_path)
 
     # Validate LLM quotes match chapter text
     cuts = result.get("cuts", [])

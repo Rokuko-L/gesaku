@@ -13,7 +13,7 @@ import re
 import json
 from pathlib import Path
 from dotenv import load_dotenv
-from core.genre import load_genre
+from core.genre import load_genre, chapters_total as genre_chapters_total
 from core import paths
 
 load_dotenv()
@@ -104,18 +104,24 @@ def verify_tonal_drift(roadmap_text, seed_concept, genre_name, total_chapters):
     JSON only, no formatting/preamble outside the JSON object."""
 
     try:
-        from core.llm import parse_json_response
+        from core.llm import TruncationError
+        from core.validation import (
+            OutputValidationError, TonalDriftVerdict, parse_validated,
+        )
         raw = call_llm(prompt=prompt, system="You are a meticulous book editor who outputs valid JSON only.", model_key="judge", max_tokens=2000, temperature=0.1)
-        data = parse_json_response(raw)
-        has_drift = data.get("has_drift", False)
-        violations = data.get("violations", [])
-        if has_drift and violations:
-            feedback = "Tonal/Genre violations detected:\n" + "\n".join(f"- {v}" for v in violations)
+        verdict = parse_validated(TonalDriftVerdict, raw, context="tonal drift")
+        if verdict.has_drift and verdict.violations:
+            feedback = "Tonal/Genre violations detected:\n" + "\n".join(
+                f"- {v}" for v in verdict.violations)
             return True, feedback
         return False, ""
     except TruncationError:
         # A truncated judge verdict is UNKNOWN, not "no drift" — never fail open on truncation.
         raise
+    except OutputValidationError as e:
+        print(f"  WARN: Tonal drift verdict failed schema ({e.feedback}), "
+              f"skipping gatekeeper.", file=sys.stderr)
+        return False, ""
     except Exception as e:
         print(f"  WARN: Tonal drift validation call failed ({e}), skipping gatekeeper.", file=sys.stderr)
         return False, ""
@@ -193,11 +199,15 @@ A major truth is sealed until chapter {reveal_chapter}. Before that chapter:
                             "chapter outline must name a POV character whose head the narration stays in.")
     try:
         state = json.loads((paths.get_project_dir() / "state.json").read_text(encoding="utf-8"))
-        total_chapters = state.get("chapters_total", 30)
         title = state.get("title", "Untitled Novel")
     except Exception:
-        total_chapters = genre_cfg.get("generation", {}).get("outline", {}).get("estimated_chapters", 30)
+        state = {}
         title = "Untitled Novel"
+    total_chapters = (
+        genre_chapters_total()
+        or int(state.get("chapters_total") or 0)
+        or 24
+    )
 
     beats = genre_cfg.get("framework", {}).get("premise_arc_beats", [])
     numbered_beats = "\n".join(f"{i+1}. {b}" for i, b in enumerate(beats))
@@ -214,7 +224,7 @@ A major truth is sealed until chapter {reveal_chapter}. Before that chapter:
     words_per_beat = max(250, wpc // beats_per_chapter)
 
     # Phase 1: High-Level Roadmap
-    roadmap_path = paths.get_project_dir() / ".outline_roadmap.md"
+    roadmap_path = paths.get_outline_roadmap_path()
     
     if args.retry_feedback and roadmap_path.exists():
         print("Retry detected: keeping existing high-level roadmap and regenerating Block 1.", file=sys.stderr)
@@ -559,8 +569,8 @@ CRITICAL RULES:
         hy_ok, hy_err, hy_side = plant_hygiene.validate_outline_plant_hygiene(
             full_outline_text, canon_text, characters
         )
-        side_path = paths.get_project_dir() / "plant_hygiene.json"
-        side_path.write_text(json.dumps(hy_side, indent=2), encoding="utf-8")
+        side_path = paths.get_plant_hygiene_path()
+        paths.save_json_atomic(hy_side, side_path)
         if not hy_ok:
             print(f"[WARN] Outline plant hygiene failed: {hy_err}", file=sys.stderr)
             print("See plant_hygiene.json — run_pipeline will gate on this.", file=sys.stderr)
@@ -572,7 +582,7 @@ CRITICAL RULES:
             )
 
     # Save a copy as .outline_part1.md for backwards compatibility
-    (paths.get_project_dir() / ".outline_part1.md").write_text(full_outline_text, encoding="utf-8")
+    paths.get_outline_part1_path().write_text(full_outline_text, encoding="utf-8")
 
     print("Outline generation complete!", file=sys.stderr)
 

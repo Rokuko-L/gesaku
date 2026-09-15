@@ -90,6 +90,15 @@ MAX_REVISION_CYCLES = 6
 
 PLATEAU_DELTA = 0.3
 
+# Keep/discard tolerances — one documented policy, four distinct budgets.
+# They differ on purpose: an LLM rewrite is high-variance, so a marginal
+# regression is worth keeping (it usually carries improvements elsewhere);
+# a deterministic cut pass should be score-neutral or it is a net loss.
+REVISION_TOLERANCE = 0.8    # prose rewrites may regress this much and still keep
+CUTS_TOLERANCE = 0.05       # mechanical cuts must be ~neutral to be kept
+NEAR_CLEAN_MARGIN = 1.0     # draft this close to the gate + clean tics = keep, don't regen
+FORCE_KEEP_MARGIN = 2.0     # below gate - this, skip the chapter rather than ship it
+
 CHAPTERS_TOTAL = 24  # default; overridden by genre config at runtime
 
 PHASE_ORDER = ["foundation", "drafting", "revision", "export"]
@@ -132,13 +141,9 @@ def timeout_for(stage: str) -> int:
 # ---------------------------------------------------------------------------
 
 def genre_chapters_total() -> int | None:
-    """Chapter count from the genre config, the canonical owner once written."""
-    try:
-        from core.genre import reload_genre
-        total = reload_genre()["generation"]["outline"]["estimated_chapters"]
-        return int(total) if total else None
-    except Exception:
-        return None
+    """Chapter count from the genre config (canonical owner), or None."""
+    from core import genre as genre_mod
+    return genre_mod.chapters_total()
 
 
 def resolve_chapters_total(state: dict) -> int:
@@ -222,6 +227,22 @@ def max_revision_cycles() -> int:
 
 def plateau_delta() -> float:
     return _env_float("GESAKU_PLATEAU_DELTA", PLATEAU_DELTA)
+
+
+def revision_tolerance() -> float:
+    return _env_float("GESAKU_REVISION_TOLERANCE", REVISION_TOLERANCE)
+
+
+def cuts_tolerance() -> float:
+    return _env_float("GESAKU_CUTS_TOLERANCE", CUTS_TOLERANCE)
+
+
+def near_clean_margin() -> float:
+    return _env_float("GESAKU_NEAR_CLEAN_MARGIN", NEAR_CLEAN_MARGIN)
+
+
+def force_keep_margin() -> float:
+    return _env_float("GESAKU_FORCE_KEEP_MARGIN", FORCE_KEEP_MARGIN)
 
 def ensure_gitignore_projects():
     """Ensure root .gitignore contains a rule for projects/ to prevent nested-repo commits."""
@@ -364,11 +385,15 @@ def run_tool(cmd: str, timeout: int = 600, check: bool = False, cwd: str = None)
             raise subprocess.CalledProcessError(
                 result.returncode, cmd, result.stdout, result.stderr)
         return result
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as e:
         print(f"    ERROR: timed out after {timeout}s")
-        # Return a fake CompletedProcess for graceful handling
-        fake = subprocess.CompletedProcess(cmd, returncode=-1, stdout="", stderr="TIMEOUT")
-        return fake
+        if check:
+            raise
+        # Callers that asked for fail-fast semantics must not receive a
+        # fabricated success-shaped result: rc=-1 with empty stdout used to
+        # flow into parse_score() and surface as a bogus ValueError far from
+        # the real cause.
+        return subprocess.CompletedProcess(cmd, returncode=-1, stdout="", stderr="TIMEOUT")
 
 def uv_run(script: str, timeout: int = 600) -> subprocess.CompletedProcess:
     """Shorthand for running a Python script from project root. Fails fast."""
@@ -548,17 +573,11 @@ def _chapter_num_key(path) -> int:
     return int(m.group(1)) if m else 10**9
 
 def get_total_chapters(state: dict) -> int:
-    """Determine total chapter count from state or outline."""
-    if state.get("chapters_total", 0) > 0:
-        return state["chapters_total"]
-    # Try to infer from outline.md
-    outline = paths.get_outline_path()
-    if outline.exists():
-        text = outline.read_text(encoding="utf-8")
-        matches = re.findall(r'###\s*\*?\*?\s*Ch(?:apter)?\b\s*\*?\*?\s*(\d+)', text, re.IGNORECASE)
-        if matches:
-            return max(int(m) for m in matches)
-    return CHAPTERS_TOTAL
+    """Deprecated shim — use resolve_chapters_total(state).
+
+    Kept so stage scripts keep importing; the genre config is the owner.
+    """
+    return resolve_chapters_total(state)
 
 def process_notes(notes_input, genre):
     """Process user notes into seed.txt and return the string for gen_genre_framework.

@@ -96,6 +96,38 @@ class CompareOutput(BaseModel):
         raise ValueError(f"winner must be 'A' or 'B' (or a chapter number), got {v!r}")
 
 
+class TonalDriftVerdict(BaseModel):
+    """Judge verdict for the outline tonal-drift gate.
+
+    `has_drift` is required: the gate must not default to "no drift" when
+    the judge omits the field — that silently disables the gatekeeper.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    has_drift: bool
+    analysis: str = ""
+    violations: list[str] = Field(default_factory=list)
+
+    @field_validator("has_drift", mode="before")
+    @classmethod
+    def _coerce_bool(cls, v):
+        if isinstance(v, str):
+            lowered = v.strip().lower()
+            if lowered in ("true", "yes", "1"):
+                return True
+            if lowered in ("false", "no", "0", ""):
+                return False
+        return v
+
+    @field_validator("violations", mode="before")
+    @classmethod
+    def _coerce_violations(cls, v):
+        if isinstance(v, str):
+            return [v] if v.strip() else []
+        return v
+
+
 def _format_validation_error(exc: ValidationError, context: str) -> str:
     lines = []
     for err in exc.errors():

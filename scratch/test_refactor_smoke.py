@@ -156,11 +156,83 @@ class RefactorSmoke(unittest.TestCase):
     # -- 5. gen_brief raises instead of exiting ----------------------------
 
     def test_gen_brief_importable_errors(self):
+        self._real_root()
         from pipeline import gen_brief
 
         self._bind("smoke_brief")
         with self.assertRaises(FileNotFoundError):
             gen_brief.chapter_text(99)
+
+    # -- 6. tolerances are one named policy --------------------------------
+
+    def test_tolerance_helpers(self):
+        self._real_root()
+        from pipeline import pipeline_infra as infra
+
+        self.assertGreater(infra.revision_tolerance(), infra.cuts_tolerance())
+        self.assertGreater(infra.force_keep_margin(), infra.near_clean_margin())
+        with patch.dict(os.environ, {"GESAKU_CUTS_TOLERANCE": "0.5"}):
+            self.assertEqual(infra.cuts_tolerance(), 0.5)
+
+    # -- 7. drift verdict cannot silently default to "clean" ---------------
+
+    def test_tonal_drift_verdict_requires_has_drift(self):
+        self._real_root()
+        from core.validation import (
+            OutputValidationError, TonalDriftVerdict, parse_validated,
+        )
+
+        ok = parse_validated(
+            TonalDriftVerdict, '{"has_drift": "true", "violations": "one"}',
+            context="t")
+        self.assertIs(ok.has_drift, True)
+        self.assertEqual(ok.violations, ["one"])
+
+        with self.assertRaises(OutputValidationError):
+            parse_validated(TonalDriftVerdict, '{"analysis": "looks fine"}',
+                            context="t")
+
+    # -- 8. run_tool honors check=True on timeout --------------------------
+
+    def test_run_tool_timeout_semantics(self):
+        self._real_root()
+        from pipeline import pipeline_infra as infra
+
+        slow = f'"{sys.executable}" -c "import time; time.sleep(30)"'
+        with self.assertRaises(Exception):
+            infra.run_tool(slow, timeout=1, check=True)
+        res = infra.run_tool(slow, timeout=1, check=False)
+        self.assertEqual(res.returncode, -1)
+        self.assertEqual(res.stderr, "TIMEOUT")
+
+    # -- 9. every static prompt loads and its placeholders resolve ---------
+
+    def test_prompts_load_and_format(self):
+        self._real_root()
+        prompts_dir = self.root / "prompts"
+        if not prompts_dir.is_dir():
+            prompts_dir = Path(__file__).resolve().parent.parent / "prompts"
+
+        files = sorted(prompts_dir.glob("*.md"))
+        self.assertGreater(len(files), 10)
+
+        for f in files:
+            text = paths.load_prompt(f.stem)
+            self.assertTrue(text.strip(), f"prompts/{f.name} is empty")
+
+        # The two genre meta-prompts are positionally formatted with a fixed
+        # placeholder set; a typo in extraction would raise KeyError here.
+        pass1 = paths.load_prompt("genre_framework_pass1")
+        pass1.format(
+            genre_description="g", chapter_count=24, estimated_words=78000,
+            words_per_chapter=3200, user_directives_block="",
+        )
+        pass2 = paths.load_prompt("genre_framework_pass2")
+        pass2.format(
+            genre_config="{}", genre_description="g", chapter_count=24,
+            estimated_words=78000, words_per_chapter=3200,
+            user_directives_block="", beats_per_chapter=5, words_per_beat=640,
+        )
 
 
 if __name__ == "__main__":

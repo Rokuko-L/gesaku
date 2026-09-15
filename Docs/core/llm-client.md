@@ -42,12 +42,37 @@ providers. Unsolicited SSE stream bodies are parsed for both chunk shapes.
 | `OPENAI_API_KEY` / `OPENAI_BASE_URL` | OpenAI-dialect credentials + endpoint (include the `/v1` prefix if the gateway uses one) |
 | `GESAKU_{ROLE}_MODEL` | Model id — free-form string, gateway namespacing (`deepseek/deepseek-v4-pro`) works as-is |
 | `GESAKU_EXTRA_HEADERS` | JSON object merged into every request (OpenRouter `HTTP-Referer`/`X-Title`, etc.) |
+| `GESAKU_LLM_TIMEOUT_{SHORT,STANDARD,LONG,XLONG}` | Per-call HTTP budgets (defaults 120 / 300 / 900 / 1800 s) |
+
+## Timeout Policy
+
+Callers pick a **named budget** instead of inventing a number. The
+orchestrator uses the same four names for its subprocess caps
+(`pipeline_infra.timeout_for`), so one env var covers a whole stage:
+
+| Role | Default | Used for |
+|---|---|---|
+| `short` | 120 s | summaries, titles, micro-plant extraction |
+| `standard` | 300 s | chapter drafting, revision, judge passes |
+| `long` | 900 s | deep reviews, outline roadmap |
+| `xlong` | 1800 s | world/character/canon bibles, full-novel evals |
+
+```python
+call_llm(prompt, timeout_role="xlong")   # preferred
+call_llm(prompt, timeout=42)             # explicit value always wins
+```
+
+`timeout=None` (the default) resolves through `llm_timeout(timeout_role)`.
+Stage scripts should pass a role; reserve an explicit integer for a genuine
+one-off. Hardcoded per-call-site numbers are what made this unconfigurable
+before — four separate "raise the timeout" commits during one production run.
 
 ## Key Types
 
 | Symbol | Purpose |
 |---|---|
-| `call_llm(prompt, system, model_key, max_tokens, temperature, beta_context, timeout, raise_on_truncation)` | POST to the resolved provider endpoint with retries (5 attempts, exponential backoff; 4xx auth errors fail fast). |
+| `call_llm(prompt, system, model_key, max_tokens, temperature, beta_context, timeout, timeout_role, raise_on_truncation)` | POST to the resolved provider endpoint with retries (5 attempts, exponential backoff; 4xx auth errors fail fast). |
+| `llm_timeout(role)` | Resolve a named budget (`short`/`standard`/`long`/`xlong`), env-overridable. |
 | `resolve_provider(model_key)` | Dialect resolution (see precedence above). |
 | `DEFAULT_MODELS` | Role → model per provider, used when the env var is unset. |
 | `ProviderError` | Missing/invalid provider config; message names the env var. |

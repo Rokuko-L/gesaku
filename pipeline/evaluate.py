@@ -1008,8 +1008,7 @@ def main():
     mode = args.phase or (f"ch{args.chapter:02d}" if args.chapter else "full")
     eval_log_dir = paths.get_eval_logs_dir()  # also creates the directory
     log_path = eval_log_dir / f"{timestamp}_{mode}.json"
-    with open(log_path, "w", encoding="utf-8") as f:
-        json.dump(result, f, indent=2)
+    paths.save_json_atomic(result, log_path)
     print(f"\neval_log: {log_path}")
 
 

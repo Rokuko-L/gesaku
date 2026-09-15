@@ -169,6 +169,22 @@ def reload_genre():
     return load_genre()
 
 
+def chapters_total() -> int | None:
+    """Canonical chapter count from the active genre config, or None.
+
+    Single owner for "how many chapters does this novel have" — state.json
+    mirrors this value, it never defines it.
+    """
+    try:
+        total = load_genre()["generation"]["outline"]["estimated_chapters"]
+    except (FileNotFoundError, KeyError, TypeError, json.JSONDecodeError):
+        return None
+    try:
+        return int(total) if total else None
+    except (TypeError, ValueError):
+        return None
+
+
 def format_prompt(template, **kwargs):
     """Safely format a prompt template with kwargs, preserving unset placeholders."""
     import string

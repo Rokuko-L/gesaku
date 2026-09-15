@@ -58,6 +58,25 @@ Related: [../pipeline/spec.md](spec.md) for sealed foundation + retrofit.
 3. **Orientation penalty** — up to −2.0 when ≥2 outline Orientation Facts
    aren't dramatized (synonym-aware matching).
 
+## From Score To Verdict
+
+The score alone doesn't decide keep/discard — a tolerance budget does, and
+the budgets differ by edit type on purpose (see
+[state-and-git.md](state-and-git.md#tolerances-keepdiscard-policy)):
+
+- prose rewrite (adversarial/targeted/review): keep if `post >= baseline - 0.8`
+- mechanical cuts: keep if `post >= baseline - 0.05`
+- drafting: keep at gate; below it, a **near-clean** draft (within 1.0 of the
+  gate with negligible mechanical penalties) is kept rather than regenerated,
+  because deleting it and drafting blind regresses more than the miss costs
+
+Note `baseline` is `max(pre_score, historical_best_of_chapter)`, not the
+previous attempt — a chapter that scored well in an earlier cycle cannot be
+allowed to drift down through repetitive "improvements".
+
+Related: [state-and-git.md](state-and-git.md) ·
+[../core/output-validation.md](../core/output-validation.md) · [spec.md](spec.md)
+
 ## Eval Logs
 
 Each run writes `projects/<name>/eval_logs/<timestamp>_<mode>.json` with the

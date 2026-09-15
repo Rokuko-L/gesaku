@@ -167,6 +167,34 @@ def get_open_callbacks_path() -> Path:
     """Live ledger of prose-emergent micro-plants (distinct from outline debts)."""
     return get_project_dir() / "open_callbacks.json"
 
+def get_premise_validation_path() -> Path:
+    """Sidecar recording whether Chapter 1's premise beats validated."""
+    return get_project_dir() / "premise_validation.json"
+
+def get_plant_hygiene_path() -> Path:
+    """Sidecar with sealed-term leaks + action-plant coverage findings."""
+    return get_project_dir() / "plant_hygiene.json"
+
+def get_retrofit_report_path() -> Path:
+    """Post-reveal retrofit outcome + informational continuity scan."""
+    return get_project_dir() / "retrofit_report.json"
+
+def get_retry_feedback_path(ch: int) -> Path:
+    """Per-chapter retry feedback handed to the next draft attempt."""
+    return get_project_dir() / f"retry_feedback_ch{ch:02d}.txt"
+
+def get_repetition_check_path() -> Path:
+    """Structural-repetition sidecar written next to the chapters."""
+    return get_chapters_dir() / "repetition_check.json"
+
+def get_outline_roadmap_path() -> Path:
+    """Pre-detail high-level roadmap (intermediate artifact of gen_outline)."""
+    return get_project_dir() / ".outline_roadmap.md"
+
+def get_outline_part1_path() -> Path:
+    """First-half outline, kept so part 2 can refine rather than regenerate."""
+    return get_project_dir() / ".outline_part1.md"
+
 def get_novel_title():
     """Retrieve novel title from state.json, resolving state path dynamically."""
     state_path = get_state_path()
