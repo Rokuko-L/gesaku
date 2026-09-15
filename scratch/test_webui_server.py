@@ -13,14 +13,20 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "webui"))
 
 SERVER_PATH = ROOT / "webui" / "server.py"
 spec = importlib.util.spec_from_file_location("webui_server", SERVER_PATH)
 webui_server = importlib.util.module_from_spec(spec)
 
+SETTINGS_PATH = ROOT / "webui" / "routes" / "settings.py"
+_settings_spec = importlib.util.spec_from_file_location("webui_settings", SETTINGS_PATH)
+webui_settings = importlib.util.module_from_spec(_settings_spec)
+
 
 def setUpModule():
     spec.loader.exec_module(webui_server)
+    _settings_spec.loader.exec_module(webui_settings)
 
 
 class ServerHelpersTest(unittest.TestCase):
@@ -34,9 +40,9 @@ class ServerHelpersTest(unittest.TestCase):
         self.assertEqual(webui_server.norm_phase({}), "idle")
 
     def test_mask_never_exposes_full_key(self):
-        self.assertEqual(webui_server._mask(None), "")
-        self.assertEqual(webui_server._mask(""), "")
-        masked = webui_server._mask("sk-ant-0123456789abcdef")
+        self.assertEqual(webui_settings._mask(None), "")
+        self.assertEqual(webui_settings._mask(""), "")
+        masked = webui_settings._mask("sk-ant-0123456789abcdef")
         self.assertNotIn("0123456789abcdef", masked)
         self.assertTrue(masked.startswith("sk-ant-"))
 
