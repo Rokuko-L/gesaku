@@ -83,6 +83,9 @@ before — four separate "raise the timeout" commits during one production run.
 
 ## The Healing Parser
 
+Lives in `core/json_repair.py` (split out of this module); `llm.parse_json_response`
+re-exports it and remains the documented entry point.
+
 LLMs return damaged JSON constantly. `parse_json_response` recovers in layers:
 
 1. Strip ``` fences

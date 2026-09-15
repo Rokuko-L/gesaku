@@ -98,6 +98,19 @@ in `localStorage.gesaku_active_project`.
 - Pause/resume (vs. terminate) and interactive stdin injection into the run.
   Stopping is still a hard kill; resume = launch again without `--from-scratch`.
 
+## Module layout
+
+| Module | Role |
+|---|---|
+| `webui/server.py` | FastAPI app, project CRUD, run control, data routes |
+| `webui/deps.py` | Project resolution + state helpers shared by the routes |
+| `webui/run_manager.py` | Subprocess supervision (liveness, log path, stop) |
+| `webui/routes/graph.py` | `/api/entity-graph` (cached LLM arrangement + heuristic fallback) |
+| `webui/routes/settings.py` | `/api/settings` — read/patch the repo `.env` |
+| `webui/routes/stream.py` | `/api/stream` — SSE state snapshots + log/llm tails |
+
+Route modules are plain `APIRouter`s, included by `server.py`.
+
 ## Tests
 
 `scratch/test_webui_server.py` — import smoke + pure helpers (`norm_phase`,

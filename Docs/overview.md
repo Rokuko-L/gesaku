@@ -13,12 +13,12 @@ improvements (modify → evaluate → keep/discard).
 
 ```
 core/             Shared library — no pipeline-specific logic
-├── paths.py        Project root/state resolution, folder+file path helpers,
-│                   prompt loader (load_prompt), atomic JSON writes
-│                   (save_json_atomic / save_registry)
+├── paths.py        Project root/state resolution, folder+file path helpers
+│                   (incl. per-artifact sidecars), prompt loader, atomic JSON
 ├── llm.py          Multi-provider client (call_llm: anthropic + openai
-│                   dialects, any compat endpoint), response extraction,
-│                   healing JSON parser (parse_json_response)
+│                   dialects, any compat endpoint) + response extraction
+├── json_repair.py  Healing JSON parser (parse_json_response), re-exported by
+│                   llm.py for the documented entry point
 ├── canon.py        Canon.md parse + chapter-scoped writer/judge views;
 │                   sealed foundation (visible_from) + denylist terms
 ├── plant_hygiene.py Outline plant hygiene: pre-reveal leak regex + action-plant
@@ -29,22 +29,35 @@ core/             Shared library — no pipeline-specific logic
 │                   plants/harvests validation, debt extraction
 ├── textstats.py    Context windows (tail/head), repetition detection
 ├── novel_tex.py    Default LaTeX novel.tex template generation
-├── genre.py        Genre config loader + validator (active_genre.json)
+├── genre.py        Genre config loader + validator (active_genre.json);
+│                   `chapters_total()` is the single owner of the chapter count
 ├── validation.py   Pydantic schema layer for LLM output (parse_validated)
 └── mock_llm.py     Offline LLM mock for tests (MockLLM.install())
 
 pipeline/         Orchestration and per-stage tooling
-├── pipeline_infra.py Git plumbing, registry/state persistence, score parsing;
-│                   single owner for timeouts (timeout_for), chapter count
-│                   (resolve_chapters_total), tolerances, and best-novel
-│                   tracking (record_novel_score / best_novel_checkpoint)
-├── evaluate.py       Scoring engine: mechanical slop + LLM judge (judge_view)
+├── pipeline_infra.py Git plumbing, registry/state persistence, timeouts,
+│                   tolerances, best-novel tracking, subprocess helpers
+├── scores.py         Score parsing + chapter counting (raises on a missing key)
+├── phases/           One module per pipeline phase:
+│   ├── foundation.py   Phase 1 (per-artifact checkpoints)
+│   ├── drafting.py     Phase 2 (judge failure != fatal)
+│   ├── revision.py     Phase 3 cycles (adversarial, panel, targeted rewrites)
+│   ├── review_loop.py  Phase 3b Opus review (non-blocking)
+│   ├── export.py       Phase 4 (ships the peak, not the latest)
+│   └── common.py       Shared canon-sync + post-keep hooks
+├── preflight.py      sanity_check: fails fast on dead proxy / unknown model
+├── slop.py           Mechanical slop detection (no LLM)
+├── orientation.py    Outline orientation-fact coverage check
+├── eval_prompts.py   Judge prompt construction (genre-config driven)
+├── evaluate.py       Scoring engine: slop + judge + penalties (judge_view)
+├── briefs/           Revision-brief generators, one module per feedback source
 ├── retrofit_reveal.py Post-reveal rewrite of ch 1..R-1 (coverage-gated)
 └── ...               drafting/revision/export stage scripts
 
 foundation/       Foundation-phase generators (one script per document)
 ├── gen_genre_framework.py / gen_world.py / gen_characters.py /
 ├── gen_outline.py / gen_outline_part2.py / gen_canon.py /
+├── outline_gates.py    act ranges + tonal-drift judge
 └── gen_title.py / seed.py
 
 fuel/             Pipeline fuel — runtime LLM prompt material (see below)
@@ -52,12 +65,14 @@ prompts/          Static prompt templates (loaded via paths.load_prompt)
 projects/<name>/  Per-novel isolated workspace (gitignored; own git repo)
 scratch/          Offline test suites
 webui/            Operator console: server.py (FastAPI bridge, port 8600)
+├── deps.py         project resolution + state helpers (shared by routes)
+├── routes/         APIRouter modules: graph, settings, stream
 └── frontend/       React 19 + Vite app; src/api/contract.js declares the
                     API shapes, client.js calls /api with fixture fallback
 
-Root entry points: run_pipeline.py (orchestrator CLI), cli.py (`uv run gesaku`
-operator console), webui/server.py (FastAPI bridge), install_fonts.py,
-_utf8.py (UTF-8 enforcement shim)
+Root entry points: run_pipeline.py (orchestrator CLI — sequences phases, owns
+the CLI), cli.py (`uv run gesaku` operator console), webui/server.py (FastAPI
+bridge), install_fonts.py, _utf8.py (UTF-8 enforcement shim)
 ```
 
 **Data flow:**

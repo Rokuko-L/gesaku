@@ -9,6 +9,15 @@ final_score = max(0, judge_overall_score - slop_penalty - length_penalty
                       - orientation_penalty)
 ```
 
+Module layout — the scoring engine is split by concern:
+
+| Module | Role |
+|---|---|
+| `pipeline/slop.py` | Mechanical detectors + penalty model (no LLM) |
+| `pipeline/orientation.py` | Orientation-fact coverage check (no LLM) |
+| `pipeline/eval_prompts.py` | Judge prompt construction from the genre config |
+| `pipeline/evaluate.py` | Loads context, calls the judge, applies penalties |
+
 ## Mechanical Slop Score (`slop_score(text)`)
 
 Deterministic detectors, each with its own penalty cap (global cap 4.0):

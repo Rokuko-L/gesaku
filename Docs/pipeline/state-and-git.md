@@ -1,7 +1,12 @@
 # State, Registry & Git Plumbing (`pipeline/pipeline_infra.py`)
 
-Infrastructure extracted from the orchestrator. `run_pipeline.py` keeps the
-phase functions and CLI; this module holds everything they share.
+Infrastructure shared by the phase modules. `run_pipeline.py` only sequences
+`pipeline/phases/*` and owns the CLI; the phase implementations live in
+`pipeline/phases/` (foundation, drafting, revision, review_loop, export) with
+shared helpers in `pipeline/phases/common.py`. Pre-flight checks are in
+`pipeline/preflight.py`.
+
+Score parsing and chapter counting live in `pipeline/scores.py`.
 
 ## Constants
 
