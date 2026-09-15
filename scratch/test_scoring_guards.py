@@ -138,6 +138,7 @@ class RunFoundationLoopTest(unittest.TestCase):
         import tempfile
         from types import SimpleNamespace
         import run_pipeline as rp
+        from pipeline.phases import foundation as foundation_phase
         from core import paths as paths_mod
 
         tmp = Path(tempfile.mkdtemp(prefix="gesaku_loop_"))
@@ -170,14 +171,14 @@ class RunFoundationLoopTest(unittest.TestCase):
             "git_reset_hard": lambda ref="HEAD": calls["resets"].append(ref),
             "save_state": lambda s: calls["saves"].append(dict(s)),
         }
-        saved = {name: getattr(rp, name) for name in patches}
+        saved = {name: getattr(foundation_phase, name) for name in patches}
         try:
             for name, fn in patches.items():
-                setattr(rp, name, fn)
+                setattr(foundation_phase, name, fn)
             state = rp.run_foundation({"iteration": 0})
         finally:
             for name, fn in saved.items():
-                setattr(rp, name, fn)
+                setattr(foundation_phase, name, fn)
             paths_mod._root_dir = orig_root
         return state, calls
 
