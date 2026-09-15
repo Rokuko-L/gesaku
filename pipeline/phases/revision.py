@@ -20,7 +20,7 @@ from pipeline.review import should_stop as review_should_stop
 
 from pipeline.pipeline_infra import (
     banner, best_novel_checkpoint, chapter_threshold, count_chapter_files,
-    count_words_in_chapters, cuts_tolerance, fmt_score,
+    count_words_in_chapters, cuts_tolerance, decline_streak, fmt_score,
     get_historical_best_for_chapter, git_add_commit, git_commit_staged,
     git_reset_hard, git_short_hash, log_result, max_revision_cycles,
     min_revision_cycles, near_clean_margin, parse_score, parse_score_any,
@@ -429,6 +429,28 @@ def run_revision(
         if not skip_full_novel_eval:
             plateau = plateau_delta()
             min_cycles = min_revision_cycles()
+
+            # Declining-score early stop. The plateau check below only fires
+            # on a STABLE score (|delta| < plateau), so a cycle sequence that
+            # keeps dropping never trips it and the loop burns cycles to
+            # max_cycles. Each cycle is hours of LLM time, so bail out once
+            # the score has fallen for N consecutive cycles.
+            if stored is not None and prev_score is not None:
+                if stored < prev_score:
+                    state["revision_decline_streak"] = (
+                        state.get("revision_decline_streak", 0) + 1)
+                else:
+                    state["revision_decline_streak"] = 0
+                save_state(state)
+                streak = state["revision_decline_streak"]
+                if cycle >= min_cycles and streak >= decline_streak():
+                    step(f"Declining for {streak} consecutive cycles "
+                         f"({fmt_score(prev_score)} -> {fmt_score(stored)}); "
+                         f"best remains {fmt_score(state.get('best_novel_score'))} "
+                         f"@ {state.get('best_novel_commit')} — stopping revision "
+                         f"(export ships the best checkpoint)")
+                    break
+
             comparable = (
                 cycle >= min_cycles
                 and stored is not None

@@ -17,6 +17,7 @@ Score parsing and chapter counting live in `pipeline/scores.py`.
 | `CHAPTER_THRESHOLD = 6.5` | Chapter retry gate |
 | `MAX_FOUNDATION_ITERS / MAX_CHAPTER_ATTEMPTS / MAX_OUTLINE_ATTEMPTS` | Retry budgets |
 | `MIN/MAX_REVISION_CYCLES`, `PLATEAU_DELTA` | Revision loop bounds + plateau sensitivity |
+| `DECLINE_STREAK = 2` | Consecutive dropping cycles → stop revision early |
 | `TIMEOUT_SHORT/STANDARD/LONG/XLONG` | Subprocess caps (see Timeouts below) |
 | `REVISION_TOLERANCE`, `CUTS_TOLERANCE`, `NEAR_CLEAN_MARGIN`, `FORCE_KEEP_MARGIN` | Keep/discard tolerances (see Tolerances below) |
 | `PHASE_ORDER` | `["foundation", "drafting", "revision", "export"]` |
@@ -33,6 +34,7 @@ Gate overrides are read at call time via helpers (defaults above; env wins):
 | `timeout_for("short"\|"standard"\|"long"\|"xlong")` | `GESAKU_TIMEOUT_{SHORT,STANDARD,LONG,XLONG}` |
 | `revision_tolerance()` / `cuts_tolerance()` | `GESAKU_REVISION_TOLERANCE` / `GESAKU_CUTS_TOLERANCE` |
 | `near_clean_margin()` / `force_keep_margin()` | `GESAKU_NEAR_CLEAN_MARGIN` / `GESAKU_FORCE_KEEP_MARGIN` |
+| `decline_streak()` | `GESAKU_DECLINE_STREAK` |
 
 ## Timeouts
 
@@ -47,6 +49,15 @@ env vars instead of a code change per stage.
 | `standard` | 900 s | drafting, revision, single judge passes |
 | `long` | 1800 s | full-novel evals, chapter evals, reader panel |
 | `xlong` | 3600 s | foundation generation blocks |
+
+**Derived caps.** A flat budget can expire *mid-retry* even when every
+individual LLM call stayed inside its own budget. `gen_outline` retries the
+roadmap up to `GESAKU_OUTLINE_ROADMAP_ATTEMPTS` (default 6) times and each
+block up to 3 times, all at `llm_timeout("long")` — 5400 s worst case, above
+the 3600 s `xlong` backstop. `foundation._outline_subprocess_cap()` therefore
+computes the cap as `max(timeout_for("xlong"), (roadmap_attempts +
+n_blocks x block_attempts) x llm_timeout("long"))`. The outer cap is only a
+backstop: a genuinely hung call is bounded by its own per-call LLM timeout.
 
 `run_tool` honours `check=True` on timeout: with `check=False` it returns
 `rc=-1` for graceful handling, but with `check=True` (i.e. every `uv_run`)
@@ -71,6 +82,10 @@ Four budgets, deliberately different magnitudes:
 mirror, never the source of truth.
 
 - `core.genre.chapters_total()` — reads `generation.outline.estimated_chapters`.
+  Its config cache is keyed by the resolved config *path*, not global: one
+  process can serve several projects (the webui bridge switches projects per
+  request under a lock), and a single global slot would hand back the previous
+  project's chapter count and prompts.
 - `pipeline_infra.resolve_chapters_total(state)` — genre first, then state,
   then `CHAPTERS_TOTAL`; writes the resolved value back to state.
 - Foundation generators (`gen_outline`, `gen_outline_part2`, `gen_canon`)

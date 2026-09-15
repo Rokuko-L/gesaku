@@ -330,6 +330,15 @@ CYCLE 2-3: STRUCTURAL REVISIONS (address panel consensus)
 
   evaluate.py --full → get novel-level scores
   Git commit: "Cycle N: structural revisions from panel"
+
+  Early stop — two independent signals:
+    - PLATEAU: |score change| < GESAKU_PLATEAU_DELTA for a cycle after
+      MIN_REVISION_CYCLES. Catches a judge that has run out of signal.
+    - DECLINE: the score dropped for GESAKU_DECLINE_STREAK (default 2)
+      consecutive cycles. The plateau test only fires on a *stable* score,
+      so a monotonically falling sequence would otherwise run to
+      MAX_REVISION_CYCLES burning hours of LLM time. Export ships the best
+      checkpoint either way, so stopping early costs no quality.
 ```
 
 ```

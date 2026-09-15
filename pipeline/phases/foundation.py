@@ -14,7 +14,10 @@ import re
 import sys
 
 from core import paths
+import os
+
 from core.genre import load_genre
+from core.llm import llm_timeout
 from core.outline import (
     extract_outline_debts, validate_plants_harvests, validate_premise_beats,
 )
@@ -25,6 +28,31 @@ from pipeline.pipeline_infra import (
     git_reset_hard, load_state, log_result, parse_lore_score, parse_score,
     resolve_chapters_total, save_state, step, timeout_for, uv_run,
 )
+
+
+def _outline_subprocess_cap(state: dict) -> int:
+    """Subprocess cap for gen_outline, derived from what it may actually do.
+
+    A flat cap can expire mid-retry and abort the phase even though every
+    individual LLM call stayed inside its own budget: the roadmap retries up
+    to GESAKU_OUTLINE_ROADMAP_ATTEMPTS times and each block retries 3 times,
+    all at `llm_timeout("long")`. `timeout_for("xlong")` alone (3600s) is
+    less than the roadmap's own worst case (6 x 900s).
+
+    The outer cap is only a backstop — a genuinely hung call is bounded by
+    the per-call LLM timeout, so a generous ceiling here does not mean a
+    hang goes undetected for that long.
+    """
+    from pipeline.pipeline_infra import _env_int
+    roadmap_attempts = _env_int("GESAKU_OUTLINE_ROADMAP_ATTEMPTS", 6)
+    block_size = _env_int("GESAKU_OUTLINE_BLOCK_SIZE", 4)
+    block_attempts = 3  # matches gen_outline's per-block retry loop
+    total = resolve_chapters_total(state)
+    n_blocks = max(1, -(-total // max(block_size, 1)))
+    return max(
+        timeout_for("xlong"),
+        (roadmap_attempts + n_blocks * block_attempts) * llm_timeout("long"),
+    )
 
 
 
@@ -138,7 +166,7 @@ def run_foundation(state: dict) -> dict:
             step("Outline exists — skipping regen (checkpoint)")
         else:
             step("Generating outline (part 1)...")
-            uv_run("foundation/gen_outline.py", timeout=FX)
+            uv_run("foundation/gen_outline.py", timeout=_outline_subprocess_cap(state))
 
         # Validate Chapter 1 premise beats (pre-draft gate)
         genre_cfg = load_genre()
@@ -179,7 +207,8 @@ def run_foundation(state: dict) -> dict:
             step("Generating outline (part 2 — foreshadowing)...")
             n_blocks = max(1, -(-resolve_chapters_total(state) // 10))
             uv_run("foundation/gen_outline_part2.py",
-                   timeout=max(timeout_for("standard"), n_blocks * timeout_for("short")))
+                   timeout=max(timeout_for("standard"),
+                               n_blocks * llm_timeout("standard")))
 
         step("Sanitizing chapter titles...")
         uv_run("pipeline/sanitize_outline_titles.py", timeout=timeout_for("short"))

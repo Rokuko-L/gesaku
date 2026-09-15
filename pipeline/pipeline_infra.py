@@ -109,6 +109,7 @@ REVISION_TOLERANCE = 0.8    # prose rewrites may regress this much and still kee
 CUTS_TOLERANCE = 0.05       # mechanical cuts must be ~neutral to be kept
 NEAR_CLEAN_MARGIN = 1.0     # draft this close to the gate + clean tics = keep, don't regen
 FORCE_KEEP_MARGIN = 2.0     # below gate - this, skip the chapter rather than ship it
+DECLINE_STREAK = 2          # consecutive dropping cycles -> stop revision early
 
 CHAPTERS_TOTAL = 24  # default; overridden by genre config at runtime
 
@@ -255,6 +256,11 @@ def near_clean_margin() -> float:
 def force_keep_margin() -> float:
     return _env_float("GESAKU_FORCE_KEEP_MARGIN", FORCE_KEEP_MARGIN)
 
+
+def decline_streak() -> int:
+    """Consecutive declining revision cycles that stop the loop early."""
+    return _env_int("GESAKU_DECLINE_STREAK", DECLINE_STREAK)
+
 def ensure_gitignore_projects():
     """Ensure root .gitignore contains a rule for projects/ to prevent nested-repo commits."""
     root = paths.get_root_dir()
@@ -325,6 +331,7 @@ def default_state() -> dict:
         "novel_score": None,  # null = never scored; 0.0 is a real (failed) score
         "best_novel_score": None,
         "best_novel_commit": None,
+        "revision_decline_streak": 0,
         "revision_cycle": 0,
         "debts": [],
     }

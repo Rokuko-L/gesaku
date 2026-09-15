@@ -169,6 +169,7 @@ Copy `.env.example` → `.env`.
 | `GESAKU_MIN_REVISION_CYCLES` | `3` | Floor before plateau stop |
 | `GESAKU_MAX_REVISION_CYCLES` | `6` | Revision cap |
 | `GESAKU_PLATEAU_DELTA` | `0.3` | Score delta that counts as stalled |
+| `GESAKU_DECLINE_STREAK` | `2` | Consecutive dropping cycles → stop revision early |
 | `GESAKU_TIMEOUT_SHORT` | `300` | Subprocess cap: mechanical steps (sanitize, cuts, tex) |
 | `GESAKU_TIMEOUT_STANDARD` | `900` | Subprocess cap: single generation passes (draft, revision) |
 | `GESAKU_TIMEOUT_LONG` | `1800` | Subprocess cap: full-novel / chapter evals |

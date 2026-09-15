@@ -22,6 +22,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core import paths
+from pipeline.pipeline_infra import timeout_for
 
 
 def _make_root(tmp: str) -> Path:
@@ -173,6 +174,52 @@ class RefactorSmoke(unittest.TestCase):
         self.assertGreater(infra.force_keep_margin(), infra.near_clean_margin())
         with patch.dict(os.environ, {"GESAKU_CUTS_TOLERANCE": "0.5"}):
             self.assertEqual(infra.cuts_tolerance(), 0.5)
+        with patch.dict(os.environ, {"GESAKU_DECLINE_STREAK": "3"}):
+            self.assertEqual(infra.decline_streak(), 3)
+
+    def test_genre_cache_is_per_project(self):
+        """Set a genre for project A, switch to B, and B must not see A's."""
+        from core import genre
+
+        self._bind("cache_a")
+        paths.get_active_genre_path().write_text(
+            json.dumps({"genre_name": "A", "generation": {
+                "outline": {"estimated_chapters": 30, "estimated_words": 90000}}}),
+            encoding="utf-8",
+        )
+        with patch("core.genre.validate", lambda cfg: None):
+            self.assertEqual(genre.chapters_total(), 30)
+
+        self._bind("cache_b")
+        # B has no genre file -> must not inherit A's cached config.
+        self.assertIsNone(genre.chapters_total())
+
+    # -- 11. outline subprocess cap covers its own retry budget -----------
+
+    def test_outline_cap_covers_retry_budget(self):
+        """A flat cap can expire mid-retry even when every LLM call fit its
+        own budget: roadmap attempts + block attempts, each llm_timeout(long)."""
+        from pipeline.phases import foundation as fnd
+        from core.llm import llm_timeout
+
+        self._bind("smoke_cap")
+        state = {"chapters_total": 24}
+        with patch.dict(os.environ, {}, clear=False):
+            cap = fnd._outline_subprocess_cap(state)
+        # Worst case is the roadmap alone: 6 attempts x long budget.
+        self.assertGreaterEqual(cap, 6 * llm_timeout("long"))
+        # And it must stay at or above the plain backstop.
+        self.assertGreaterEqual(cap, timeout_for("xlong"))
+
+    def test_outline_cap_scales_with_block_count(self):
+        from pipeline.phases import foundation as fnd
+        from core.llm import llm_timeout
+
+        self._bind("smoke_cap2")
+        small = fnd._outline_subprocess_cap({"chapters_total": 4})
+        big = fnd._outline_subprocess_cap({"chapters_total": 60})
+        self.assertGreater(big, small)
+        self.assertGreaterEqual(big, 6 * llm_timeout("long"))
 
     # -- 7. drift verdict cannot silently default to "clean" ---------------
 
