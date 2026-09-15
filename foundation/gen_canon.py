@@ -14,26 +14,26 @@ from core import outline
 import json
 import sys
 from dotenv import load_dotenv
-from core.genre import load_genre
+from core.genre import load_genre, chapters_total as genre_chapters_total
 
 load_dotenv()
 
 def call_writer(prompt, max_tokens=get_max_tokens_with_thinking(16000)):
-    return call_llm(prompt=prompt, model_key="writer", max_tokens=max_tokens, timeout=1800)
+    return call_llm(prompt=prompt, model_key="writer", max_tokens=max_tokens, timeout_role="xlong")
 
 FOUNDATION_CANON_PROMPT = paths.load_prompt("foundation_canon")
 
 
 def _total_chapters() -> int:
+    """Chapter count — genre config owns it, state mirrors it."""
+    total = genre_chapters_total()
+    if total:
+        return total
     try:
         state = json.loads(paths.get_state_path().read_text(encoding="utf-8"))
         return int(state.get("chapters_total") or 0) or 24
     except (OSError, json.JSONDecodeError, TypeError, ValueError):
-        try:
-            cfg = load_genre()
-            return int(cfg["generation"]["outline"]["estimated_chapters"])
-        except Exception:
-            return 24
+        return 24
 
 
 def normalize_foundation_bullets(result: str) -> str:

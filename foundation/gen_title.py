@@ -72,11 +72,11 @@ DEFAULT_TITLE_JUDGES = [
 
 
 def call_writer(prompt, temp=0.7):
-    return call_llm(prompt=prompt, model_key="writer", max_tokens=2000, temperature=temp, timeout=300)
+    return call_llm(prompt=prompt, model_key="writer", max_tokens=2000, temperature=temp, timeout_role="standard")
 
 
 def call_judge(prompt, system_prompt, temp=0.1):
-    return call_llm(prompt=prompt, system=system_prompt, model_key="judge", max_tokens=2000, temperature=temp, timeout=120)
+    return call_llm(prompt=prompt, system=system_prompt, model_key="judge", max_tokens=2000, temperature=temp, timeout_role="short")
 
 
 def parse_titles_list(raw_response):
@@ -133,16 +133,9 @@ Example:
 JSON only, no markdown, no preamble."""
     raw = call_writer(prompt, temp=0.7)
     try:
-        start = raw.find("[")
-        end = raw.rfind("]")
-        if start != -1 and end != -1 and end > start:
-            raw_json = raw[start:end+1]
-            result = json.loads(raw_json)
-        else:
-            result = parse_json_response(raw)
-        if isinstance(result, list) and len(result) >= 4:
-            return result[:4]
-        print(f"WARNING: Judge generation returned {type(result).__name__}", file=sys.stderr)
+        from core.validation import TitleJudgePanel, parse_validated
+        panel = parse_validated(TitleJudgePanel, raw, context="title judges")
+        return [j.model_dump() for j in panel.root]
     except Exception as e:
         print(f"WARNING: Judge generation failed: {e}", file=sys.stderr)
     return None
@@ -155,7 +148,7 @@ def persist_judges(judges):
     state_path = paths.get_state_path()
     genre_path = state_path.parent / "active_genre.json"
     if genre_path.exists():
-        genre_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        paths.save_json_atomic(cfg, genre_path)
         print(f"Saved title_judges to {genre_path}", file=sys.stderr)
 
 
@@ -249,11 +242,12 @@ Return ONLY a valid JSON object mapping each title string to its integer score.
 No explanations. Example:
 {{"Title One": 85, "Title Two": 92}}"""
                 try:
+                    from core.validation import TitleScoreMap, parse_validated
                     raw_scores = call_judge(judge_prompt, system_prompt=judge["persona"], temp=0.1)
-                    scores = parse_json_response(raw_scores)
-                    if not isinstance(scores, dict):
-                        print(f"    WARNING: {judge['name']} returned non-dict, skipping", file=sys.stderr)
-                        return judge["key"], {}
+                    scores = parse_validated(
+                        TitleScoreMap, raw_scores,
+                        context=f"{judge['name']} title scores",
+                    ).root
                     return judge["key"], scores
                 except Exception as e:
                     print(f"    WARNING: {judge['name']} failed: {e}, skipping", file=sys.stderr)
@@ -350,7 +344,7 @@ Return ONLY a numbered list."""
     state_path = paths.get_state_path()
     state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
     state["title"] = winner
-    state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    paths.save_json_atomic(state, state_path)
 
     registry_path = paths.get_registry_path()
     registry = json.loads(registry_path.read_text(encoding="utf-8")) if registry_path.exists() else {}

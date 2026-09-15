@@ -112,6 +112,15 @@ OUTPUT: branch created, .env configured
 2. Verify .env has ANTHROPIC_API_KEY
 3. Verify seed.txt exists and is specific enough
    (world-differentiator, central tension, cost/constraint, sensory hook)
+
+Preflight (sanity_check, runs before any LLM call):
+  - .env present; provider key present (custom gateways may be keyless → WARN)
+  - seed.txt or --notes present
+  - genre available (--genre / GESAKU_GENRE / active_genre.json)
+  - PROBE the resolved endpoint with a 1-token request:
+      unreachable  → FAIL, refuse to launch
+      HTTP 404     → FAIL, model name does not resolve
+    A doomed launch used to burn 10+ minutes before the first real error.
 ```
 
 ### Phase 1: Foundation
@@ -135,6 +144,17 @@ Loop:
   9. evaluate.py --phase=foundation
   10. If score improved → git commit. If worse → git reset --hard HEAD~1.
   11. Identify weakest dimension → target next iteration at it.
+
+Per-artifact checkpointing:
+  Each step is skipped when its output already exists and passes a cheap
+  validity check (`_foundation_artifact_ok`: non-trivial size, and all
+  chapter headers present for the outline; `_foundation_part2_ok`: the
+  foreshadowing section exists for the tail chapters). A crash mid-foundation
+  therefore resumes at the missing artifact instead of regenerating world,
+  characters, canon, and outline — that cost 30-60 min of LLM calls per
+  crash. `--from-scratch` wipes the files, which is the explicit
+  invalidation path. Deeper gates (premise beats, plant hygiene) still run
+  every iteration on top of the checkpoint.
 
 Sealed foundation + twist stories:
   - Facts tagged `visible_from=N` (N>1) are withheld from writer and judge
@@ -201,6 +221,17 @@ For each chapter in outline order:
   6. If this chapter is the sealed reveal chapter → run retrofit_reveal.py
      once (state flag reveal_retrofit_done)
   7. Log to results.tsv
+
+Quality gates are not fatal:
+  - A judge that fails 3× (timeout, unparseable output) does NOT kill the
+    run. The attempt is logged as `unevaluated` and drafting continues; the
+    draft itself was fine, only the critic was broken.
+  - A failed repair_slop re-eval falls back to the pre-repair score instead
+    of raising.
+  - A failed Opus review round warns and falls through to export. The novel
+    is already written — a broken critic pass must not lose the work.
+  Structural failures (missing file, invalid JSON, zero chapters) still
+  abort; drift/hygiene/low-score are warnings.
 
 Post-draft cleanup:
   7. Mechanical slop pass (evaluate.py regex scanner) across all chapters
@@ -299,6 +330,15 @@ CYCLE 2-3: STRUCTURAL REVISIONS (address panel consensus)
 
   evaluate.py --full → get novel-level scores
   Git commit: "Cycle N: structural revisions from panel"
+
+  Early stop — two independent signals:
+    - PLATEAU: |score change| < GESAKU_PLATEAU_DELTA for a cycle after
+      MIN_REVISION_CYCLES. Catches a judge that has run out of signal.
+    - DECLINE: the score dropped for GESAKU_DECLINE_STREAK (default 2)
+      consecutive cycles. The plateau test only fires on a *stable* score,
+      so a monotonically falling sequence would otherwise run to
+      MAX_REVISION_CYCLES burning hours of LLM time. Export ships the best
+      checkpoint either way, so stopping early costs no quality.
 ```
 
 ```
@@ -403,6 +443,12 @@ PHASE 3b: OPUS REVIEW LOOP (deep, prose-level refinement)
 ### Phase 4: Export
 
 ```
+  0. Ship the peak, not the latest:
+     If state.best_novel_score > state.novel_score, git-checkout the
+     chapters from best_novel_commit and export that. Revision cycles keep
+     edits that pass tolerance (a 0.8 regression on an LLM rewrite), so the
+     last cycle is not necessarily the best one — one production run
+     exported 6.86 when 7.65 already existed.
   1. Normalize chapter titles (all # level, consistent format)
   2. typeset/build_tex.py → chapters_content.tex
   3. Edit typeset/novel.tex:
@@ -575,9 +621,33 @@ def run_pipeline(seed_path, tag="run1"):
 
 Separate from outline-tag debts (`state["debts"]` / `[Plant: slug]`).
 
-- After every **kept** chapter (all four drafting keep paths + targeted revision
-  keeps), `run_pipeline.on_chapter_kept` runs
+- After every **kept** chapter (the drafting keep paths, targeted revision
+  keeps, and Opus-review keeps), `pipeline.phases.common.on_chapter_kept` runs
   `pipeline/extract_micro_plants.py <ch>` (fail-soft; never blocks the keep).
+- **The store is chapter-scoped state, and it is coupled to the prose.** Two
+  rules follow, and both are load-bearing:
+  1. On a **revert** the chapter is restored to its *best-scoring* commit,
+     which can be older than the version the store was last extracted from —
+     so the revert path must also re-extract (`--reextract` drops this
+     chapter's plants, then rebuilds from what is now on disk).
+  2. **Staging is a keep-path-only promise.** On a keep, extraction runs
+     before the commit and the chapter + `open_callbacks.json` are staged
+     together (`common.stage_chapter_with_callbacks`), because
+     `git_commit_staged` commits the whole index. On a revert there is no
+     commit, so the store must **not** be staged: an uncommitted staged store
+     would be discarded by a later `git reset --hard` (restoring a stale
+     copy) or swept into the next chapter's keep commit under the wrong
+     message. Reverts re-extract into the working tree only; the next
+     cycle-end `git_add_commit` (`add -A`) picks the store up.
+  `git_reset_hard` also excludes `open_callbacks.json` from its `git clean`,
+  since an untracked store would otherwise be deleted outright on a reset.
+  That exclusion only helps while the file is untracked (first run); once
+  tracked, `git clean` skips it anyway and the keep-path staging rule is
+  what keeps it consistent.
+- Drop + rebuild is atomic from the store's point of view: `drop_source_chapter`
+  only persists together with a successful re-extraction
+  (`extract_micro_plants.py` saves once, at the end), so a failed extract
+  leaves the previous store intact.
 - Extract asks the judge for **at most 1** concrete callback candidate
   (object / phrase / promise / injury) and which open callback ids were paid off
   with changed meaning.
@@ -595,7 +665,7 @@ same-chapter harvest). Statuses: `paid off` (plant+harvest), `open` (plant
 only), `recalled` (harvest only). The webui ledger surfaces planned major
 threads, the clustered emergent ledger, and open callbacks.
 
-Offline tests: `scratch/test_micro_plants.py`.
+Offline tests: `tests/test_micro_plants.py`.
 
 ---
 

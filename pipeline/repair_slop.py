@@ -41,7 +41,7 @@ import sys
 from pathlib import Path
 
 from core import _utf8
-from pipeline.evaluate import (
+from pipeline.slop import (
     PROSE_TIC_PATTERNS,
     FICTION_AI_TELLS,
     STRUCTURAL_AI_TICS,
@@ -207,12 +207,15 @@ PARAGRAPHS:
 
 def parse_and_verify(raw: str, originals: dict):
     """Parse the LLM JSON and structurally verify it. Returns (data, error)."""
+    from core.validation import OutputValidationError, SlopRepairPatch, parse_validated
     try:
-        data = llm.parse_json_response(raw)
+        data = dict(parse_validated(
+            SlopRepairPatch, raw, context="slop repair patch"
+        ).root)
+    except OutputValidationError as e:
+        return None, f"schema failure: {e.feedback}"
     except Exception as e:
         return None, f"unparseable JSON: {e}"
-    if not isinstance(data, dict):
-        return None, "response is not a JSON object"
 
     ids = set(originals.keys())
     missing = ids - set(data.keys())
@@ -222,8 +225,6 @@ def parse_and_verify(raw: str, originals: dict):
 
     for pid, orig in originals.items():
         new = data.get(pid)
-        if not isinstance(new, str) or not new.strip():
-            return None, f"empty replacement for {pid}"
         if new.strip() == orig.strip():
             return None, f"no-op replacement for {pid} (unchanged text)"
         ratio = len(new) / max(len(orig), 1)
@@ -281,7 +282,7 @@ def main():
             model_key="writer",
             max_tokens=6000,
             temperature=0.6,
-            timeout=300,
+            timeout_role="standard",
         )
         if not raw or len(raw.strip()) < 20:
             print("REPAIR_FAILED empty LLM response", file=sys.stderr)
@@ -309,7 +310,7 @@ def main():
 
     if n_pre == 0 and total_llm == 0:
         print(f"NO_SLOP Chapter {chapter_num} — nothing to repair", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(0)
 
     ch_path.write_text(text, encoding="utf-8")
     print(f"REPAIRED Chapter {chapter_num}: {n_pre} pre-pass + {total_llm} LLM paragraph(s)", file=sys.stderr)

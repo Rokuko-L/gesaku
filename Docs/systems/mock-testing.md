@@ -33,17 +33,17 @@ assert mock.calls[0]["prompt"][:80] == ...
 
 | Layer | How |
 |---|---|
-| Validation retry loop | Queue a bad-schema response then a good one; assert fix-prompt contains feedback (see `scratch/test_mock_llm.py`) |
+| Validation retry loop | Queue a bad-schema response then a good one; assert fix-prompt contains feedback (see `tests/test_mock_llm.py`) |
 | Stage scripts | Create a temp project via `paths.set_project_name`, write input files, mock responses, call the script's functions |
 | Path isolation | No mock needed — patch `paths._root_dir` to a tmp dir |
-| Validation gates | Assert the gate can FAIL: queue a "violation" verdict and assert the gate blocks (see `scratch/test_gatekeepers.py`). A gate whose broken path returns the same result as a passing check must be tested on its failing branch. |
+| Validation gates | Assert the gate can FAIL: queue a "violation" verdict and assert the gate blocks (see `tests/test_gatekeepers.py`). A gate whose broken path returns the same result as a passing check must be tested on its failing branch. |
 
 ## Running the Suites
 
 ```bash
-uv run python -m unittest discover -s scratch -p "test_*.py"
-uv run python scratch/test_multi_project.py
-uv run python scratch/test_path_contamination.py
+uv run python -m unittest discover -s tests -p "test_*.py"
+uv run python tests/test_multi_project.py
+uv run python tests/test_path_contamination.py
 ```
 
 All must pass without an API key. Anything needing real LLM output is E2E,

@@ -17,7 +17,7 @@ Gesaku is a fully automated novel generation pipeline. The goal of this refactor
 ## Milestones
 | # | Name | Scope | Dependencies | Status |
 |---|------|-------|-------------|--------|
-| 1 | E2E Test Suite | Create scratch testing scripts under `scratch/` | none | IN_PROGRESS (Subagent: 802f9463-e9c1-460f-bdbf-b2de0bc722af) |
+| 1 | E2E Test Suite | Create E2E testing scripts under `tests/` | none | IN_PROGRESS (Subagent: 802f9463-e9c1-460f-bdbf-b2de0bc722af) |
 | 2 | Path & Config | Refactor `utils.py` with dynamic path helpers, project state, and atomic save | none | IN_PROGRESS (Subagent: 7a416a18-a3b9-4d25-aacc-3d2e39cb779e) |
 | 3 | Pipeline Orchestration | Refactor `run_pipeline.py` with registry management, CLI args, and Git guards | M2 | IN_PROGRESS (Subagent: 7a416a18-a3b9-4d25-aacc-3d2e39cb779e) |
 | 4 | Script Routing | Refactor other pipeline scripts and typeset helper | M2, M3 | IN_PROGRESS (Subagent: 7a416a18-a3b9-4d25-aacc-3d2e39cb779e) |
@@ -26,7 +26,7 @@ Gesaku is a fully automated novel generation pipeline. The goal of this refactor
 ## Code Layout
 - `utils.py`: Path helpers, active project state, Anthropic API interface.
 - `run_pipeline.py`: Main entry point and lifecycle orchestrator.
-- `scratch/`: Verification test suites.
+- `tests/`: Verification test suites.
 - `projects/`: Root folder for all isolated project directories.
   - `registry.json`: Session registry list.
   - `<project_name>/`: Specific project workspace folder.

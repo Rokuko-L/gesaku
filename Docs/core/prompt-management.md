@@ -16,6 +16,8 @@ Static prompt templates live in `prompts/*.md`, loaded via
 | `retrofit_reveal.md` | `pipeline/retrofit_reveal.py` |
 | `gen_novel_tex_system.md` + `gen_novel_tex_template.md` | `foundation/gen_novel_tex.py` |
 | `genre_framework_system.md` | `foundation/gen_genre_framework.py` |
+| `genre_framework_pass1.md` + `genre_framework_pass2.md` | `foundation/gen_genre_framework.py` (the two meta-prompts — structural spec + content spec) |
+| `entity_graph_system.md` + `entity_graph.md` | `webui/server.py` (`/api/entity-graph` LLM arrangement) |
 
 ## Conventions
 

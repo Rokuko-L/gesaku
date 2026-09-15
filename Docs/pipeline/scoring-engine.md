@@ -9,6 +9,15 @@ final_score = max(0, judge_overall_score - slop_penalty - length_penalty
                       - orientation_penalty)
 ```
 
+Module layout — the scoring engine is split by concern:
+
+| Module | Role |
+|---|---|
+| `pipeline/slop.py` | Mechanical detectors + penalty model (no LLM) |
+| `pipeline/orientation.py` | Orientation-fact coverage check (no LLM) |
+| `pipeline/eval_prompts.py` | Judge prompt construction from the genre config |
+| `pipeline/evaluate.py` | Loads context, calls the judge, applies penalties |
+
 ## Mechanical Slop Score (`slop_score(text)`)
 
 Deterministic detectors, each with its own penalty cap (global cap 4.0):
@@ -57,6 +66,25 @@ Related: [../pipeline/spec.md](spec.md) for sealed foundation + retrofit.
    words (climax/finale chapters get a 155% ceiling).
 3. **Orientation penalty** — up to −2.0 when ≥2 outline Orientation Facts
    aren't dramatized (synonym-aware matching).
+
+## From Score To Verdict
+
+The score alone doesn't decide keep/discard — a tolerance budget does, and
+the budgets differ by edit type on purpose (see
+[state-and-git.md](state-and-git.md#tolerances-keepdiscard-policy)):
+
+- prose rewrite (adversarial/targeted/review): keep if `post >= baseline - 0.8`
+- mechanical cuts: keep if `post >= baseline - 0.05`
+- drafting: keep at gate; below it, a **near-clean** draft (within 1.0 of the
+  gate with negligible mechanical penalties) is kept rather than regenerated,
+  because deleting it and drafting blind regresses more than the miss costs
+
+Note `baseline` is `max(pre_score, historical_best_of_chapter)`, not the
+previous attempt — a chapter that scored well in an earlier cycle cannot be
+allowed to drift down through repetitive "improvements".
+
+Related: [state-and-git.md](state-and-git.md) ·
+[../core/output-validation.md](../core/output-validation.md) · [spec.md](spec.md)
 
 ## Eval Logs
 

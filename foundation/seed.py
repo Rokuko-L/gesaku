@@ -24,7 +24,7 @@ load_dotenv(BASE_DIR / ".env")
 
 
 def call_writer(prompt, max_tokens=4000):
-    return call_llm(prompt=prompt, system=load_genre()["identity"]["seed_system"], model_key="writer", max_tokens=max_tokens, temperature=1.0, beta_context=True, timeout=120)
+    return call_llm(prompt=prompt, system=load_genre()["identity"]["seed_system"], model_key="writer", max_tokens=max_tokens, temperature=1.0, beta_context=True, timeout_role="short")
 
 
 GENERATE_PROMPT = load_genre()["generation"]["seed_generate_prompt"]

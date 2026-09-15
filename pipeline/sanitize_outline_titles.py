@@ -11,6 +11,7 @@ sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
 from core.llm import call_llm, parse_json_response
 from core import paths
 from core.paths import format_prompt
+from core.validation import SanitizedTitles, parse_validated
 import json
 import re
 import sys
@@ -236,15 +237,13 @@ def main():
                 model_key="writer",  # Use writer model for creative title rewriting
                 max_tokens=4000,
                 temperature=0.8,
-                timeout=180
+                timeout_role="short"
             )
             
-            raw_json = parse_json_response(raw_response)
-            
-            # Map keys to integers and check
-            proposed_titles = {}
-            for k, v in raw_json.items():
-                proposed_titles[int(k)] = str(v).strip()
+            proposed_titles = dict(parse_validated(
+                SanitizedTitles, raw_response,
+                context="sanitized chapter titles",
+            ).root)
                 
             # Fill missing entries from original titles if any
             for ch in current_titles:

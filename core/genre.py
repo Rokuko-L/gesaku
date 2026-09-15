@@ -14,6 +14,7 @@ BASE_DIR = Path(__file__).resolve().parent
 ACTIVE_PATH = BASE_DIR / "active_genre.json"
 
 _cache = None
+_cache_key = None
 
 REQUIRED_KEYS = [
     "genre_name", "identity", "generation", "evaluation", "framework",
@@ -135,12 +136,17 @@ def validate(config):
 
 
 def load_genre():
-    global _cache
-    if _cache is not None:
-        return _cache
+    """Load + validate the active project's genre config.
+
+    The cache is keyed by the resolved config path, not global: callers
+    switch projects at runtime (`paths.set_project_name`, e.g. one webui
+    process serving several projects), and a single global slot would happily
+    hand back the previous project's chapter count and prompts.
+    """
+    global _cache, _cache_key
 
     project_active_path = paths.get_active_genre_path()
-    
+
     if project_active_path.exists():
         path = project_active_path
     elif ACTIVE_PATH.exists():
@@ -153,20 +159,42 @@ def load_genre():
             f"  2. {ACTIVE_PATH} (root active_genre.json)\n\n"
             "Run gen_genre_framework.py or set --project."
         )
-    
+
     if not path.exists():
         raise FileNotFoundError(f"Genre config not found: {path}")
-    
+
+    key = str(path)
+    if _cache is not None and _cache_key == key:
+        return _cache
+
     config = json.loads(path.read_text(encoding="utf-8"))
     validate(config)
     _cache = config
+    _cache_key = key
     return config
 
 
 def reload_genre():
-    global _cache
+    global _cache, _cache_key
     _cache = None
+    _cache_key = None
     return load_genre()
+
+
+def chapters_total() -> int | None:
+    """Canonical chapter count from the active genre config, or None.
+
+    Single owner for "how many chapters does this novel have" — state.json
+    mirrors this value, it never defines it.
+    """
+    try:
+        total = load_genre()["generation"]["outline"]["estimated_chapters"]
+    except (FileNotFoundError, KeyError, TypeError, json.JSONDecodeError):
+        return None
+    try:
+        return int(total) if total else None
+    except (TypeError, ValueError):
+        return None
 
 
 def format_prompt(template, **kwargs):

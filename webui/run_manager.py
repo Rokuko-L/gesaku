@@ -104,13 +104,15 @@ class RunManager:
                 kwargs["start_new_session"] = True
             log_fh = open(log_path, "w", encoding="utf-8")
             try:
+                child_env = {**os.environ, **(env or {})}
+                child_env.setdefault("PYTHONUNBUFFERED", "1")
                 proc = subprocess.Popen(
                     [sys.executable, str(ROOT / "run_pipeline.py"), *cli_args],
                     cwd=ROOT,
                     stdout=log_fh,
                     stderr=subprocess.STDOUT,
                     stdin=subprocess.DEVNULL,
-                    env={**os.environ, **(env or {})},
+                    env=child_env,
                     **kwargs,
                 )
             finally:

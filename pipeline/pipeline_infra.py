@@ -27,30 +27,41 @@ load_dotenv()
 
 
 class Tee:
-    """Duplicate writes to both an original stream and a shared log file."""
+    """Duplicate writes to both an original stream and a shared log file.
+
+    Flushes the log file on every write. The wrapped handle is a plain
+    `open()`, which is BLOCK-buffered by default — `reconfigure(
+    line_buffering=True)` on the original stdout does not reach it, so
+    without this flush the on-disk log sits at 0B for many minutes while
+    the run is actively working (the whole point of the log is to be
+    watchable live).
+    """
     def __init__(self, fh, original):
         self.fh = fh
         self.original = original
 
     def write(self, data):
-        # A log-file failure (disk full, closed pipe) must never kill the run
+        # A log-file failure (disk full, closed handle, dead pipe) must never
+        # kill the run — a closed file raises ValueError, not OSError.
         try:
             self.fh.write(data)
-        except OSError:
+            self.fh.flush()
+        except (OSError, ValueError):
             pass
         try:
             self.original.write(data)
-        except OSError:
+            self.original.flush()
+        except (OSError, ValueError):
             pass
 
     def flush(self):
         try:
             self.fh.flush()
-        except OSError:
+        except (OSError, ValueError):
             pass
         try:
             self.original.flush()
-        except OSError:
+        except (OSError, ValueError):
             pass
 
     def isatty(self):
@@ -90,9 +101,100 @@ MAX_REVISION_CYCLES = 6
 
 PLATEAU_DELTA = 0.3
 
+# Keep/discard tolerances — one documented policy, four distinct budgets.
+# They differ on purpose: an LLM rewrite is high-variance, so a marginal
+# regression is worth keeping (it usually carries improvements elsewhere);
+# a deterministic cut pass should be score-neutral or it is a net loss.
+REVISION_TOLERANCE = 0.8    # prose rewrites may regress this much and still keep
+CUTS_TOLERANCE = 0.05       # mechanical cuts must be ~neutral to be kept
+NEAR_CLEAN_MARGIN = 1.0     # draft this close to the gate + clean tics = keep, don't regen
+FORCE_KEEP_MARGIN = 2.0     # below gate - this, skip the chapter rather than ship it
+DECLINE_STREAK = 2          # consecutive dropping cycles -> stop revision early
+
 CHAPTERS_TOTAL = 24  # default; overridden by genre config at runtime
 
 PHASE_ORDER = ["foundation", "drafting", "revision", "export"]
+
+
+# ---------------------------------------------------------------------------
+# Timeout policy (single owner for every subprocess + LLM budget)
+# ---------------------------------------------------------------------------
+
+# Subprocess caps for pipeline stages. Env-tunable; call sites ask for a
+# named budget instead of inventing literals. LLM per-call timeouts live in
+# core.llm.llm_timeout() under the same naming scheme.
+TIMEOUT_SHORT = 300      # quick mechanical steps (sanitize, cuts, tex)
+TIMEOUT_STANDARD = 900   # single generation passes (draft, revision)
+TIMEOUT_LONG = 1800      # full-novel evals, chapter evals on slow proxies
+TIMEOUT_XLONG = 3600     # foundation-scale generation blocks
+
+
+def _env_timeout(name: str, default: int) -> int:
+    try:
+        val = int(float(os.getenv(name, "")))
+        return val if val > 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
+def timeout_for(stage: str) -> int:
+    """Named subprocess budget: short | standard | long | xlong."""
+    table = {
+        "short": _env_timeout("GESAKU_TIMEOUT_SHORT", TIMEOUT_SHORT),
+        "standard": _env_timeout("GESAKU_TIMEOUT_STANDARD", TIMEOUT_STANDARD),
+        "long": _env_timeout("GESAKU_TIMEOUT_LONG", TIMEOUT_LONG),
+        "xlong": _env_timeout("GESAKU_TIMEOUT_XLONG", TIMEOUT_XLONG),
+    }
+    return table.get(stage, table["standard"])
+
+
+# ---------------------------------------------------------------------------
+# Chapter-count ownership (single source of truth)
+# ---------------------------------------------------------------------------
+
+def genre_chapters_total() -> int | None:
+    """Chapter count from the genre config (canonical owner), or None."""
+    from core import genre as genre_mod
+    return genre_mod.chapters_total()
+
+
+def resolve_chapters_total(state: dict) -> int:
+    """Single owner: genre config once written, else state, else default."""
+    genre_total = genre_chapters_total()
+    if genre_total:
+        if state.get("chapters_total") != genre_total:
+            state["chapters_total"] = genre_total
+            save_state(state)
+        return genre_total
+    if state.get("chapters_total", 0) > 0:
+        return state["chapters_total"]
+    return CHAPTERS_TOTAL
+
+
+# ---------------------------------------------------------------------------
+# Best-novel tracking (ship the peak, not the latest)
+# ---------------------------------------------------------------------------
+
+def record_novel_score(state: dict, score, commit: str | None = None) -> float | None:
+    """Store the latest score and track the all-time best commit."""
+    stored = store_novel_score(state, score)
+    if stored is None:
+        return state.get("novel_score")
+    best = state.get("best_novel_score")
+    try:
+        best_f = float(best) if best is not None else None
+    except (TypeError, ValueError):
+        best_f = None
+    if best_f is None or stored > best_f:
+        state["best_novel_score"] = stored
+        state["best_novel_commit"] = commit if commit else git_short_hash()
+    save_state(state)
+    return stored
+
+
+def best_novel_checkpoint(state: dict) -> tuple[float | None, str | None]:
+    """Return (best_score, best_commit) tracked in state."""
+    return state.get("best_novel_score"), state.get("best_novel_commit")
 
 
 def _env_float(name: str, default: float) -> float:
@@ -137,6 +239,27 @@ def max_revision_cycles() -> int:
 
 def plateau_delta() -> float:
     return _env_float("GESAKU_PLATEAU_DELTA", PLATEAU_DELTA)
+
+
+def revision_tolerance() -> float:
+    return _env_float("GESAKU_REVISION_TOLERANCE", REVISION_TOLERANCE)
+
+
+def cuts_tolerance() -> float:
+    return _env_float("GESAKU_CUTS_TOLERANCE", CUTS_TOLERANCE)
+
+
+def near_clean_margin() -> float:
+    return _env_float("GESAKU_NEAR_CLEAN_MARGIN", NEAR_CLEAN_MARGIN)
+
+
+def force_keep_margin() -> float:
+    return _env_float("GESAKU_FORCE_KEEP_MARGIN", FORCE_KEEP_MARGIN)
+
+
+def decline_streak() -> int:
+    """Consecutive declining revision cycles that stop the loop early."""
+    return _env_int("GESAKU_DECLINE_STREAK", DECLINE_STREAK)
 
 def ensure_gitignore_projects():
     """Ensure root .gitignore contains a rule for projects/ to prevent nested-repo commits."""
@@ -206,6 +329,9 @@ def default_state() -> dict:
         "chapters_drafted": 0,
         "chapters_total": CHAPTERS_TOTAL,
         "novel_score": None,  # null = never scored; 0.0 is a real (failed) score
+        "best_novel_score": None,
+        "best_novel_commit": None,
+        "revision_decline_streak": 0,
         "revision_cycle": 0,
         "debts": [],
     }
@@ -277,11 +403,15 @@ def run_tool(cmd: str, timeout: int = 600, check: bool = False, cwd: str = None)
             raise subprocess.CalledProcessError(
                 result.returncode, cmd, result.stdout, result.stderr)
         return result
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as e:
         print(f"    ERROR: timed out after {timeout}s")
-        # Return a fake CompletedProcess for graceful handling
-        fake = subprocess.CompletedProcess(cmd, returncode=-1, stdout="", stderr="TIMEOUT")
-        return fake
+        if check:
+            raise
+        # Callers that asked for fail-fast semantics must not receive a
+        # fabricated success-shaped result: rc=-1 with empty stdout used to
+        # flow into parse_score() and surface as a bogus ValueError far from
+        # the real cause.
+        return subprocess.CompletedProcess(cmd, returncode=-1, stdout="", stderr="TIMEOUT")
 
 def uv_run(script: str, timeout: int = 600) -> subprocess.CompletedProcess:
     """Shorthand for running a Python script from project root. Fails fast."""
@@ -324,7 +454,8 @@ def git_reset_hard(ref: str = "HEAD~1"):
     # Clean untracked files/directories to prevent cross-iteration contamination,
     # but never delete the timestamped artifact logs the pipeline depends on.
     run_tool(
-        "git clean -fd -e eval_logs -e edit_logs -e briefs -e logs -e repetition_check.json",
+        "git clean -fd -e eval_logs -e edit_logs -e briefs -e logs "
+        "-e repetition_check.json -e open_callbacks.json",
         cwd=str(project_dir),
     )
 
@@ -397,81 +528,19 @@ def git_short_hash() -> str:
     r = run_tool("git rev-parse --short HEAD", cwd=str(paths.get_project_dir()))
     return r.stdout.strip() if r.returncode == 0 else "unknown"
 
-def parse_score(stdout: str, key: str = "overall_score") -> float:
-    """
-    Parse a score from evaluate.py YAML-like stdout output.
-    Looks for lines like 'overall_score: 8.0' or 'novel_score: 7.5'.
+from pipeline.scores import (  # noqa: E402
+    _chapter_num_key, count_chapter_files, count_words_in_chapters,
+    parse_lore_score, parse_score, parse_score_any,
+)
 
-    Raises ValueError when the key is missing or not a float — a silently
-    missing score must never flow into keep/discard decisions.
-    """
-    for line in stdout.splitlines():
-        line = line.strip()
-        if line.startswith(f"{key}:"):
-            val = line.split(":", 1)[1].strip()
-            try:
-                return float(val)
-            except ValueError:
-                break
-    raise ValueError(
-        f"'{key}:' not found (or not a float) in evaluator output — the eval "
-        f"likely crashed or changed its output format. stdout tail: {stdout[-300:]!r}"
-    )
-
-
-def parse_score_any(stdout: str, *keys: str) -> float:
-    """Parse the first score key present in evaluate.py stdout.
-
-    Explicit replacement for the old 'parse key A, fall back to B on -1.0'
-    pattern. Raises ValueError when none of the keys parse.
-    """
-    for key in keys:
-        try:
-            return parse_score(stdout, key)
-        except ValueError:
-            continue
-    raise ValueError(
-        f"None of {keys} found in evaluator output. "
-        f"stdout tail: {stdout[-300:]!r}"
-    )
-
-def parse_lore_score(stdout: str) -> float:
-    """Parse lore_score from foundation evaluation output."""
-    return parse_score(stdout, "lore_score")
-
-def count_words_in_chapters() -> int:
-    """Sum word count across all chapter files in the active project."""
-    total = 0
-    chapters_dir = paths.get_chapters_dir()
-    if chapters_dir.exists():
-        for f in chapters_dir.glob("ch_*.md"):
-            total += len(f.read_text(encoding="utf-8").split())
-    return total
-
-def count_chapter_files() -> int:
-    """Count the number of chapter files in the active project."""
-    chapters_dir = paths.get_chapters_dir()
-    if not chapters_dir.exists():
-        return 0
-    return len(list(chapters_dir.glob("ch_*.md")))
-
-def _chapter_num_key(path) -> int:
-    """Numeric sort key for ch_*.md files (ch_2 must sort before ch_10)."""
-    m = re.search(r"ch_(\d+)\.md", Path(path).name)
-    return int(m.group(1)) if m else 10**9
 
 def get_total_chapters(state: dict) -> int:
-    """Determine total chapter count from state or outline."""
-    if state.get("chapters_total", 0) > 0:
-        return state["chapters_total"]
-    # Try to infer from outline.md
-    outline = paths.get_outline_path()
-    if outline.exists():
-        text = outline.read_text(encoding="utf-8")
-        matches = re.findall(r'###\s*\*?\*?\s*Ch(?:apter)?\b\s*\*?\*?\s*(\d+)', text, re.IGNORECASE)
-        if matches:
-            return max(int(m) for m in matches)
-    return CHAPTERS_TOTAL
+    """Deprecated shim — use resolve_chapters_total(state).
+
+    Kept so stage scripts keep importing; the genre config is the owner.
+    """
+    return resolve_chapters_total(state)
+
 
 def process_notes(notes_input, genre):
     """Process user notes into seed.txt and return the string for gen_genre_framework.
@@ -519,7 +588,7 @@ def process_notes(notes_input, genre):
             model_key="judge",
             max_tokens=2000,
             temperature=0.8,
-            timeout=120,
+            timeout_role="short",
         )
         seed_file.write_text(expanded, encoding="utf-8")
         step(f"seed.txt written ({len(expanded.split())}w, expanded from {word_count})")
@@ -541,7 +610,7 @@ def process_notes(notes_input, genre):
         model_key="judge",
         max_tokens=2000,
         temperature=0.3,
-        timeout=120,
+        timeout_role="short",
     )
     seed_file.write_text(notes, encoding="utf-8")
     step(f"seed.txt written with full {word_count}w doc. Summary ({len(summary.split())}w) sent to genre framework.")

@@ -69,7 +69,7 @@ def extract_for_chapter(chapter: int, reextract: bool = False) -> int:
                 model_key="judge",
                 max_tokens=800,
                 temperature=0.1,
-                timeout=90,
+                timeout_role="short",
             )
             break
         except Exception as e:

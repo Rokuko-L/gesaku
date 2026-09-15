@@ -20,7 +20,7 @@ from core import paths
 load_dotenv()
 
 def call_writer(prompt, max_tokens=get_max_tokens_with_thinking(16000)):
-    return call_llm(prompt=prompt, model_key="writer", max_tokens=max_tokens, timeout=1800)
+    return call_llm(prompt=prompt, model_key="writer", max_tokens=max_tokens, timeout_role="xlong")
 
 def main():
     seed_path = paths.get_seed_path()

@@ -12,6 +12,7 @@ sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
 
 from core.llm import call_llm
 from core import paths
+from core.validation import ReaderPanelAnswers, parse_validated
 import sys
 import json
 import re
@@ -149,10 +150,11 @@ def call_reader(reader_key, arc_summary):
     word_count = sum(len(f.read_text(encoding="utf-8").split()) for f in ch_files) if ch_files else 0
     cut_words = int(word_count * 0.1) if word_count else 7000
     prompt = build_reader_prompt().format(arc_summary=arc_summary, word_count=word_count, chapter_count=chapter_count, cut_words=cut_words)
-    raw = call_llm(prompt=prompt, system=reader["system"], model_key="judge", max_tokens=4000, timeout=300, temperature=0.7)
-    
-    # Parse JSON
-    return llm.parse_json_response(raw)
+    raw = call_llm(prompt=prompt, system=reader["system"], model_key="judge", max_tokens=4000, timeout_role="standard", temperature=0.7)
+
+    return parse_validated(
+        ReaderPanelAnswers, raw, context=f"reader panel: {reader_key}"
+    ).model_dump()
 
 def find_disagreements(results):
     """Find where readers disagree -- that's where the editorial decisions live."""
@@ -246,8 +248,7 @@ def main():
         "timestamp": datetime.now().isoformat()
     }
     out_path = paths.get_edit_logs_dir() / "reader_panel.json"
-    with open(out_path, "w") as f:
-        json.dump(output, f, indent=2)
+    paths.save_json_atomic(output, out_path)
     print(f"\nSaved to {out_path}")
 
 if __name__ == "__main__":

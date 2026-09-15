@@ -14,6 +14,7 @@ from core.llm import call_llm, extract_text_from_response, get_max_tokens_with_t
 from core import paths
 from core import llm
 from core import canon as canon_mod
+from core.validation import AdversarialCuts, parse_validated
 import os
 import sys
 import json
@@ -24,10 +25,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 def call_judge(prompt, max_tokens=8000):
-    return call_llm(prompt=prompt, system="You are a ruthless literary editor. You cut fat from prose. You have no sentiment about good-enough sentences -- if a sentence isn't earning its place, it goes. You quote exactly from the text. You never invent or paraphrase. Always respond with valid JSON.", model_key="judge", max_tokens=max_tokens, temperature=0.3, timeout=300)
-
-def parse_json(text):
-    return llm.parse_json_response(text)
+    return call_llm(prompt=prompt, system="You are a ruthless literary editor. You cut fat from prose. You have no sentiment about good-enough sentences -- if a sentence isn't earning its place, it goes. You quote exactly from the text. You never invent or paraphrase. Always respond with valid JSON.", model_key="judge", max_tokens=max_tokens, temperature=0.3, timeout_role="standard")
 
 EDIT_PROMPT = paths.load_prompt("adversarial_edit")
 
@@ -47,17 +45,13 @@ def edit_chapter(ch_num):
 
     prompt = EDIT_PROMPT.format(chapter_text=text, word_count=word_count, canon_context=canon_text or "(first chapter or no canon established yet)")
     raw = call_judge(prompt)
-    try:
-        result = parse_json(raw)
-    except Exception as e:
-        print("RAW RESPONSE FROM JUDGE:")
-        print(raw)
-        raise e
+    result = parse_validated(
+        AdversarialCuts, raw, context=f"ch{ch_num:02d} adversarial cuts"
+    ).model_dump()
     
     # Save log
     log_path = edit_log_dir / f"ch{ch_num:02d}_cuts.json"
-    with open(log_path, "w", encoding="utf-8") as f:
-        json.dump(result, f, indent=2)
+    paths.save_json_atomic(result, log_path)
 
     # Validate LLM quotes match chapter text
     cuts = result.get("cuts", [])

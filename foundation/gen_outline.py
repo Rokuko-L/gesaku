@@ -13,14 +13,14 @@ import re
 import json
 from pathlib import Path
 from dotenv import load_dotenv
-from core.genre import load_genre
+from core.genre import load_genre, chapters_total as genre_chapters_total
 from core import paths
 
 load_dotenv()
 
 def call_writer(prompt, max_tokens=get_max_tokens_with_thinking(16000)):
     # Local thinking-proxy outline blocks routinely need >600s.
-    return call_llm(prompt=prompt, model_key="writer", max_tokens=max_tokens, beta_context=True, timeout=1200)
+    return call_llm(prompt=prompt, model_key="writer", max_tokens=max_tokens, beta_context=True, timeout_role="long")
 
 def validate_block_output(text, start, end):
     missing = []
@@ -50,75 +50,7 @@ def extract_chapter_outlines(block_text, start, end):
             missing.append(ch)
     return found, missing
 
-def _act_ranges(total_chapters):
-    """Proportional 3-act boundaries (~25/50/25) valid for any chapter count.
-
-    Returns ((act1_start, act1_end), (act2_start, act2_end),
-    (act3_start, act3_end)), or None when the book is too short to have
-    three distinguishable acts.
-    """
-    if total_chapters < 3:
-        return None
-    a1_end = max(1, round(total_chapters * 0.25))
-    a2_end = max(a1_end + 1, round(total_chapters * 0.75))
-    return ((1, a1_end), (a1_end + 1, a2_end), (a2_end + 1, total_chapters))
-
-
-def verify_tonal_drift(roadmap_text, seed_concept, genre_name, total_chapters):
-    """
-    Evaluates Acts 2 & 3 of the roadmap for tonal drift or magic/tech rule breaks against Act 1.
-    Returns (has_drift, feedback_message)
-    """
-    acts = _act_ranges(total_chapters)
-    if acts is None:
-        print(f"  INFO: {total_chapters} chapters — too short for act-based drift check, skipping.", file=sys.stderr)
-        return False, ""
-    (a1s, a1e), (a2s, a2e), (a3s, a3e) = acts
-
-    print("Running Phase 1 tonal drift validation...", file=sys.stderr)
-    prompt = f"""You are a master story editor. Your task is to analyze the proposed high-level roadmap of a novel for tonal drift, logic breaks, or sudden genre shifts.
-
-    NOVEL GENRE: {genre_name}
-    SEED CONCEPT:
-    {seed_concept}
-
-    HIGH-LEVEL ROADMAP:
-    {roadmap_text}
-
-    TASK:
-    Analyze if Act 2 (Chapters {a2s}-{a2e}) or Act 3 (Chapters {a3s}-{a3e}) deviates significantly from the established world rules, tone, style, or stakes register of Act 1 (Chapters {a1s}-{a1e}).
-    For example:
-    - Does a political intrigue novel suddenly become a sci-fi simulation?
-    - Does a grounded low-magic fantasy shift to high-fantasy multiversal travel with no setup?
-    - Are the rules of the magic system or setting established in Act 1 violated later?
-
-    Respond in JSON format:
-    {{
-      "has_drift": true/false,
-      "analysis": "A detailed multi-sentence description of your analysis and findings.",
-      "violations": [
-        "Description of violation 1 (if any)...",
-        "Description of violation 2 (if any)..."
-      ]
-    }}
-    JSON only, no formatting/preamble outside the JSON object."""
-
-    try:
-        from core.llm import parse_json_response
-        raw = call_llm(prompt=prompt, system="You are a meticulous book editor who outputs valid JSON only.", model_key="judge", max_tokens=2000, temperature=0.1)
-        data = parse_json_response(raw)
-        has_drift = data.get("has_drift", False)
-        violations = data.get("violations", [])
-        if has_drift and violations:
-            feedback = "Tonal/Genre violations detected:\n" + "\n".join(f"- {v}" for v in violations)
-            return True, feedback
-        return False, ""
-    except TruncationError:
-        # A truncated judge verdict is UNKNOWN, not "no drift" — never fail open on truncation.
-        raise
-    except Exception as e:
-        print(f"  WARN: Tonal drift validation call failed ({e}), skipping gatekeeper.", file=sys.stderr)
-        return False, ""
+from foundation.outline_gates import _act_ranges, verify_tonal_drift  # noqa: E402
 
 
 def main():
@@ -193,11 +125,15 @@ A major truth is sealed until chapter {reveal_chapter}. Before that chapter:
                             "chapter outline must name a POV character whose head the narration stays in.")
     try:
         state = json.loads((paths.get_project_dir() / "state.json").read_text(encoding="utf-8"))
-        total_chapters = state.get("chapters_total", 30)
         title = state.get("title", "Untitled Novel")
     except Exception:
-        total_chapters = genre_cfg.get("generation", {}).get("outline", {}).get("estimated_chapters", 30)
+        state = {}
         title = "Untitled Novel"
+    total_chapters = (
+        genre_chapters_total()
+        or int(state.get("chapters_total") or 0)
+        or 24
+    )
 
     beats = genre_cfg.get("framework", {}).get("premise_arc_beats", [])
     numbered_beats = "\n".join(f"{i+1}. {b}" for i, b in enumerate(beats))
@@ -214,7 +150,7 @@ A major truth is sealed until chapter {reveal_chapter}. Before that chapter:
     words_per_beat = max(250, wpc // beats_per_chapter)
 
     # Phase 1: High-Level Roadmap
-    roadmap_path = paths.get_project_dir() / ".outline_roadmap.md"
+    roadmap_path = paths.get_outline_roadmap_path()
     
     if args.retry_feedback and roadmap_path.exists():
         print("Retry detected: keeping existing high-level roadmap and regenerating Block 1.", file=sys.stderr)
@@ -559,8 +495,8 @@ CRITICAL RULES:
         hy_ok, hy_err, hy_side = plant_hygiene.validate_outline_plant_hygiene(
             full_outline_text, canon_text, characters
         )
-        side_path = paths.get_project_dir() / "plant_hygiene.json"
-        side_path.write_text(json.dumps(hy_side, indent=2), encoding="utf-8")
+        side_path = paths.get_plant_hygiene_path()
+        paths.save_json_atomic(hy_side, side_path)
         if not hy_ok:
             print(f"[WARN] Outline plant hygiene failed: {hy_err}", file=sys.stderr)
             print("See plant_hygiene.json — run_pipeline will gate on this.", file=sys.stderr)
@@ -572,7 +508,7 @@ CRITICAL RULES:
             )
 
     # Save a copy as .outline_part1.md for backwards compatibility
-    (paths.get_project_dir() / ".outline_part1.md").write_text(full_outline_text, encoding="utf-8")
+    paths.get_outline_part1_path().write_text(full_outline_text, encoding="utf-8")
 
     print("Outline generation complete!", file=sys.stderr)
 

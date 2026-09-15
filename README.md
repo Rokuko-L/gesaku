@@ -169,6 +169,15 @@ Copy `.env.example` → `.env`.
 | `GESAKU_MIN_REVISION_CYCLES` | `3` | Floor before plateau stop |
 | `GESAKU_MAX_REVISION_CYCLES` | `6` | Revision cap |
 | `GESAKU_PLATEAU_DELTA` | `0.3` | Score delta that counts as stalled |
+| `GESAKU_DECLINE_STREAK` | `2` | Consecutive dropping cycles → stop revision early |
+| `GESAKU_TIMEOUT_SHORT` | `300` | Subprocess cap: mechanical steps (sanitize, cuts, tex) |
+| `GESAKU_TIMEOUT_STANDARD` | `900` | Subprocess cap: single generation passes (draft, revision) |
+| `GESAKU_TIMEOUT_LONG` | `1800` | Subprocess cap: full-novel / chapter evals |
+| `GESAKU_TIMEOUT_XLONG` | `3600` | Subprocess cap: foundation generation blocks |
+| `GESAKU_LLM_TIMEOUT_SHORT` | `120` | LLM call budget: summaries, titles, extracts |
+| `GESAKU_LLM_TIMEOUT_STANDARD` | `300` | LLM call budget: drafting, revision |
+| `GESAKU_LLM_TIMEOUT_LONG` | `900` | LLM call budget: long reviews |
+| `GESAKU_LLM_TIMEOUT_XLONG` | `1800` | LLM call budget: foundation bibles, full evals |
 
 ### Examples
 
@@ -233,7 +242,7 @@ foundation/     gen_genre_framework · gen_world · gen_characters · gen_outlin
 prompts/        static LLM templates (paths.load_prompt)
 webui/          server.py (FastAPI :8600) + frontend/ (React 19 + Vite)
 projects/       per-novel workspaces (gitignored)
-scratch/        offline unittest suites (MockLLM)
+tests/        offline unittest suites (MockLLM)
 cli.py          gesaku — console + run/logs/status/stop
 run_pipeline.py orchestrator
 Docs/           start at overview.md
@@ -263,7 +272,7 @@ Operator console API: [Docs/systems/console-bridge.md](Docs/systems/console-brid
 
 ```bash
 uv run --frozen ruff check --select F821,F811 .
-uv run --frozen python -m unittest discover -s scratch -p "test_*.py"
+uv run --frozen python -m unittest discover -s tests -p "test_*.py"
 ```
 
 Offline tests use `MockLLM` / mock transports — no network required. CI also proves the suite stays green with a black-hole `ANTHROPIC_BASE_URL`.

@@ -32,7 +32,7 @@ def call_writer(prompt, max_tokens=16000):
                        "limited narration anchored to the POV character ('he/she/they' or the "
                        "character's name). Never switch to first-person narration.")
     system += prose_mode_system_block(genre_cfg)
-    return call_llm(prompt=prompt, system=system, model_key="writer", max_tokens=max_tokens, beta_context=True, timeout=600, temperature=0.8, raise_on_truncation=True)
+    return call_llm(prompt=prompt, system=system, model_key="writer", max_tokens=max_tokens, beta_context=True, timeout_role="standard", temperature=0.8, raise_on_truncation=True)
 
 def main():
     ch_num = int(sys.argv[1])

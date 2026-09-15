@@ -15,17 +15,15 @@ import os
 import sys
 import json
 import re
+from core.validation import ChapterOutlineEntry, parse_validated
 from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
 
-def parse_json(text):
-    return llm.parse_json_response(text)
-
 
 def call_model(prompt, max_tokens=1500):
-    return call_llm(prompt=prompt, system="You produce structured outline entries for novel chapters. Be precise about what HAPPENS, what CHANGES, and what threads are planted/harvested. Output valid JSON only.", model_key="judge", max_tokens=max_tokens, temperature=0.1, timeout=120)
+    return call_llm(prompt=prompt, system="You produce structured outline entries for novel chapters. Be precise about what HAPPENS, what CHANGES, and what threads are planted/harvested. Output valid JSON only.", model_key="judge", max_tokens=max_tokens, temperature=0.1, timeout_role="short")
 
 def process_chapter_outline(path, ch, text, wc, title_line):
     import time
@@ -60,7 +58,9 @@ JSON only, no other text."""
     for attempt in range(1, 4):
         try:
             raw_data = call_model(prompt)
-            data = parse_json(raw_data)
+            data = parse_validated(
+                ChapterOutlineEntry, raw_data, context=f"Ch {ch} outline summary"
+            ).model_dump()
             break
         except (TruncationError, ValueError, Exception) as e:
             last_err = e

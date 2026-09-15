@@ -1,25 +1,57 @@
 # Test Suite Index
 
-All suites run **offline** (no API key). `unittest`-based suites can also run
-via discovery: `uv run python -m unittest discover -s scratch -p "test_*.py"`.
+All suites run **offline** (no API key). Run everything with:
 
-| Suite | Covers | Runner |
+```
+uv run python -m unittest discover -s tests -p "test_*.py"
+```
+
+`tests/` is the offline suite. A test that needs a real LLM belongs in the
+E2E layer, not here.
+
+## `unittest` modules (141 tests)
+
+| Suite | Tests | Covers |
 |---|---|---|
-| `scratch/test_utils.py` | path helpers, project state (12 tests) | unittest |
-| `scratch/test_utils_stress.py` | concurrency + traversal edge cases (6 tests) | unittest |
-| `scratch/test_json_repair.py` | damaged-JSON healing layers | script |
-| `scratch/test_encoding_healing.py` | UTF-16/latin-1 self-heal | script |
-| `scratch/test_multi_project.py` | registry isolation, from-scratch cleanup | script |
-| `scratch/test_path_contamination.py` | cross-project leakage, root cleanliness | script |
-| `scratch/test_mock_llm.py` | mock harness + validation-retry integration (8 tests) | unittest |
-| `scratch/test_import_integrity.py` | AST-scans every import statement (incl. lazy function-level ones) resolves; utils.py stays deleted (2 tests) | unittest |
-| `scratch/test_gatekeepers.py` | outline gatekeepers execute for real — drift verdicts block/pass, short books skip without LLM calls (4 tests) | unittest |
-| `scratch/test_static_analysis.py` | ruff pyflakes gate: no undefined names (F821), no accidental redefinitions (F811) across the repo (1 test) | unittest |
-| `scratch/test_canon_scoping.py` | sealed foundation views, As-of chapter filter, denylist terms | unittest |
-| `scratch/test_plant_coverage.py` | pre-reveal outline leak regex + action-plant coverage floor | unittest |
-| `scratch/test_retrofit_gate.py` | retrofit coverage block + non-blocking continuity report | unittest |
+| `tests/test_refactor_smoke.py` | 21 | pipeline invariants: genre owns chapter count, best-novel peak tracking, foundation checkpoint skip, named timeout budgets, tolerance policy, LLM-output schemas, prompt loading, `run_tool` timeout semantics, callback/chapter coupling |
+| `tests/test_canon_scoping.py` | 20 | sealed foundation views, As-of chapter filter, denylist terms |
+| `tests/test_micro_plants.py` | 16 | micro-plant store: add/harvest/expire, near-dup + plant↔harvest clustering |
+| `tests/test_provider_llm.py` | 14 | wire format per dialect over `httpx.MockTransport` (URL, auth, payload, truncation parity) |
+| `tests/test_scoring_guards.py` | 13 | keep/discard guards through the real foundation loop |
+| `tests/test_utils.py` | 12 | path helpers, project state |
+| `tests/test_plant_coverage.py` | 10 | pre-reveal outline leak regex + action-plant coverage floor |
+| `tests/test_mock_llm.py` | 8 | mock harness + validation-retry integration |
+| `tests/test_utils_stress.py` | 6 | concurrency + traversal edge cases |
+| `tests/test_gatekeepers.py` | 4 | outline gatekeepers execute for real — drift verdicts block/pass, short books skip without LLM calls |
+| `tests/test_llm_telemetry.py` | 4 | `llm_events.jsonl` emission |
+| `tests/test_retrofit_gate.py` | 4 | retrofit coverage block + non-blocking continuity report |
+| `tests/test_webui_server.py` | 3 | bridge import smoke + pure helpers (`norm_phase`, `_mask`) |
+| `tests/test_import_integrity.py` | 2 | AST-scans every import statement (incl. lazy function-level ones) resolves |
+| `tests/test_static_analysis.py` | 2 | ruff F821/F811 gate + single entry-point `main()` per entry file |
+| `tests/test_tee_flush.py` | 2 | the Tee'd pipeline log is readable before close; a dead log handle cannot kill a run |
 
-Script-style suites exit non-zero on failure and print `[PASS]/[FAIL]` lines.
+## Script-style suites
+
+Exit non-zero on failure and print `[PASS]/[FAIL]` lines rather than using
+`unittest`:
+
+| Suite | Covers |
+|---|---|
+| `tests/test_json_repair.py` | damaged-JSON healing layers |
+| `tests/test_encoding_healing.py` | UTF-16/latin-1 self-heal |
+| `tests/test_multi_project.py` | registry isolation, from-scratch cleanup |
+| `tests/test_path_contamination.py` | cross-project leakage, root cleanliness |
+| `tests/test_revert_behavior.py` | historical-best lookup + revert targeting |
+
+## Manual probes (require a live endpoint)
+
+Not part of the offline suite — these hit the configured provider:
+
+| Probe | Purpose |
+|---|---|
+| `tests/check_api.py` | full provider-resolution + request walk |
+| `tests/check_api_minimal.py` | single request through `core.llm`'s own builder |
+| `tests/probe_eval_consistency.py` | 5 parallel full evals to measure judge variance |
 
 ## Why the integrity scanner exists
 
@@ -41,11 +73,13 @@ the latter).
 
 ## E2E (requires API)
 
-See [test-infra.md](test-infra.md) for the full E2E infrastructure:
-project isolation, CLI integration, lifecycle, git-guard containment,
-typesetting sandboxing.
+The 80-case E2E design (project isolation, CLI lifecycle, git-guard
+containment, typesetting sandboxing) is recorded in
+[archive/test-infra.md](archive/test-infra.md). It describes an older
+snapshot of the suite and its runner (`pytest`), which the repo no longer
+uses — treat it as design history, not current state.
 
 ## Convention
 
-New offline tests go in `scratch/test_*.py`. A test that needs a real LLM
-belongs to the E2E layer, not here.
+New offline tests go in `tests/test_*.py`. A test that needs a real LLM
+belongs to the E2E layer or the probes above, not here.
