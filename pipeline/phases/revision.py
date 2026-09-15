@@ -380,10 +380,15 @@ def run_revision(
                     # The restored prose is NOT the version the store was
                     # extracted from: the revert targets the BEST-scoring
                     # commit, which can be older than the most recent one.
-                    # Drop this chapter's plants and re-extract from what is
-                    # now on disk, then stage both so the pair stays coupled.
+                    # Re-extract so the WORKING TREE store matches what is on
+                    # disk. Deliberately NOT staged: there is no commit on this
+                    # path, and `git_commit_staged` commits the whole index, so
+                    # staging here would either sit uncommitted (a later
+                    # `git reset --hard` would discard it and restore a stale
+                    # store) or get swept into the next chapter's keep commit
+                    # under the wrong message. The store is picked up by the
+                    # next `git_add_commit` at cycle end.
                     on_chapter_kept(ch_num, reextract=True)
-                    stage_chapter_with_callbacks(ch_num)
                     log_result("reverted", f"rev-ch{ch_num:02d}", r["post_score"],
                                r["word_count"], "discard",
                                f"Cycle {cycle}: {r['question']} regressed {r['pre_score']}->{r['post_score']}")

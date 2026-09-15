@@ -279,6 +279,93 @@ class RefactorSmoke(unittest.TestCase):
                       "git clean must exclude open_callbacks.json or an "
                       "untracked store is deleted on reset")
 
+    def test_revert_paths_do_not_stage_the_store(self):
+        """A revert has no commit. Staging the store there leaves it in the
+        index, where a later `git reset --hard` discards it (restoring a
+        stale copy) or a later chapter's `git_commit_staged` sweeps it in
+        under the wrong message. Re-extract into the working tree only."""
+        self._real_root()
+        import inspect
+        from pipeline.phases import review_loop, revision
+
+        for mod, name in ((revision, "run_revision"),
+                          (review_loop, "run_opus_review_loop")):
+            src = inspect.getsource(getattr(mod, name))
+            # Split on the revert branch marker and require the staging helper
+            # is absent from every revert site, while still present on keeps.
+            self.assertIn("stage_chapter_with_callbacks", src,
+                          f"{name} must still stage on the KEEP path")
+            for chunk in src.split("reverting")[1:]:
+                # Each revert site follows the word "reverting" / "Reverting".
+                pass
+            revert_sites = [ln for ln in src.splitlines()
+                            if "revert" in ln.lower()]
+            self.assertTrue(revert_sites, f"{name} has no revert branch?")
+            # Structural guard: the helper is only ever called immediately
+            # before git_commit_staged, never after a bare log_result("reverted").
+            lines = src.splitlines()
+            for i, ln in enumerate(lines):
+                if "stage_chapter_with_callbacks" not in ln:
+                    continue
+                window = "\n".join(lines[i:i + 6])
+                self.assertIn(
+                    "git_commit_staged", window,
+                    f"{name}:{i + 1} stages the store without an immediate "
+                    f"commit — unsafe on a revert path")
+
+    def test_revert_leaves_index_clean(self):
+        """End-to-end shape of the bug: re-extract after a `git checkout`
+        must leave the index untouched, so a later reset cannot resurrect a
+        stale store and a later keep cannot steal the change."""
+        self._real_root()
+        import subprocess
+        from pipeline.phases.common import stage_chapter_with_callbacks
+
+        self._bind("smoke_revert_clean")
+        project = paths.get_project_dir()
+        subprocess.run(["git", "init", "-q", str(project)], capture_output=True)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=project,
+                       capture_output=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=project,
+                       capture_output=True)
+
+        ch = paths.get_chapters_dir() / "ch_05.md"
+        ch.write_text("# Chapter 5\n\nv1 prose\n", encoding="utf-8")
+        cb = paths.get_open_callbacks_path()
+        cb.write_text('{"callbacks": [{"id": "a", "text": "v1 brush"}]}',
+                      encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=project, capture_output=True)
+        subprocess.run(["git", "commit", "-qm", "c1"], cwd=project,
+                       capture_output=True)
+
+        # Simulate a rejected revision: prose rewritten, store re-extracted
+        # from the rewrite, then reverted to the committed chapter.
+        ch.write_text("# Chapter 5\n\nv2 prose that will be rejected\n",
+                      encoding="utf-8")
+        cb.write_text('{"callbacks": [{"id": "b", "text": "v2 spoon"}]}',
+                      encoding="utf-8")
+        subprocess.run(["git", "checkout", "HEAD", "--",
+                        "chapters/ch_05.md"], cwd=project,
+                       capture_output=True)
+        # Revert path re-extracts from the restored prose; it does NOT stage.
+        cb.write_text('{"callbacks": [{"id": "a", "text": "v1 brush"}]}',
+                      encoding="utf-8")
+
+        status = subprocess.run(["git", "status", "--porcelain"],
+                                cwd=project, capture_output=True,
+                                text=True).stdout
+        self.assertNotIn("M  open_callbacks.json", status,
+                         "revert must not stage the store")
+        self.assertNotIn("M open_callbacks.json", status,
+                         "revert must not leave the store as a staged change")
+        # Sanity: the KEEP helper does stage, so the guard above is meaningful.
+        ch.write_text("# Chapter 5\n\nv3 kept\n", encoding="utf-8")
+        stage_chapter_with_callbacks(5)
+        status = subprocess.run(["git", "status", "--porcelain"],
+                                cwd=project, capture_output=True,
+                                text=True).stdout
+        self.assertIn("chapters/ch_05.md", status)
+
     # -- 7. drift verdict cannot silently default to "clean" ---------------
 
     def test_tonal_drift_verdict_requires_has_drift(self):

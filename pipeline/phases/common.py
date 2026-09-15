@@ -107,11 +107,16 @@ CALLBACKS_SIDECAR = "open_callbacks.json"
 def stage_chapter_with_callbacks(ch: int) -> None:
     """Stage a chapter together with the plant store extracted from it.
 
-    The store is chapter-scoped state, so committing one without the other
-    is how a later revert ends up leaving callbacks quoted from prose that no
-    longer exists (and how an untracked store gets removed by `git clean`
-    during a reset). Staging also makes the file safe from that clean, which
-    only removes untracked paths.
+    Only safe on a KEEP path — one that immediately follows with
+    `git_commit_staged`, which commits the whole index. `git add` here is
+    therefore a promise that the very next commit will carry both files.
+
+    Do NOT call this on a revert path. There is no commit there, so the
+    staged store would sit in the index; a later `git reset --hard` would
+    discard it and restore a stale copy, and a later chapter's
+    `git_commit_staged` would sweep it in under the wrong message. Reverts
+    re-extract into the working tree only and let the next cycle-end
+    `git_add_commit` pick the store up.
     """
     project = str(paths.get_project_dir())
     rel_paths = [f"chapters/ch_{ch:02d}.md"]

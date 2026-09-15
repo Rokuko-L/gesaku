@@ -630,13 +630,20 @@ Separate from outline-tag debts (`state["debts"]` / `[Plant: slug]`).
      which can be older than the version the store was last extracted from —
      so the revert path must also re-extract (`--reextract` drops this
      chapter's plants, then rebuilds from what is now on disk).
-  2. Extraction runs **before** the commit, and the chapter and
-     `open_callbacks.json` are staged together
-     (`common.stage_chapter_with_callbacks`). Committing prose without its
-     store is how a later revert pairs best-chapters with callbacks quoted
-     from text that no longer exists.
+  2. **Staging is a keep-path-only promise.** On a keep, extraction runs
+     before the commit and the chapter + `open_callbacks.json` are staged
+     together (`common.stage_chapter_with_callbacks`), because
+     `git_commit_staged` commits the whole index. On a revert there is no
+     commit, so the store must **not** be staged: an uncommitted staged store
+     would be discarded by a later `git reset --hard` (restoring a stale
+     copy) or swept into the next chapter's keep commit under the wrong
+     message. Reverts re-extract into the working tree only; the next
+     cycle-end `git_add_commit` (`add -A`) picks the store up.
   `git_reset_hard` also excludes `open_callbacks.json` from its `git clean`,
   since an untracked store would otherwise be deleted outright on a reset.
+  That exclusion only helps while the file is untracked (first run); once
+  tracked, `git clean` skips it anyway and the keep-path staging rule is
+  what keeps it consistent.
 - Drop + rebuild is atomic from the store's point of view: `drop_source_chapter`
   only persists together with a successful re-extraction
   (`extract_micro_plants.py` saves once, at the end), so a failed extract

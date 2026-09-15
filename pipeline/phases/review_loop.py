@@ -149,8 +149,10 @@ def run_opus_review_loop(skip: bool = False) -> None:
                             # The revert target is the best-scoring commit,
                             # which may be older than the prose the store was
                             # last extracted from — rebuild it from disk.
+                            # Not staged: no commit happens on this path, and
+                            # staging an uncommitted store leaves it open to a
+                            # later `git reset --hard` restoring a stale copy.
                             on_chapter_kept(ch_num, reextract=True)
-                            stage_chapter_with_callbacks(ch_num)
                             log_result("reverted", f"rev-ch{ch_num:02d}-review", post_score,
                                        word_count, "discard",
                                        f"Round {rnd}: {brief.name} regressed {pre_score}->{post_score}")

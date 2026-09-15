@@ -122,12 +122,17 @@ mirror, never the source of truth.
 The pipeline treats git as an undo system:
 
 - `git_add_commit(msg)` → commit staged work, return short hash
-- `git_commit_staged(msg)` → commit only what's staged
+- `git_commit_staged(msg)` → commit only what's staged. **Commits the whole
+  index**, not just the paths a caller named — so anything staged without a
+  matching commit gets swept into the next `git_commit_staged` under the
+  wrong message. This is why `stage_chapter_with_callbacks` is keep-path only.
 - `git_reset_hard(ref)` → revert a rejected attempt. Its `git clean -fd`
   spares the timestamped artifact logs **and** `open_callbacks.json`: the
   plant store is chapter-scoped state whose last write may not be committed
   yet, and `git clean` only removes untracked paths — so without the
   exclusion a reset between extraction and the next commit deletes it.
+  That exclusion is a first-run guard; once the file is tracked, `git clean`
+  skips it anyway and the keep-path staging rule is what keeps it consistent.
 - `ensure_gitignore_projects()` / `ensure_project_git(dir)` → root repo
   ignores `projects/`; each project gets its own `.git`
 
