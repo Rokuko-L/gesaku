@@ -6,9 +6,30 @@
 
 Feed it a genre and a one-sentence idea — it builds the world, characters, and outline, drafts every chapter, revises against its own scores, and exports a finished PDF.
 
+[![CI](https://github.com/Rokuko-L/gesaku/actions/workflows/ci.yml/badge.svg)](https://github.com/Rokuko-L/gesaku/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
+
 Inspired by [karpathy/autoresearch](https://github.com/karpathy/autoresearch) — the modify → evaluate → keep/discard loop, applied to fiction.
+Started from [NousResearch/autonovel](https://github.com/NousResearch/autonovel), then rewritten for real multi-novel use.
 
 </div>
+
+---
+
+## Why gesaku
+
+Upstream autonovel proved the loop. gesaku is the maintained, multi-project operator build:
+
+| | autonovel (upstream) | gesaku |
+|---|---|---|
+| **Workspace** | Single novel | Isolated `projects/<name>/` with own state, logs, git |
+| **Control** | Script + logs | Web operator console + agent JSONL CLI |
+| **Quality loop** | Score & keep | + plateau/decline stop, sealed canon/twists, micro-plant harvest, slop repair |
+| **Providers** | Primarily Anthropic | Anthropic **or** OpenAI dialect — DeepSeek, OpenRouter, Groq, local, per-role mixes |
+| **Export** | Manuscript | Typeset PDF via Tectonic |
+
+If you want one novel and a script, upstream is fine. If you want to run many books, watch scores live, and hand the same interface to agents — start here.
 
 ---
 
@@ -281,12 +302,8 @@ Offline tests use `MockLLM` / mock transports — no network required. CI also p
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE) — free to use, fork, and ship.
+
+Issues and PRs welcome. If you generate a novel you’re proud of, link it in a Discussion — that’s the best possible star.
 
 ---
-
-<div align="center">
-
-[![Star History Chart](https://api.star-history.com/svg?repos=Rokuko-L/gesaku&type=Date)](https://star-history.com/#Rokuko-L/gesaku&Date)
-
-</div>
