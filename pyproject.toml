@@ -2,6 +2,8 @@
 name = "gesaku"
 version = "0.1.0"
 description = "Autonomous novel pipeline + operator console (gesaku)"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
     "httpx>=0.28.1",
@@ -32,5 +34,6 @@ only-include = [
   "cli.py",
   "pyproject.toml",
   "README.md",
+  "LICENSE",
 ]
 
