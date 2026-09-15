@@ -291,13 +291,8 @@ class RefactorSmoke(unittest.TestCase):
         for mod, name in ((revision, "run_revision"),
                           (review_loop, "run_opus_review_loop")):
             src = inspect.getsource(getattr(mod, name))
-            # Split on the revert branch marker and require the staging helper
-            # is absent from every revert site, while still present on keeps.
             self.assertIn("stage_chapter_with_callbacks", src,
                           f"{name} must still stage on the KEEP path")
-            for chunk in src.split("reverting")[1:]:
-                # Each revert site follows the word "reverting" / "Reverting".
-                pass
             revert_sites = [ln for ln in src.splitlines()
                             if "revert" in ln.lower()]
             self.assertTrue(revert_sites, f"{name} has no revert branch?")
@@ -312,6 +307,41 @@ class RefactorSmoke(unittest.TestCase):
                     "git_commit_staged", window,
                     f"{name}:{i + 1} stages the store without an immediate "
                     f"commit — unsafe on a revert path")
+
+    def test_no_staging_inside_a_revert_branch(self):
+        """Guard the invariant, not just the helper name.
+
+        The check above only inspects calls to `stage_chapter_with_callbacks`;
+        a raw `run_tool("git add ...")` reintroduced on a revert branch would
+        pass it while still stranding the index. Scan each revert branch
+        (from the "reverting" marker to its `log_result("reverted"`) for any
+        staging at all.
+        """
+        self._real_root()
+        import inspect
+        from pipeline.phases import review_loop, revision
+
+        for mod, name in ((revision, "run_revision"),
+                          (review_loop, "run_opus_review_loop")):
+            lines = inspect.getsource(getattr(mod, name)).splitlines()
+            in_revert = False
+            saw_revert = False
+            for i, ln in enumerate(lines):
+                low = ln.lower()
+                if "reverting" in low:
+                    in_revert = True
+                    saw_revert = True
+                if 'log_result("reverted"' in ln:
+                    in_revert = False
+                    continue
+                if in_revert and ("git add" in low
+                                  or "stage_chapter_with_callbacks" in ln):
+                    self.fail(
+                        f"{name}:{i + 1} stages inside a revert branch — there "
+                        f"is no commit there, so the index is left dirty and a "
+                        f"later git_commit_staged sweeps it under the wrong "
+                        f"message:\n    {ln.strip()}")
+            self.assertTrue(saw_revert, f"{name} has no revert branch?")
 
     def test_revert_leaves_index_clean(self):
         """End-to-end shape of the bug: re-extract after a `git checkout`
