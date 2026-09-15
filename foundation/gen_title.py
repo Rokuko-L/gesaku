@@ -133,16 +133,9 @@ Example:
 JSON only, no markdown, no preamble."""
     raw = call_writer(prompt, temp=0.7)
     try:
-        start = raw.find("[")
-        end = raw.rfind("]")
-        if start != -1 and end != -1 and end > start:
-            raw_json = raw[start:end+1]
-            result = json.loads(raw_json)
-        else:
-            result = parse_json_response(raw)
-        if isinstance(result, list) and len(result) >= 4:
-            return result[:4]
-        print(f"WARNING: Judge generation returned {type(result).__name__}", file=sys.stderr)
+        from core.validation import TitleJudgePanel, parse_validated
+        panel = parse_validated(TitleJudgePanel, raw, context="title judges")
+        return [j.model_dump() for j in panel.root]
     except Exception as e:
         print(f"WARNING: Judge generation failed: {e}", file=sys.stderr)
     return None
@@ -249,11 +242,12 @@ Return ONLY a valid JSON object mapping each title string to its integer score.
 No explanations. Example:
 {{"Title One": 85, "Title Two": 92}}"""
                 try:
+                    from core.validation import TitleScoreMap, parse_validated
                     raw_scores = call_judge(judge_prompt, system_prompt=judge["persona"], temp=0.1)
-                    scores = parse_json_response(raw_scores)
-                    if not isinstance(scores, dict):
-                        print(f"    WARNING: {judge['name']} returned non-dict, skipping", file=sys.stderr)
-                        return judge["key"], {}
+                    scores = parse_validated(
+                        TitleScoreMap, raw_scores,
+                        context=f"{judge['name']} title scores",
+                    ).root
                     return judge["key"], scores
                 except Exception as e:
                     print(f"    WARNING: {judge['name']} failed: {e}, skipping", file=sys.stderr)

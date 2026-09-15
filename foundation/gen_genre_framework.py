@@ -12,6 +12,7 @@ sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
 from core.llm import call_llm, extract_text_from_response, get_max_tokens_with_thinking
 from core.paths import load_prompt
 from core import paths
+from core import llm
 import os
 import re
 import sys
@@ -232,7 +233,9 @@ def main():
         )
         cleaned1 = strip_json_fences(raw1)
         try:
-            config1 = json.loads(cleaned1)
+            # Healing parser first (damaged JSON from a 16k-token config is
+            # routine), then the domain-specific genre.validate below.
+            config1 = llm.parse_json_response(cleaned1)
             
             # Structural validate
             errors = []
@@ -304,7 +307,7 @@ def main():
         )
         cleaned2 = strip_json_fences(raw2)
         try:
-            config2 = json.loads(cleaned2)
+            config2 = llm.parse_json_response(cleaned2)
             
             # Explicit key check for generation
             if "generation" not in config2:

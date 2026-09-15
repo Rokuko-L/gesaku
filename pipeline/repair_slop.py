@@ -207,12 +207,15 @@ PARAGRAPHS:
 
 def parse_and_verify(raw: str, originals: dict):
     """Parse the LLM JSON and structurally verify it. Returns (data, error)."""
+    from core.validation import OutputValidationError, SlopRepairPatch, parse_validated
     try:
-        data = llm.parse_json_response(raw)
+        data = dict(parse_validated(
+            SlopRepairPatch, raw, context="slop repair patch"
+        ).root)
+    except OutputValidationError as e:
+        return None, f"schema failure: {e.feedback}"
     except Exception as e:
         return None, f"unparseable JSON: {e}"
-    if not isinstance(data, dict):
-        return None, "response is not a JSON object"
 
     ids = set(originals.keys())
     missing = ids - set(data.keys())
@@ -222,8 +225,6 @@ def parse_and_verify(raw: str, originals: dict):
 
     for pid, orig in originals.items():
         new = data.get(pid)
-        if not isinstance(new, str) or not new.strip():
-            return None, f"empty replacement for {pid}"
         if new.strip() == orig.strip():
             return None, f"no-op replacement for {pid} (unchanged text)"
         ratio = len(new) / max(len(orig), 1)

@@ -21,7 +21,10 @@ feedback string, so callers can feed it back into a self-correction retry
 from core import llm
 import json
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel, ConfigDict, Field, RootModel, ValidationError,
+    field_validator, model_validator,
+)
 from dotenv import load_dotenv
 
 
@@ -187,3 +190,147 @@ def parse_validated_json_file(path, model_cls: type[BaseModel], context: str = "
         raise OutputValidationError(
             _format_validation_error(exc, f"{context or path}")
         ) from exc
+
+
+# ---------------------------------------------------------------------------
+# Foundation: title tournament
+# ---------------------------------------------------------------------------
+
+
+class TitleJudge(BaseModel):
+    """One title-tournament judge persona."""
+
+    model_config = ConfigDict(extra="allow")
+
+    key: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    persona: str = Field(min_length=1)
+
+
+class TitleJudgePanel(RootModel[list[TitleJudge]]):
+    """The 4-judge panel. Fewer than 4 judges fails validation."""
+
+    @model_validator(mode="after")
+    def _require_four(self):
+        if len(self.root) < 4:
+            raise ValueError(f"expected >= 4 judges, got {len(self.root)}")
+        self.root = self.root[:4]
+        return self
+
+
+class TitleScoreMap(RootModel[dict[str, int]]):
+    """Judge output: title string -> integer score."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_scores(cls, v):
+        if not isinstance(v, dict):
+            raise ValueError(f"expected a JSON object of title->score, got {type(v).__name__}")
+        out = {}
+        for k, val in v.items():
+            try:
+                out[str(k)] = int(val)
+            except (TypeError, ValueError) as e:
+                raise ValueError(f"score for {k!r} is not an integer: {val!r}") from e
+        return out
+
+
+# ---------------------------------------------------------------------------
+# Stage scripts: chapter outline, cuts, panel, titles, slop repair
+# ---------------------------------------------------------------------------
+
+
+class ChapterOutlineEntry(BaseModel):
+    """`build_outline.process_chapter_outline` reconstruction of one chapter."""
+
+    model_config = ConfigDict(extra="allow")
+
+    title: str = ""
+    location: str = ""
+    characters: list[str] = Field(default_factory=list)
+    summary: str = ""
+    orientation_facts: list[str] = Field(default_factory=list)
+    scene_stakes: str = ""
+    beats: list[str] = Field(default_factory=list)
+    try_fail: str = ""
+    plants: list[str] = Field(default_factory=list)
+    harvests: list[str] = Field(default_factory=list)
+    emotional_arc: str = ""
+    chapter_question: str = ""
+
+
+class CutEntry(BaseModel):
+    """One adversarial-edit cut recommendation."""
+
+    model_config = ConfigDict(extra="allow")
+
+    quote: str = ""
+    type: str = ""
+
+
+class AdversarialCuts(BaseModel):
+    """`adversarial_edit.edit_chapter` verdict."""
+
+    model_config = ConfigDict(extra="allow")
+
+    cuts: list[CutEntry] = Field(default_factory=list)
+    total_cuttable_words: int = 0
+    overall_fat_percentage: float = 0.0
+    one_sentence_verdict: str = ""
+    tightest_passage: str = ""
+    loosest_passage: str = ""
+
+
+class ReaderPanelAnswers(BaseModel):
+    """One reader persona's answers about the novel as a whole."""
+
+    model_config = ConfigDict(extra="allow")
+
+    momentum_loss: str = ""
+    earned_ending: str = ""
+    cut_candidate: str = ""
+    missing_scene: str = ""
+    thinnest_character: str = ""
+    best_scene: str = ""
+    worst_scene: str = ""
+    would_recommend: str = ""
+    haunts_you: str = ""
+    next_book: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _stringify(cls, v):
+        if isinstance(v, dict):
+            return {k: ("" if val is None else str(val)) for k, val in v.items()}
+        return v
+
+
+class SanitizedTitles(RootModel[dict[int, str]]):
+    """Chapter number -> rewritten title."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_keys(cls, v):
+        if not isinstance(v, dict):
+            raise ValueError(f"expected a JSON object of chapter->title, got {type(v).__name__}")
+        out = {}
+        for k, val in v.items():
+            try:
+                out[int(k)] = str(val).strip()
+            except (TypeError, ValueError) as e:
+                raise ValueError(f"chapter key {k!r} is not a number") from e
+        return out
+
+
+class SlopRepairPatch(RootModel[dict[str, str]]):
+    """Paragraph id (`p1`, `p2`, …) -> rewritten paragraph."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _require_strings(cls, v):
+        if not isinstance(v, dict):
+            raise ValueError(f"expected a JSON object of id->text, got {type(v).__name__}")
+        for k, val in v.items():
+            if not isinstance(val, str) or not val.strip():
+                raise ValueError(f"paragraph {k!r} has no usable replacement text")
+        return v

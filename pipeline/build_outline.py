@@ -15,13 +15,11 @@ import os
 import sys
 import json
 import re
+from core.validation import ChapterOutlineEntry, parse_validated
 from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
-
-def parse_json(text):
-    return llm.parse_json_response(text)
 
 
 def call_model(prompt, max_tokens=1500):
@@ -60,7 +58,9 @@ JSON only, no other text."""
     for attempt in range(1, 4):
         try:
             raw_data = call_model(prompt)
-            data = parse_json(raw_data)
+            data = parse_validated(
+                ChapterOutlineEntry, raw_data, context=f"Ch {ch} outline summary"
+            ).model_dump()
             break
         except (TruncationError, ValueError, Exception) as e:
             last_err = e

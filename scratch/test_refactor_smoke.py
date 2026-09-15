@@ -234,6 +234,46 @@ class RefactorSmoke(unittest.TestCase):
             user_directives_block="", beats_per_chapter=5, words_per_beat=640,
         )
 
+    # -- 10. new LLM-output schemas ----------------------------------------
+
+    def test_llm_output_schemas(self):
+        self._real_root()
+        from core.validation import (
+            AdversarialCuts, OutputValidationError, ReaderPanelAnswers,
+            SanitizedTitles, SlopRepairPatch, TitleJudgePanel, TitleScoreMap,
+            parse_validated,
+        )
+
+        judges = [{"key": f"j{i}", "name": f"J{i}", "persona": "p"}
+                  for i in range(4)]
+        panel = parse_validated(TitleJudgePanel, json.dumps(judges), context="t")
+        self.assertEqual(len(panel.root), 4)
+        with self.assertRaises(OutputValidationError):
+            parse_validated(TitleJudgePanel, json.dumps(judges[:3]), context="t")
+
+        scores = parse_validated(TitleScoreMap, '{"A": "85", "B": 92}', context="t")
+        self.assertEqual(scores.root, {"A": 85, "B": 92})
+
+        titles = parse_validated(SanitizedTitles, '{"1": "One", "2": " Two "}',
+                                 context="t")
+        self.assertEqual(titles.root, {1: "One", 2: "Two"})
+
+        patch = parse_validated(SlopRepairPatch, '{"p1": "new text"}', context="t")
+        self.assertEqual(patch.root, {"p1": "new text"})
+        with self.assertRaises(OutputValidationError):
+            parse_validated(SlopRepairPatch, '{"p1": "   "}', context="t")
+
+        cuts = parse_validated(AdversarialCuts, '{"cuts": [{"quote": "x"}]}',
+                               context="t")
+        self.assertEqual(cuts.cuts[0].quote, "x")
+        self.assertEqual(cuts.overall_fat_percentage, 0.0)
+
+        answers = parse_validated(
+            ReaderPanelAnswers,
+            '{"momentum_loss": "Ch 3", "worst_scene": null}', context="t")
+        self.assertEqual(answers.momentum_loss, "Ch 3")
+        self.assertEqual(answers.worst_scene, "")
+
 
 if __name__ == "__main__":
     unittest.main()
