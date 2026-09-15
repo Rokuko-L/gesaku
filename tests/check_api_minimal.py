@@ -3,7 +3,7 @@
 Uses whatever provider/endpoint the env resolves to (GESAKU_PROVIDER,
 per-role overrides, base URLs, extra headers). Model id via argv[1].
 
-Usage: uv run python scratch/check_api_minimal.py [model_id]
+Usage: uv run python tests/check_api_minimal.py [model_id]
 """
 import os
 import sys

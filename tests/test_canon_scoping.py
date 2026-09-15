@@ -1,6 +1,6 @@
 """Offline tests for core.canon — sealed foundation and chapter-scoped views.
 
-Run: uv run python -m unittest scratch.test_canon_scoping
+Run: uv run python -m unittest tests.test_canon_scoping
 """
 
 import unittest

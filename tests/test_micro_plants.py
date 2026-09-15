@@ -1,6 +1,6 @@
 """Offline tests for micro-plant store, clustering, and extract soft-fail.
 
-Run: uv run python -m unittest scratch.test_micro_plants
+Run: uv run python -m unittest tests.test_micro_plants
 """
 
 import json

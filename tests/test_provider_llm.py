@@ -6,7 +6,7 @@ the exact HTTP request each provider dialect produces (URL path, auth
 headers, payload keys) and the exact normalization of each response
 shape — including TruncationError parity across dialects.
 
-Run: uv run python -m unittest scratch.test_provider_llm
+Run: uv run python -m unittest tests.test_provider_llm
 """
 
 import json

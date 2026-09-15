@@ -6,7 +6,7 @@ Catches the bug class where moving/renaming modules leaves stale imports
 inside functions that only blow up (or get silently swallowed) at runtime.
 A plain `import module` smoke test cannot catch these; AST scanning can.
 
-Run: uv run python -m unittest scratch.test_import_integrity
+Run: uv run python -m unittest tests.test_import_integrity
 """
 
 import ast
@@ -18,7 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-SCAN_DIRS = ["core", "pipeline", "foundation", "typeset", "scratch"]
+SCAN_DIRS = ["core", "pipeline", "foundation", "typeset", "tests"]
 SKIP_PARTS = {"projects", ".venv", "__pycache__", "landing"}
 
 

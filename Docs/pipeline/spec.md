@@ -665,7 +665,7 @@ same-chapter harvest). Statuses: `paid off` (plant+harvest), `open` (plant
 only), `recalled` (harvest only). The webui ledger surfaces planned major
 threads, the clustered emergent ledger, and open callbacks.
 
-Offline tests: `scratch/test_micro_plants.py`.
+Offline tests: `tests/test_micro_plants.py`.
 
 ---
 

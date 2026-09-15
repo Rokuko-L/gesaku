@@ -5,7 +5,7 @@ overrides, base URLs, extra headers) and fires real requests through
 core.llm's own request builder — what this validates is exactly what a
 run will send.
 
-Usage: uv run python scratch/check_api.py [model_id ...]
+Usage: uv run python tests/check_api.py [model_id ...]
 """
 import os
 import sys

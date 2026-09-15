@@ -8,7 +8,7 @@ Exercises, against a temp project root:
   4. centralized timeouts (named budgets, env overrides, LLM roles)
   5. gen_brief importable errors (FileNotFoundError, not SystemExit)
 
-Run: uv run python scratch/test_refactor_smoke.py
+Run: uv run python tests/test_refactor_smoke.py
 """
 
 import json

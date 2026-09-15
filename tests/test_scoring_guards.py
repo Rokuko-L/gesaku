@@ -7,7 +7,7 @@ reset foundation_stall_count. A judge returning identical 6.0 every iteration
 now lives in pipeline_infra.foundation_plateau with strict improvement, and
 these tests simulate full iteration sequences through it.
 
-Run: uv run python -m unittest scratch.test_scoring_guards
+Run: uv run python -m unittest tests.test_scoring_guards
 """
 
 import sys

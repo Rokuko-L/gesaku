@@ -54,7 +54,7 @@ Every per-project artifact has a helper — never build the path inline:
 1. New file types get a helper here, not inline `Path` math in callers.
 2. Any user-derived name must pass through `set_project_name`.
 3. Tests may patch internals directly: `paths._root_dir`,
-   `paths._project_name` (see `scratch/test_utils.py`).
+   `paths._project_name` (see `tests/test_utils.py`).
 4. Writes to shared JSON (registry, state, active_genre, eval logs, sidecars)
    must be atomic (`paths.save_json_atomic`).
 

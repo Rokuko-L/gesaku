@@ -33,12 +33,12 @@ class TestUtilsStress(unittest.TestCase):
         if self.test_project_path.exists():
             shutil.rmtree(self.test_project_path)
             
-        # Assert no files were created in the root codebase directory (excluding projects/ and scratch/)
+        # Assert no files were created in the root codebase directory (excluding projects/ and tests/)
         final_root_contents = self._get_root_contents()
         new_files = final_root_contents - self.initial_root_contents
         
-        # Exclude expected dirs/files created during test run in projects/ or scratch/
-        new_root_files = [f for f in new_files if f not in ("projects", "scratch")]
+        # Exclude expected dirs/files created during test run in projects/ or tests/
+        new_root_files = [f for f in new_files if f not in ("projects", "tests")]
         self.assertEqual(len(new_root_files), 0, f"Pollution detected in root directory: {new_root_files}")
 
     def _get_root_contents(self):

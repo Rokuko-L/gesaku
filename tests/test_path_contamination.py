@@ -6,7 +6,7 @@ Mocks all LLM calls via unittest.mock.patch on llm.call_llm.
 Runs path helpers in isolation and asserts zero new files appear in the
 root codebase directory (outside of projects/).
 
-Run with: python scratch/test_path_contamination.py
+Run with: python tests/test_path_contamination.py
 """
 import json
 import os

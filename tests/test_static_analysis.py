@@ -10,7 +10,7 @@ Also guards the entry-point shape: a duplicated `if __name__ == "__main__"`
 block makes the orchestrator run TWICE, which with `--from-scratch` silently
 wipes the project and redoes the whole run (observed after the module split).
 
-Run: uv run python -m unittest scratch.test_static_analysis
+Run: uv run python -m unittest tests.test_static_analysis
 """
 
 import ast

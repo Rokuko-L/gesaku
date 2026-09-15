@@ -52,7 +52,7 @@ Simulates end-to-end user journeys and system crashes (e.g. state corruption rec
 
 ## 3. The Test Catalog (80 Test Cases)
 
-### File: `scratch/test_path_contamination.py`
+### File: `tests/test_path_contamination.py`
 This file contains tests verifying root detection, folder helpers, path contamination, git guards, and sandboxing (F1, F3, F6, and related boundaries/combinations).
 
 #### Tier 1: Feature Coverage
@@ -95,7 +95,7 @@ This file contains tests verifying root detection, folder helpers, path contamin
 
 ---
 
-### File: `scratch/test_multi_project.py`
+### File: `tests/test_multi_project.py`
 This file contains tests verifying active project state, atomic registry writes, CLI project arguments, pipeline lifecycle, and typesetting sandboxing (F2, F4, F5, F7, and related boundaries/combinations).
 
 #### Tier 1: Feature Coverage
@@ -173,12 +173,12 @@ A mock runner intercepting `subprocess.run` (and `run_pipeline.run_tool`) is use
 Run the E2E test suite from the root folder:
 
 ```bash
-pytest scratch/test_path_contamination.py
-pytest scratch/test_multi_project.py
+pytest tests/test_path_contamination.py
+pytest tests/test_multi_project.py
 ```
 
 To run all tests:
 
 ```bash
-pytest scratch/test_path_contamination.py scratch/test_multi_project.py
+pytest tests/test_path_contamination.py tests/test_multi_project.py
 ```

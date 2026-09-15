@@ -1,6 +1,6 @@
 """Offline tests for post-reveal retrofit blocking and continuity report.
 
-Run: uv run python -m unittest scratch.test_retrofit_gate
+Run: uv run python -m unittest tests.test_retrofit_gate
 """
 
 import json

@@ -242,7 +242,7 @@ foundation/     gen_genre_framework · gen_world · gen_characters · gen_outlin
 prompts/        static LLM templates (paths.load_prompt)
 webui/          server.py (FastAPI :8600) + frontend/ (React 19 + Vite)
 projects/       per-novel workspaces (gitignored)
-scratch/        offline unittest suites (MockLLM)
+tests/        offline unittest suites (MockLLM)
 cli.py          gesaku — console + run/logs/status/stop
 run_pipeline.py orchestrator
 Docs/           start at overview.md
@@ -272,7 +272,7 @@ Operator console API: [Docs/systems/console-bridge.md](Docs/systems/console-brid
 
 ```bash
 uv run --frozen ruff check --select F821,F811 .
-uv run --frozen python -m unittest discover -s scratch -p "test_*.py"
+uv run --frozen python -m unittest discover -s tests -p "test_*.py"
 ```
 
 Offline tests use `MockLLM` / mock transports — no network required. CI also proves the suite stays green with a black-hole `ANTHROPIC_BASE_URL`.

@@ -22,7 +22,7 @@ projects/<name>/ artifacts (state.json, results.tsv, eval_logs/, briefs/,
 edit_logs/, chapters/, outline.md, world/characters/canon.md, logs/)
         │
         ▼
-webui/server.py ── reuses scratch/gen_webui_fixtures.py generators ──> /api/*
+webui/server.py ── reuses tests/gen_webui_fixtures.py generators ──> /api/*
         │                                     ▲
         ▼                                     │ launch/stop/tail
 webui/frontend/src/api/client.js ── fetch + SSE (/api/stream) ──> screens
@@ -113,6 +113,6 @@ Route modules are plain `APIRouter`s, included by `server.py`.
 
 ## Tests
 
-`scratch/test_webui_server.py` — import smoke + pure helpers (`norm_phase`,
+`tests/test_webui_server.py` — import smoke + pure helpers (`norm_phase`,
 `_mask`). Full suite stays offline; endpoint behavior is exercised manually
 against real projects.

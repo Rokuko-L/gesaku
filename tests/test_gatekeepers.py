@@ -7,7 +7,7 @@ converted the crash into a silent "no drift" verdict — every test stayed
 green while a validation gate was disabled. These tests exercise the gate
 end-to-end with MockLLM so a dead gate FAILS instead of passing vacuously.
 
-Run: uv run python -m unittest scratch.test_gatekeepers
+Run: uv run python -m unittest tests.test_gatekeepers
 """
 
 import sys

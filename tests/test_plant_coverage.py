@@ -1,6 +1,6 @@
 """Offline tests for plant hygiene — leak and under-planting gates.
 
-Run: uv run python -m unittest scratch.test_plant_coverage
+Run: uv run python -m unittest tests.test_plant_coverage
 """
 
 import unittest

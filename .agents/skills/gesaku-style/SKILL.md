@@ -14,7 +14,7 @@ mock_llm.py                                                    test harness
 pipeline_infra.py                                              git/registry/state plumbing
 run_pipeline.py                                                phases + CLI only
 prompts/*.md                                                   static prompt templates
-scratch/test_*.py                                              offline tests
+tests/test_*.py                                              offline tests
 ```
 
 - **Import from the concern module directly** (`from llm import call_llm`,
@@ -38,7 +38,7 @@ scratch/test_*.py                                              offline tests
    `save_registry`). Never write state/registry in place.
 5. **Tests run offline.** Use `mock_llm.MockLLM`; install before or after
    importing pipeline modules (it rebinds import-time references). A test
-   suite that needs an API key belongs in E2E, not `scratch/test_*`.
+   suite that needs an API key belongs in E2E, not `tests/test_*`.
 
 ## Conventions
 

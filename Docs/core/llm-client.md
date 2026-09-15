@@ -108,7 +108,7 @@ that is `validation.py`'s job.
 - Syntax errors + schema violations: callers catch and feed the error text
   back as a "fix your previous response" prompt (self-correction).
 
-Wire-format behavior is pinned by `scratch/test_provider_llm.py`
+Wire-format behavior is pinned by `tests/test_provider_llm.py`
 (httpx.MockTransport asserts actual request shapes and response
 normalization per dialect).
 

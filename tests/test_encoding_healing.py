@@ -6,7 +6,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 import pipeline.evaluate as evaluate
 
 def main():
-    test_file = Path("scratch/test_utf16_dummy.md")
+    test_file = Path("tests/test_utf16_dummy.md")
     
     # Write a UTF-16 encoded file with BOM
     text = "Hello, this is a UTF-16 encoded text to test self-healing."

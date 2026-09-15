@@ -8,7 +8,7 @@ Tests:
   3. --from-scratch clears state for the right project only
   4. Path isolation: project A's files don't appear in project B's dirs
 
-Run with: python scratch/test_multi_project.py
+Run with: python tests/test_multi_project.py
 """
 import json
 import shutil
@@ -181,7 +181,7 @@ def test_from_scratch_cleanup(tmp_root: Path):
     paths._root_dir = tmp_root
 
     try:
-        paths.set_project_name("scratch_project")
+        paths.set_project_name("test_isolation_project")
         project_dir = paths.get_project_dir()
         project_dir.mkdir(parents=True, exist_ok=True)
 

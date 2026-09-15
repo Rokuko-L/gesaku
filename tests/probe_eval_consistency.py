@@ -21,10 +21,10 @@ def run_evaluation(call_num):
         result = evaluate.evaluate_full()
         timestamp = datetime.now().isoformat()
         
-        # Save results to scratch directory
-        scratch_dir = os.path.join(project_root, "scratch")
-        os.makedirs(scratch_dir, exist_ok=True)
-        out_path = os.path.join(scratch_dir, f"eval_test_{call_num}.json")
+        # Save results next to this probe
+        out_dir = os.path.join(project_root, "tests")
+        os.makedirs(out_dir, exist_ok=True)
+        out_path = os.path.join(out_dir, f"eval_test_{call_num}.json")
         
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump({

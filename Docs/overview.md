@@ -63,7 +63,7 @@ foundation/       Foundation-phase generators (one script per document)
 fuel/             Pipeline fuel — runtime LLM prompt material (see below)
 prompts/          Static prompt templates (loaded via paths.load_prompt)
 projects/<name>/  Per-novel isolated workspace (gitignored; own git repo)
-scratch/          Offline test suites
+tests/          Offline test suites
 webui/            Operator console: server.py (FastAPI bridge, port 8600)
 ├── deps.py         project resolution + state helpers (shared by routes)
 ├── routes/         APIRouter modules: graph, settings, stream
@@ -102,10 +102,9 @@ git keep/discard per attempt, results.tsv score log)
 | [core/prompt-management.md](core/prompt-management.md) | prompts/ directory and loader conventions |
 | [systems/mock-testing.md](systems/mock-testing.md) | Testing pipeline code offline with MockLLM |
 | [systems/console-bridge.md](systems/console-bridge.md) | webui FastAPI bridge: endpoints, run instructions, deferred scope |
-| [reference/test-infra.md](reference/test-infra.md) | E2E test infrastructure |
 | [reference/test-suites.md](reference/test-suites.md) | Offline suite index + how to run |
 | [reference/project-refactor.md](reference/project-refactor.md) | Multi-project refactor record (completed) |
-| [reference/archive/](reference/archive/) | Superseded docs (ANTI-PATTERNS.md, program.md) — historical only |
+| [reference/archive/](reference/archive/) | Superseded docs (ANTI-PATTERNS.md, program.md, test-infra.md) — historical only |
 
 ## Pipeline Fuel — NOT documentation
 
@@ -126,7 +125,7 @@ Never treat these as agent docs, never "clean them up":
 2. LLM JSON → Pydantic models in `validation.py`; feed
    `OutputValidationError.feedback` back into self-correction retries.
 3. Static prompts live in `prompts/*.md`.
-4. Tests must pass offline (`mock_llm.MockLLM`); suites in `scratch/`.
+4. Tests must pass offline (`mock_llm.MockLLM`); suites in `tests/`.
 5. Atomic JSON writes only (tmp + rename) — including sidecars and eval logs.
 6. Import from the concern module directly — there is no umbrella module.
    Dependency direction is `core ← foundation/pipeline ← run_pipeline`;

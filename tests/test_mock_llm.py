@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Offline tests for the mock-LLM harness + validation retry integration.
 
-Run: uv run python -m unittest scratch.test_mock_llm -v
+Run: uv run python -m unittest tests.test_mock_llm -v
 No network, no API key required.
 """
 

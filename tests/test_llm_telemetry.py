@@ -6,7 +6,7 @@ network. call_llm now appends one JSONL event per API attempt to the
 active project's llm_events.jsonl. These tests drive the real function via
 httpx.MockTransport and assert the event contract.
 
-Run: uv run python -m unittest scratch.test_llm_telemetry
+Run: uv run python -m unittest tests.test_llm_telemetry
 """
 
 import json
