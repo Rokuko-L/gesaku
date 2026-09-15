@@ -101,6 +101,25 @@ def on_chapter_kept(ch: int, reextract: bool = False) -> None:
         step(f"micro-plant extract failed for ch{ch}: {e}")
 
 
+CALLBACKS_SIDECAR = "open_callbacks.json"
+
+
+def stage_chapter_with_callbacks(ch: int) -> None:
+    """Stage a chapter together with the plant store extracted from it.
+
+    The store is chapter-scoped state, so committing one without the other
+    is how a later revert ends up leaving callbacks quoted from prose that no
+    longer exists (and how an untracked store gets removed by `git clean`
+    during a reset). Staging also makes the file safe from that clean, which
+    only removes untracked paths.
+    """
+    project = str(paths.get_project_dir())
+    rel_paths = [f"chapters/ch_{ch:02d}.md"]
+    if paths.get_open_callbacks_path().exists():
+        rel_paths.append(CALLBACKS_SIDECAR)
+    run_tool(f"git add {' '.join(rel_paths)}", cwd=project)
+
+
 REVISION_CANON_HEADER = "## Revision Sync"
 
 

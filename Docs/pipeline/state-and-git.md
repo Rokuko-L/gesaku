@@ -123,7 +123,11 @@ The pipeline treats git as an undo system:
 
 - `git_add_commit(msg)` → commit staged work, return short hash
 - `git_commit_staged(msg)` → commit only what's staged
-- `git_reset_hard(ref)` → revert a rejected attempt
+- `git_reset_hard(ref)` → revert a rejected attempt. Its `git clean -fd`
+  spares the timestamped artifact logs **and** `open_callbacks.json`: the
+  plant store is chapter-scoped state whose last write may not be committed
+  yet, and `git clean` only removes untracked paths — so without the
+  exclusion a reset between extraction and the next commit deletes it.
 - `ensure_gitignore_projects()` / `ensure_project_git(dir)` → root repo
   ignores `projects/`; each project gets its own `.git`
 

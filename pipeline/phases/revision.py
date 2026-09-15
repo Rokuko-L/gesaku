@@ -29,7 +29,7 @@ from pipeline.pipeline_infra import (
     timeout_for, uv_run,
 )
 from pipeline.phases.common import (
-    on_chapter_kept, resync_canon_after_cycle,
+    on_chapter_kept, resync_canon_after_cycle, stage_chapter_with_callbacks,
 )
 from pipeline.phases.review_loop import run_opus_review_loop
 
@@ -351,7 +351,11 @@ def run_revision(
                     continue
                 ch_num = r["ch_num"]
                 if r["post_score"] >= (r["baseline"] - tolerance):
-                    run_tool(f"git add chapters/ch_{ch_num:02d}.md", cwd=str(paths.get_project_dir()))
+                    # Re-extract BEFORE committing: the plant store is
+                    # chapter-scoped state, so it must ride in the same commit
+                    # as the prose it describes.
+                    on_chapter_kept(ch_num, reextract=True)
+                    stage_chapter_with_callbacks(ch_num)
                     commit_hash = git_commit_staged(
                         f"revision cycle {cycle}: ch{ch_num:02d} "
                         f"{r['question']} {r['pre_score']}->{r['post_score']}")
@@ -373,13 +377,18 @@ def run_revision(
                             ch_file.unlink(missing_ok=True)
                     else:
                         run_tool(f"git checkout {r['hist_best_commit']} -- chapters/ch_{ch_num:02d}.md", cwd=str(paths.get_project_dir()))
+                    # The restored prose is NOT the version the store was
+                    # extracted from: the revert targets the BEST-scoring
+                    # commit, which can be older than the most recent one.
+                    # Drop this chapter's plants and re-extract from what is
+                    # now on disk, then stage both so the pair stays coupled.
+                    on_chapter_kept(ch_num, reextract=True)
+                    stage_chapter_with_callbacks(ch_num)
                     log_result("reverted", f"rev-ch{ch_num:02d}", r["post_score"],
                                r["word_count"], "discard",
                                f"Cycle {cycle}: {r['question']} regressed {r['pre_score']}->{r['post_score']}")
             if kept_this_cycle:
                 resync_canon_after_cycle(kept_this_cycle, cycle)
-                for r in kept_this_cycle:
-                    on_chapter_kept(r["ch_num"], reextract=True)
         elif not skip_targeted_revisions:
             step("No strong consensus items found from panel")
         else:

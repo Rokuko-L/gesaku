@@ -454,7 +454,8 @@ def git_reset_hard(ref: str = "HEAD~1"):
     # Clean untracked files/directories to prevent cross-iteration contamination,
     # but never delete the timestamped artifact logs the pipeline depends on.
     run_tool(
-        "git clean -fd -e eval_logs -e edit_logs -e briefs -e logs -e repetition_check.json",
+        "git clean -fd -e eval_logs -e edit_logs -e briefs -e logs "
+        "-e repetition_check.json -e open_callbacks.json",
         cwd=str(project_dir),
     )
 

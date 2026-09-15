@@ -21,7 +21,7 @@ from pipeline.pipeline_infra import (
     git_commit_staged, git_reset_hard, log_result, parse_score,
     parse_score_any, revision_tolerance, run_tool, step, timeout_for, uv_run,
 )
-from pipeline.phases.common import on_chapter_kept
+from pipeline.phases.common import on_chapter_kept, stage_chapter_with_callbacks
 
 
 
@@ -122,8 +122,11 @@ def run_opus_review_loop(skip: bool = False) -> None:
                         word_count = len(ch_file.read_text(encoding="utf-8").split()) if ch_file.exists() else 0
                         
                         if post_score >= (baseline - revision_tolerance()):
-                            # Stage specifically
-                            run_tool(f"git add chapters/ch_{ch_num:02d}.md", cwd=str(paths.get_project_dir()))
+                            # Same coupling as the revision phase: re-extract
+                            # first so the plant store rides with the prose it
+                            # describes.
+                            on_chapter_kept(ch_num, reextract=True)
+                            stage_chapter_with_callbacks(ch_num)
                             commit_hash = git_commit_staged(
                                 f"review round {rnd}: revise ch{ch_num:02d} from Opus feedback {pre_score}->{post_score}")
                             log_result(commit_hash, f"rev-ch{ch_num:02d}-review", post_score,
@@ -143,6 +146,11 @@ def run_opus_review_loop(skip: bool = False) -> None:
                                     ch_file.unlink(missing_ok=True)
                             else:
                                 run_tool(f"git checkout {hist_best_commit} -- chapters/ch_{ch_num:02d}.md", cwd=str(paths.get_project_dir()))
+                            # The revert target is the best-scoring commit,
+                            # which may be older than the prose the store was
+                            # last extracted from — rebuild it from disk.
+                            on_chapter_kept(ch_num, reextract=True)
+                            stage_chapter_with_callbacks(ch_num)
                             log_result("reverted", f"rev-ch{ch_num:02d}-review", post_score,
                                        word_count, "discard",
                                        f"Round {rnd}: {brief.name} regressed {pre_score}->{post_score}")

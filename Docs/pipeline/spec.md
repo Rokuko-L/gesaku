@@ -621,9 +621,26 @@ def run_pipeline(seed_path, tag="run1"):
 
 Separate from outline-tag debts (`state["debts"]` / `[Plant: slug]`).
 
-- After every **kept** chapter (all four drafting keep paths + targeted revision
-  keeps), `run_pipeline.on_chapter_kept` runs
+- After every **kept** chapter (the drafting keep paths, targeted revision
+  keeps, and Opus-review keeps), `pipeline.phases.common.on_chapter_kept` runs
   `pipeline/extract_micro_plants.py <ch>` (fail-soft; never blocks the keep).
+- **The store is chapter-scoped state, and it is coupled to the prose.** Two
+  rules follow, and both are load-bearing:
+  1. On a **revert** the chapter is restored to its *best-scoring* commit,
+     which can be older than the version the store was last extracted from —
+     so the revert path must also re-extract (`--reextract` drops this
+     chapter's plants, then rebuilds from what is now on disk).
+  2. Extraction runs **before** the commit, and the chapter and
+     `open_callbacks.json` are staged together
+     (`common.stage_chapter_with_callbacks`). Committing prose without its
+     store is how a later revert pairs best-chapters with callbacks quoted
+     from text that no longer exists.
+  `git_reset_hard` also excludes `open_callbacks.json` from its `git clean`,
+  since an untracked store would otherwise be deleted outright on a reset.
+- Drop + rebuild is atomic from the store's point of view: `drop_source_chapter`
+  only persists together with a successful re-extraction
+  (`extract_micro_plants.py` saves once, at the end), so a failed extract
+  leaves the previous store intact.
 - Extract asks the judge for **at most 1** concrete callback candidate
   (object / phrase / promise / injury) and which open callback ids were paid off
   with changed meaning.

@@ -221,6 +221,64 @@ class RefactorSmoke(unittest.TestCase):
         self.assertGreater(big, small)
         self.assertGreaterEqual(big, 6 * llm_timeout("long"))
 
+    # -- 12. callbacks ride with their chapter ----------------------------
+
+    def test_stage_chapter_with_callbacks_stages_both(self):
+        """The plant store is chapter-scoped: staging the prose without it
+        leaves a revert pairing best-chapters with callbacks quoted from
+        text that no longer exists."""
+        self._real_root()
+        import subprocess
+        from pipeline.phases.common import stage_chapter_with_callbacks
+
+        self._bind("smoke_stage")
+        project = paths.get_project_dir()
+        subprocess.run(["git", "init", "-q", str(project)], capture_output=True)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=project,
+                       capture_output=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=project,
+                       capture_output=True)
+
+        ch = paths.get_chapters_dir() / "ch_03.md"
+        ch.write_text("# Chapter 3\n\nprose\n", encoding="utf-8")
+        cb = paths.get_open_callbacks_path()
+        cb.write_text('{"callbacks": []}', encoding="utf-8")
+
+        stage_chapter_with_callbacks(3)
+        staged = subprocess.run(["git", "diff", "--cached", "--name-only"],
+                                cwd=project, capture_output=True, text=True).stdout
+        self.assertIn("chapters/ch_03.md", staged)
+        self.assertIn("open_callbacks.json", staged,
+                      "callbacks must be staged with the chapter they describe")
+
+    def test_stage_survives_missing_callbacks_file(self):
+        """First extraction has not run yet — staging must not fail."""
+        self._real_root()
+        import subprocess
+        from pipeline.phases.common import stage_chapter_with_callbacks
+
+        self._bind("smoke_stage2")
+        project = paths.get_project_dir()
+        subprocess.run(["git", "init", "-q", str(project)], capture_output=True)
+
+        (paths.get_chapters_dir() / "ch_04.md").write_text("x\n", encoding="utf-8")
+        self.assertFalse(paths.get_open_callbacks_path().exists())
+        stage_chapter_with_callbacks(4)  # must not raise
+        staged = subprocess.run(["git", "diff", "--cached", "--name-only"],
+                                cwd=project, capture_output=True, text=True).stdout
+        self.assertIn("chapters/ch_04.md", staged)
+
+    def test_git_reset_spares_callbacks_store(self):
+        """`git clean -fd` in git_reset_hard must not delete the untracked
+        plant store (it is not a disposable build artifact)."""
+        from pipeline import pipeline_infra as infra
+        import inspect
+
+        src = inspect.getsource(infra.git_reset_hard)
+        self.assertIn("open_callbacks.json", src,
+                      "git clean must exclude open_callbacks.json or an "
+                      "untracked store is deleted on reset")
+
     # -- 7. drift verdict cannot silently default to "clean" ---------------
 
     def test_tonal_drift_verdict_requires_has_drift(self):
