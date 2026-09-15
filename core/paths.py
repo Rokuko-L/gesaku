@@ -163,6 +163,10 @@ def get_reviews_path() -> Path:
 def get_arc_summary_path() -> Path:
     return get_project_dir() / "arc_summary.md"
 
+def get_open_callbacks_path() -> Path:
+    """Live ledger of prose-emergent micro-plants (distinct from outline debts)."""
+    return get_project_dir() / "open_callbacks.json"
+
 def get_novel_title():
     """Retrieve novel title from state.json, resolving state path dynamically."""
     state_path = get_state_path()

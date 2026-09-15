@@ -6,3 +6,4 @@ __pycache__/
 .venv/
 AGENTS.md
 gui_config.json
+/.commandcode/

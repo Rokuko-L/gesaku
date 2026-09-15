@@ -28,10 +28,26 @@ Deterministic detectors, each with its own penalty cap (global cap 4.0):
 - `call_judge_json(prompt, model=...)` — judge call with self-correction
   retries for syntax AND schema failures (see
   [../core/output-validation.md](../core/output-validation.md)).
-- Chapter eval prompt includes voice, world summary, characters, canon,
-  the chapter's outline entry, previous-chapter tail, and disclosure ceiling.
+- Chapter eval prompt includes voice, world summary, characters, a
+  **chapter-scoped canon view** (`core.canon.judge_view_md`), the chapter's
+  outline entry, and the previous-chapter tail.
+- The judge does **not** receive sealed foundation facts (`visible_from > N`)
+  or future `## As of Chapter` sections. Sealed truths are withheld so early
+  chapters are not scored against knowledge the reader does not have.
 - The judge also emits `new_canon_entries` (core vs incremental) and
   `unexplained_references`, which feed later chapters' canon files.
+
+## Roadmap (not in v1)
+
+- **Author-continuity judge**: a separate, non-blocking check that sees
+  sealed foundation + full outline + the chapter and reports `mask_breaks`
+  (e.g. A doing something logistically impossible if the mask were true) and
+  `plant_gaps`. Must never affect `chapter_gate` / keep-discard.
+  `pipeline/retrofit_reveal.py` already writes an informational
+  continuity scan to `retrofit_report.json`; a dedicated LLM judge is still
+  outstanding.
+
+Related: [../pipeline/spec.md](spec.md) for sealed foundation + retrofit.
 
 ## Post-Judge Penalties (`evaluate_chapter`)
 

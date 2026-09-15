@@ -13,6 +13,7 @@ Static prompt templates live in `prompts/*.md`, loaded via
 | `review_manuscript.md` | `pipeline/review.py` |
 | `sanitize_titles_rewriter.md` | `pipeline/sanitize_outline_titles.py` (default; genre config may override) |
 | `foundation_canon.md` | `foundation/gen_canon.py` |
+| `retrofit_reveal.md` | `pipeline/retrofit_reveal.py` |
 | `gen_novel_tex_system.md` + `gen_novel_tex_template.md` | `foundation/gen_novel_tex.py` |
 | `genre_framework_system.md` | `foundation/gen_genre_framework.py` |
 

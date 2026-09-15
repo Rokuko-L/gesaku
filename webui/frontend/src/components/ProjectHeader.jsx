@@ -13,6 +13,16 @@ export default function ProjectHeader({ project, projects, runState }) {
   const running = runState?.running ?? meta?.running ?? false
   const score = meta?.novelScore || meta?.foundationScore || null
 
+  // Always keep the open project selectable, even if the shelf list is
+  // stale/offline — otherwise the browser shows the first option and lies.
+  const switchOptions = (() => {
+    const list = (projects ?? []).map((p) => ({ name: p.name }))
+    if (project && !list.some((p) => p.name === project)) {
+      list.unshift({ name: project })
+    }
+    return list.length ? list : [{ name: project }]
+  })()
+
   const switchTo = (name) => {
     if (!name || name === project) return
     api.setActiveProject(name)
@@ -66,7 +76,7 @@ export default function ProjectHeader({ project, projects, runState }) {
             onChange={(e) => switchTo(e.target.value)}
             className="max-w-44 truncate border border-ink-600 bg-ink-950 px-1.5 py-1 font-mono text-[11px] text-fog-300 outline-none focus:border-accent/60"
           >
-            {(projects ?? [{ name: project }]).map((p) => (
+            {switchOptions.map((p) => (
               <option key={p.name} value={p.name}>{p.name}</option>
             ))}
           </select>

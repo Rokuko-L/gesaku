@@ -192,38 +192,39 @@ def main():
         lines.append("---")
         lines.append("")
     
-    # Foreshadowing ledger
+    # Foreshadowing ledger — cluster free-text plants/harvests by token overlap
+    # so near-duplicate wording (the common case from per-chapter LLM dumps)
+    # collapses into one thread instead of the old exact p[:60] key.
     lines.append("## FORESHADOWING LEDGER")
     lines.append("")
-    lines.append("| Thread | Planted | Harvested |")
-    lines.append("|--------|---------|-----------|")
-    
-    # Collect all plants and harvests
-    all_plants = {}
-    all_harvests = {}
+
+    from core.micro_plants import match_plant_harvest_threads
+
+    plant_rows, harvest_rows = [], []
     for e in entries:
-        for p in e.get("plants", []):
-            key = p[:60]
-            if key not in all_plants:
-                all_plants[key] = []
-            all_plants[key].append(e["num"])
-        for h in e.get("harvests", []):
-            key = h[:60]
-            if key not in all_harvests:
-                all_harvests[key] = []
-            all_harvests[key].append(e["num"])
-    
-    # Match plants to harvests by keyword overlap
-    all_threads = set(list(all_plants.keys()) + list(all_harvests.keys()))
-    for thread in sorted(all_threads):
-        planted = ", ".join(f"Ch {n}" for n in all_plants.get(thread, []))
-        harvested = ", ".join(f"Ch {n}" for n in all_harvests.get(thread, []))
-        lines.append(f"| {thread} | {planted} | {harvested} |")
-    
+        for p in e.get("plants") or []:
+            plant_rows.append({"text": str(p), "chapter": e["num"]})
+        for h in e.get("harvests") or []:
+            harvest_rows.append({"text": str(h), "chapter": e["num"]})
+    threads = match_plant_harvest_threads(plant_rows, harvest_rows)
+
+    paid = sum(1 for t in threads if t["status"] == "paid off")
+    open_n = len(threads) - paid
+    lines.append(f"*{len(threads)} clustered threads · {paid} paid · {open_n} open*")
+    lines.append("")
+    lines.append("| Thread | Planted | Harvested | Status |")
+    lines.append("|--------|---------|-----------|--------|")
+    for t in threads:
+        planted = f"Ch {t['planted']}" if t.get("planted") else ""
+        harvested = f"Ch {t['harvest']}" if t.get("harvest") else ""
+        status = t["status"]
+        lines.append(f"| {t['thread']} | {planted} | {harvested} | {status} |")
+
     lines.append("")
     lines.append("---")
     lines.append("")
-    lines.append(f"*Outline rebuilt from actual chapters{cycle_str}.*")
+    lines.append(f"*Outline rebuilt from actual chapters{cycle_str}. "
+                 "Ledger clustered by plant↔harvest token overlap.*")
     
     out = '\n'.join(lines)
     paths.get_outline_path().write_text(out, encoding="utf-8")

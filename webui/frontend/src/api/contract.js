@@ -169,6 +169,17 @@
 /** revision.json shape: { briefs: RevisionBrief[], cuts: Object<string, Cut[]>, reviews: NovelReview[] } */
 
 /**
+ * Beats & harvests ledger (GET /api/ledger).
+ * @typedef {Object} Ledger
+ * @property {Array<{label: string, done: boolean}>} premiseBeats
+ * @property {Array<{chapter: number, title: string, beats: string[]}>} roadmap
+ * @property {Array<{thread: string, planted: number|null, harvest: number|null, status: "paid off"|"open"}>} threads
+ * @property {Array<{thread: string, planted: number|null, harvest: number|null, status: "paid off"|"open"}>} [plannedThreads]
+ * @property {Array<{id: string, text: string, kind: string, sourceChapter: number|null, harvestChapter: number|null, status: string}>} [callbacks]
+ * @property {number} chaptersTotal
+ */
+
+/**
  * One synthesized A/B match (chapters with a discarded + kept attempt).
  * @typedef {Object} TournamentMatch
  * @property {string} id                // "match_001"

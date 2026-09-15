@@ -14,7 +14,7 @@ from core import textstats
 import sys
 from pathlib import Path
 from dotenv import load_dotenv
-from core.genre import load_genre
+from core.genre import load_genre, prose_mode_system_block
 from core import paths
 
 load_dotenv()
@@ -31,6 +31,7 @@ def call_writer(prompt, max_tokens=16000):
             system += ("\n\nMANDATORY PERSPECTIVE: Keep the chapter in STRICT THIRD-PERSON "
                        "limited narration anchored to the POV character ('he/she/they' or the "
                        "character's name). Never switch to first-person narration.")
+    system += prose_mode_system_block(genre_cfg)
     return call_llm(prompt=prompt, system=system, model_key="writer", max_tokens=max_tokens, beta_context=True, timeout=600, temperature=0.8, raise_on_truncation=True)
 
 def main():
@@ -52,8 +53,15 @@ def main():
     # Load old version if exists
     old_path = chapters_dir / f"ch_{ch_num:02d}.md"
     old_text = old_path.read_text(encoding="utf-8") if old_path.exists() else "(no existing draft)"
-    
+
     title = get_novel_title()
+
+    # Soft optional callbacks from prose-emergent plants (never a MUST).
+    try:
+        from core import micro_plants as mp
+        callback_block = mp.soft_inject_block(mp.load_callbacks(), ch_num)
+    except Exception:
+        callback_block = ""
 
     # Pull the latest eval's AI-pattern findings so the revision removes them
     ai_feedback = ""
@@ -108,6 +116,7 @@ THE EXISTING DRAFT (use as raw material -- keep what works, cut what doesn't):
 
 ANTI-PATTERN RULES:
 {load_genre()["generation"]["anti_pattern_rules"]}
+{callback_block}
 {ai_feedback}
 
 FORMATTING:

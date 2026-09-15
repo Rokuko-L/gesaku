@@ -15,7 +15,7 @@ import sys
 from pathlib import Path as _Path
 sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
 
-from core.llm import call_llm, extract_text_from_response, get_max_tokens_with_thinking
+from core.llm import call_llm, extract_text_from_response, get_max_tokens_with_thinking, TruncationError
 from core import paths
 import os
 import sys
@@ -33,11 +33,26 @@ load_dotenv()
 REVIEW_PROMPT = paths.load_prompt("review_manuscript")
 
 
-def call_opus(prompt, max_tokens=16000):
-    """Call Opus with the full manuscript. Raises on truncation — a review cut
-    off mid-professor-section would silently end the revision loop early."""
+def call_opus(prompt, max_tokens=32000):
+    """Call Opus with the full manuscript.
+
+    A full-manuscript review easily exceeds 16k tokens (the 83k-word v4
+    manuscript truncated at ~16k words). Raise the cap and treat a
+    residual truncation as a soft warning — a partial review still
+    contains usable craft notes.
+    """
     print(f"Sending to Opus ({len(prompt):,} chars)...", file=sys.stderr)
-    return call_llm(prompt=prompt, model_key="review", max_tokens=max_tokens, beta_context=True, timeout=600, raise_on_truncation=True)
+    try:
+        return call_llm(
+            prompt=prompt, model_key="review", max_tokens=max_tokens,
+            beta_context=True, timeout=900, raise_on_truncation=True,
+        )
+    except TruncationError as e:
+        print(f"  WARN: review truncated ({e}); using partial review.", file=sys.stderr)
+        return call_llm(
+            prompt=prompt, model_key="review", max_tokens=max_tokens,
+            beta_context=True, timeout=900, raise_on_truncation=False,
+        )
 
 
 def get_title():

@@ -162,6 +162,7 @@ Copy `.env.example` → `.env`.
 | `GESAKU_CHAPTERS` | `24` | Default chapter count |
 | `GESAKU_NOTES` | — | Default premise |
 | `GESAKU_PERSPECTIVE` | — | `first_person` \| `third_person` (empty = foundation decides) |
+| `GESAKU_PROSE_MODE` | — | `first_intimate` \| `first_voicey` \| `third_close` \| `third_scene` — prose-distance pack from `fuel/prose/` |
 | `GESAKU_FOUNDATION_THRESHOLD` | `7.5` | Foundation exit gate |
 | `GESAKU_CHAPTER_THRESHOLD` | `6.5` | Per-chapter keep gate |
 | `GESAKU_MAX_CHAPTER_ATTEMPTS` | `5` | Draft retries |

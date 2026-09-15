@@ -124,15 +124,29 @@ EXIT:   foundation_score > 7.5 AND lore_score > 7.0
 Loop:
   1. gen_world.py        → world.md (lore, magic system, geography, factions)
   2. gen_characters.py   → characters.md (wound/want/need/lie, speech, sliders)
-  3. gen_outline.py      → outline.md part 1 (beats, chapter structure)
-  4. gen_outline_part2.py → outline.md part 2 (foreshadowing ledger)
-  5. Voice discovery: write 5 trial passages in different registers,
+  3. gen_canon.py        → canon.md (hard facts tagged visible_from=N;
+                           sealed facts stay out of drafting until chapter N)
+  4. gen_outline.py      → outline.md part 1 (beats; plant-hygiene gated)
+  5. gen_outline_part2.py → outline.md part 2 (foreshadowing ledger)
+  6. Voice discovery: write 5 trial passages in different registers,
      select best, fill voice.md Part 2 with exemplars + anti-exemplars
-  6. Define MYSTERY.md (the central secret the reader discovers)
-  7. gen_canon.py        → canon.md (cross-reference all hard facts)
-  8. evaluate.py --phase=foundation
-  9. If score improved → git commit. If worse → git reset --hard HEAD~1.
-  10. Identify weakest dimension → target next iteration at it.
+  7. Define MYSTERY.md (the central secret the reader discovers)
+  8. plant_hygiene.json  → pre-reveal leak + action-plant coverage report
+  9. evaluate.py --phase=foundation
+  10. If score improved → git commit. If worse → git reset --hard HEAD~1.
+  11. Identify weakest dimension → target next iteration at it.
+
+Sealed foundation + twist stories:
+  - Facts tagged `visible_from=N` (N>1) are withheld from writer and judge
+    prompts for chapters < N (`core/canon.py` writer_view/judge_view).
+  - Pre-reveal outline beats must be action-shaped; meaning-laden language
+    and sealed lexicon fail `core/plant_hygiene.py` (retry in gen_outline).
+  - Characters named in sealed facts must appear as agents in pre-reveal
+    chapters (coverage floor) so a post-reveal retrofit has material.
+  - When the reveal chapter is first kept, `pipeline/retrofit_reveal.py`
+    rewrites ch 1..R-1 to thicken existing plants only (no new plot).
+    Under-planted outlines block the pass (exit 2); continuity scan in
+    `retrofit_report.json` is informational and never gates keep/discard.
 
 Key learnings:
   - Foundation typically takes 5-15 iterations
@@ -176,13 +190,17 @@ For each chapter in outline order:
      - world.md (full)
      - characters.md (full)
      - This chapter's outline entry
-     - Previous chapter's last ~1000 words
+     - Previous chapter's last ~600 words
      - Next chapter's outline (for continuity)
+     - Canon view as of this chapter (public foundation + core +
+       prior As-of only — sealed visible_from>N facts withheld)
   2. draft_chapter.py → chapters/ch_NN.md
-  3. evaluate.py --chapter=NN
+  3. evaluate.py --chapter=NN  (judge sees the same chapter-scoped canon view)
   4. If score > 6.0 → keep, commit. If < 6.0 → discard, retry (max 5).
   5. Extract new canon entries from eval output → append to canon.md
-  6. Log to results.tsv
+  6. If this chapter is the sealed reveal chapter → run retrofit_reveal.py
+     once (state flag reveal_retrofit_done)
+  7. Log to results.tsv
 
 Post-draft cleanup:
   7. Mechanical slop pass (evaluate.py regex scanner) across all chapters
@@ -550,6 +568,34 @@ def run_pipeline(seed_path, tag="run1"):
     typeset()
     export()
 ```
+
+---
+
+## Prose-emergent micro-plants (open callbacks)
+
+Separate from outline-tag debts (`state["debts"]` / `[Plant: slug]`).
+
+- After every **kept** chapter (all four drafting keep paths + targeted revision
+  keeps), `run_pipeline.on_chapter_kept` runs
+  `pipeline/extract_micro_plants.py <ch>` (fail-soft; never blocks the keep).
+- Extract asks the judge for **at most 1** concrete callback candidate
+  (object / phrase / promise / injury) and which open callback ids were paid off
+  with changed meaning.
+- Store: `projects/<name>/open_callbacks.json` via `core/micro_plants.py`
+  (atomic writes; max 8 open; expire after 12 chapters; near-dup filter).
+- **Drafting does not inject callbacks.** Soft optional list appears only in
+  `pipeline/gen_revision.py` (`soft_inject_block`) with
+  “prefer nothing over a forced reference.”
+- Targeted revision keeps re-extract with `--reextract` (drops plants whose
+  `source_chapter` matches the revised chapter).
+
+Export `pipeline/build_outline.py` clusters free-text plants/harvests by token
+Jaccard + union-find (near-duplicates collapse; plant only links to a later or
+same-chapter harvest). Statuses: `paid off` (plant+harvest), `open` (plant
+only), `recalled` (harvest only). The webui ledger surfaces planned major
+threads, the clustered emergent ledger, and open callbacks.
+
+Offline tests: `scratch/test_micro_plants.py`.
 
 ---
 

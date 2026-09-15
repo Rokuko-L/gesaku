@@ -227,6 +227,45 @@ def gen_foundation(p: Path, state: dict) -> dict:
     }
 
 
+def _cluster_threads_from_outline_bullets(txt: str) -> list:
+    """Rebuild clustered threads from per-chapter **Plants:** / **Harvests:** bullets.
+
+    Used when outline.md still has a legacy unclustered table (or none).
+    """
+    from core.micro_plants import match_plant_harvest_threads
+
+    plants, harvests = [], []
+    current_ch = None
+    mode = None
+    for line in txt.splitlines():
+        m = re.match(r"^###\s+(?:Ch|Chapter)\.?\s*(\d+)\b", line, re.I)
+        if m:
+            current_ch = int(m.group(1))
+            mode = None
+            continue
+        if current_ch is None:
+            continue
+        low = line.strip().lower()
+        if low.startswith("**plants:**"):
+            mode = "plant"
+            continue
+        if low.startswith("**harvests:**"):
+            mode = "harvest"
+            continue
+        if line.strip().startswith("**") or line.strip().startswith("###"):
+            mode = None
+            continue
+        if mode and line.strip().startswith("- "):
+            text = clean(line.strip()[2:])
+            if not text:
+                continue
+            row = {"text": text, "chapter": current_ch}
+            (plants if mode == "plant" else harvests).append(row)
+    if not plants and not harvests:
+        return []
+    return match_plant_harvest_threads(plants, harvests)
+
+
 def gen_ledger(p: Path, state: dict) -> dict:
     total = state.get("chapters_total", 24)
 
@@ -261,39 +300,107 @@ def gen_ledger(p: Path, state: dict) -> dict:
     outline = p / "outline.md"
     if outline.exists():
         txt = outline.read_text(encoding="utf-8")
-        # the ledger table cells are hard-truncated at 60 chars by the
-        # pipeline; recover full thread text from outline bullets when possible
-        bullets = re.findall(r"^- (.+)$", txt, re.M)
-        sec = re.search(r"FORESHADOWING LEDGER\n(.*?)(?=\n\s*\n(?!\s*\|)|\Z)", txt, re.S)
-        if sec:
-            for row in re.findall(r"^\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*([^|]*?)\s*\|$",
-                                  sec.group(1), re.M):
-                thread, planted, harvested = row
-                pm = re.search(r"[Cc]h\.?\s*(\d+)", planted)
-                hm = re.search(r"[Cc]h\.?\s*(\d+)", harvested)
-                if not pm and not hm:
-                    continue
-                label = clean(thread)
-                if len(label) >= 58:
-                    full = next((b for b in bullets
-                                 if clean(b).startswith(label[:40])), None)
-                    if full:
-                        label = clean(full)
-                    else:
-                        label = label.rsplit(" ", 1)[0] + "…"
-                # either cell may be empty: no harvest = open thread, no plant =
-                # a payoff the ledger never recorded a plant for
+        clustered = _cluster_threads_from_outline_bullets(txt)
+        if clustered:
+            for t in clustered:
                 threads.append({
-                    "thread": label,
-                    "planted": int(pm.group(1)) if pm else None,
-                    "harvest": int(hm.group(1)) if hm else None,
-                    "status": "paid off" if hm else "open",
+                    "thread": t["thread"],
+                    "planted": t["planted"],
+                    "harvest": t["harvest"],
+                    "status": "paid off" if t["status"] == "paid off" else
+                              "paid off" if t["status"] == "recalled" else "open",
                 })
+        else:
+            # the ledger table cells are hard-truncated at 60 chars by older
+            # pipeline builds; recover full thread text from outline bullets when possible
+            bullets = re.findall(r"^- (.+)$", txt, re.M)
+            sec = re.search(r"FORESHADOWING LEDGER\n(.*?)(?=\n\s*\n(?!\s*\|)|\Z)", txt, re.S)
+            if sec:
+                # Support both 3-col (legacy) and 4-col (clustered) tables
+                for row in re.findall(
+                        r"^\|\s*([^|]+?)\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*(?:\|\s*([^|]*?)\s*)?\|$",
+                        sec.group(1), re.M):
+                    thread, planted, harvested, status_cell = row
+                    if thread.strip().lower() in ("thread", "--------", ""):
+                        continue
+                    if set(thread.strip()) <= set("-: "):
+                        continue
+                    pm = re.search(r"[Cc]h\.?\s*(\d+)", planted)
+                    hm = re.search(r"[Cc]h\.?\s*(\d+)", harvested)
+                    if not pm and not hm:
+                        continue
+                    label = clean(thread)
+                    if len(label) >= 58:
+                        full = next((b for b in bullets
+                                     if clean(b).startswith(label[:40])), None)
+                        if full:
+                            label = clean(full)
+                        else:
+                            label = label.rsplit(" ", 1)[0] + "…"
+                    status = clean(status_cell).lower() if status_cell else ""
+                    if status in ("paid off", "paid", "harvested", "recalled"):
+                        paid = True
+                    elif status in ("open", "unpaid"):
+                        paid = False
+                    else:
+                        paid = bool(hm)
+                    threads.append({
+                        "thread": label,
+                        "planted": int(pm.group(1)) if pm else None,
+                        "harvest": int(hm.group(1)) if hm else None,
+                        "status": "paid off" if paid else "open",
+                    })
     threads.sort(key=lambda t: (t["planted"] or t["harvest"] or 0,
                                 t["harvest"] or 9999))
 
-    return {"premiseBeats": premise, "roadmap": roadmap, "threads": threads,
-            "chaptersTotal": total}
+    # Planned major threads from the foundation roadmap (the real craft arcs)
+    planned = []
+    if rm.exists():
+        rtxt = rm.read_text(encoding="utf-8")
+        sec = re.search(
+            r"GLOBAL PLOT THREADS LEDGER\n(.*?)(?=\n## |\Z)", rtxt, re.S | re.I)
+        if sec:
+            blocks = re.split(r"\n(?=###\s)", sec.group(1))
+            for block in blocks:
+                hm = re.match(r"###\s+\**\s*([a-zA-Z0-9_]+)", block.strip())
+                if not hm:
+                    continue
+                slug = hm.group(1)
+                pm = re.search(r"Planted:\*\*\s*Chapter\s*(\d+)", block, re.I)
+                hv = re.search(r"Harvested:\*\*\s*Chapter\s*(\d+)", block, re.I)
+                planned.append({
+                    "thread": slug.replace("_", " "),
+                    "planted": int(pm.group(1)) if pm else None,
+                    "harvest": int(hv.group(1)) if hv else None,
+                    "status": "paid off" if hv else "open",
+                })
+
+    # Prose-emergent micro-plants (open_callbacks.json), if the extractor has run
+    callbacks = []
+    cb_path = p / "open_callbacks.json"
+    if cb_path.exists():
+        try:
+            cb = json.loads(cb_path.read_text(encoding="utf-8"))
+            for c in cb.get("callbacks") or []:
+                callbacks.append({
+                    "id": c.get("id"),
+                    "text": c.get("text", ""),
+                    "kind": c.get("kind", "object"),
+                    "sourceChapter": c.get("source_chapter"),
+                    "harvestChapter": c.get("harvested_chapter"),
+                    "status": c.get("status", "open"),
+                })
+        except (OSError, ValueError):
+            pass
+
+    return {
+        "premiseBeats": premise,
+        "roadmap": roadmap,
+        "threads": threads,
+        "plannedThreads": planned,
+        "callbacks": callbacks,
+        "chaptersTotal": total,
+    }
 
 
 def gen_projects(state: dict, p: Path) -> list:

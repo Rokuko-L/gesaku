@@ -19,6 +19,12 @@ core/             Shared library — no pipeline-specific logic
 ├── llm.py          Multi-provider client (call_llm: anthropic + openai
 │                   dialects, any compat endpoint), response extraction,
 │                   healing JSON parser (parse_json_response)
+├── canon.py        Canon.md parse + chapter-scoped writer/judge views;
+│                   sealed foundation (visible_from) + denylist terms
+├── plant_hygiene.py Outline plant hygiene: pre-reveal leak regex + action-plant
+│                   coverage floor
+├── micro_plants.py  Prose-emergent micro-plant store (open_callbacks.json) +
+│                   plant↔harvest clustering for the rebuilt ledger
 ├── outline.py      Outline text ops: chapter headings, premise beats,
 │                   plants/harvests validation, debt extraction
 ├── textstats.py    Context windows (tail/head), repetition detection
@@ -29,7 +35,8 @@ core/             Shared library — no pipeline-specific logic
 
 pipeline/         Orchestration and per-stage tooling
 ├── pipeline_infra.py Git plumbing, registry/state persistence, score parsing
-├── evaluate.py       Scoring engine: mechanical slop + LLM judge
+├── evaluate.py       Scoring engine: mechanical slop + LLM judge (judge_view)
+├── retrofit_reveal.py Post-reveal rewrite of ch 1..R-1 (coverage-gated)
 └── ...               drafting/revision/export stage scripts
 
 foundation/       Foundation-phase generators (one script per document)

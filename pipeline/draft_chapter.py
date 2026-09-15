@@ -11,12 +11,13 @@ from core.llm import TruncationError, call_llm
 from core.outline import parse_premise_beats, normalize_chapter_heading
 from core.paths import get_novel_title
 from core.textstats import check_structural_repetition
+from core import canon as canon_mod
 import json
 import re
 import sys
 from pathlib import Path
 from dotenv import load_dotenv
-from core.genre import load_genre
+from core.genre import load_genre, prose_mode_system_block
 from core import paths
 from core import textstats
 
@@ -35,6 +36,7 @@ def call_writer(prompt, max_tokens=None):
             chapter_system += ("\n\nMANDATORY PERSPECTIVE: Write this chapter in STRICT THIRD-PERSON "
                                "limited narration anchored to the POV character ('he/she/they' or the "
                                "character's name). Never switch to first-person narration.")
+    chapter_system += prose_mode_system_block(genre_cfg)
     estimated_words = genre_cfg["generation"]["outline"]["estimated_words"]
     chapter_count = genre_cfg["generation"]["outline"]["estimated_chapters"]
     target_words = estimated_words // chapter_count
@@ -50,44 +52,6 @@ def load_file(path):
         return Path(path).read_text(encoding="utf-8")
     except FileNotFoundError:
         return ""
-
-
-def parse_canon(canon_text: str):
-    """Split canon.md into Foundation, Core Canon, and As-of Chapter sections.
-
-    Returns (foundation, core_canon, disclosure_ceiling):
-      - foundation:     `## Foundation` section (background truth, always included)
-      - core_canon:     `## Core Canon` section (permanent established facts, always included)
-      - disclosure:     all `## As of Chapter N` sections (everything the reader knows)
-    """
-    foundation = ""
-    core_canon = ""
-    as_of_sections = []
-    current = ""
-    current_header = ""
-    for line in canon_text.splitlines(keepends=True):
-        if line.startswith("## "):
-            if current.strip() and current_header:
-                if current_header.startswith("## Foundation"):
-                    foundation = current
-                elif current_header.startswith("## Core Canon"):
-                    core_canon = current
-                elif current_header.startswith("## As of Chapter"):
-                    as_of_sections.append(current)
-            current = ""
-            current_header = line.strip()
-        if current_header:
-            current += line
-    if current.strip() and current_header:
-        if current_header.startswith("## Foundation"):
-            foundation = current
-        elif current_header.startswith("## Core Canon"):
-            core_canon = current
-        elif current_header.startswith("## As of Chapter"):
-            as_of_sections.append(current)
-
-    disclosure = "\n\n".join(as_of_sections) if as_of_sections else ""
-    return foundation, core_canon, disclosure
 
 def extract_chapter_outline(outline_text, chapter_num):
     """Extract a specific chapter's outline entry from the DETAILED section.
@@ -200,7 +164,9 @@ def main():
     characters = load_file(paths.get_characters_path())
     outline = load_file(paths.get_outline_path())
     canon_text = load_file(paths.get_canon_path())
-    canon_foundation, canon_core, canon_disclosure = parse_canon(canon_text)
+    # Chapter-scoped writer view: public foundation + core + prior As-of only.
+    # Sealed foundation (visible_from > chapter_num) is structurally excluded.
+    canon_view = canon_mod.writer_view_md(canon_mod.parse_canon(canon_text), chapter_num)
     
     # Chapter-specific context
     chapter_outline = extract_chapter_outline(outline, chapter_num)
@@ -352,26 +318,12 @@ CHARACTER REGISTRY (reference for speech patterns and behavior):
 {characters}
 """
 
-    if canon_foundation:
+    if canon_view:
         prompt += f"""
-FOUNDATION CANON (private author truth — this shapes how characters think and act,
-but is NOT something they or the narration may state as already established):
-{canon_foundation}
-"""
-
-    if canon_core:
-        prompt += f"""
-CORE CANON (permanent established facts — relationships, world rules, secrets
-that the reader already knows. Reference these naturally; do not re-introduce them):
-{canon_core}
-"""
-
-    if canon_disclosure:
-        prompt += f"""
-DISCLOSURE CEILING (everything that has been put on the page so far. Anything not listed here,
-including anything from the world/character bible, must be introduced through this chapter's
-events — not assumed, not name-dropped):
-{canon_disclosure}
+CANON AS OF THIS CHAPTER (facts the reader may already know; anything else must
+be introduced through this chapter's events — not assumed, not name-dropped).
+Sealed author truths are intentionally withheld and must not be invented or hinted:
+{canon_view}
 """
 
     # Cross-chapter crutch memory: ban distinctive phrases already overused

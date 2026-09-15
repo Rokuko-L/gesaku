@@ -19,7 +19,8 @@ from core import paths
 load_dotenv()
 
 def call_writer(prompt, max_tokens=get_max_tokens_with_thinking(16000)):
-    return call_llm(prompt=prompt, model_key="writer", max_tokens=max_tokens, beta_context=True, timeout=600)
+    # Local thinking-proxy outline blocks routinely need >600s.
+    return call_llm(prompt=prompt, model_key="writer", max_tokens=max_tokens, beta_context=True, timeout=1200)
 
 def validate_block_output(text, start, end):
     missing = []
@@ -30,6 +31,24 @@ def validate_block_output(text, start, end):
     if missing:
         return False, f"Missing detailed outlines for: {', '.join(missing)}"
     return True, ""
+
+def extract_chapter_outlines(block_text, start, end):
+    """Isolate each chapter's outline. Missing chapters become a soft error.
+
+    The previous all-or-nothing regex required every header; a single
+    mis-numbered chapter killed the whole foundation run after the LLM
+    had already produced a usable block.
+    """
+    found = {}
+    missing = []
+    for ch in range(start, end + 1):
+        pattern = rf'###\s*\*?\*?\s*(?:Chapter|Ch\.?)\s*\*?\*?\s*{ch}\b.*?(?=###\s*\*?\*?\s*(?:Chapter|Ch\.?)\s*\*?\*?\s*(?:\d+)\b|## Act|## Foreshadowing|$)'
+        match = re.search(pattern, block_text, re.IGNORECASE | re.DOTALL)
+        if match:
+            found[ch] = match.group(0).strip()
+        else:
+            missing.append(ch)
+    return found, missing
 
 def _act_ranges(total_chapters):
     """Proportional 3-act boundaries (~25/50/25) valid for any chapter count.
@@ -128,6 +147,31 @@ def main():
     mystery = required["MYSTERY.md"].read_text()
     craft = required["CRAFT.md"].read_text()
     voice = required["voice.md"].read_text()
+
+    # Optional: sealed foundation (canon generated before outline when available).
+    # Used only for plant-hygiene gates and action-plant guidance — never as prose.
+    from core import canon as canon_mod
+    from core import plant_hygiene
+    canon_path = paths.get_canon_path()
+    canon_text = canon_path.read_text(encoding="utf-8") if canon_path.exists() else ""
+    parsed_canon = canon_mod.parse_canon(canon_text)
+    reveal_chapter = parsed_canon.reveal_chapter()
+    hygiene_denylist = canon_mod.sealed_denylist_terms(parsed_canon)
+    plant_characters = canon_mod.action_plant_characters(parsed_canon, characters)
+    plant_guidance = ""
+    if reveal_chapter and reveal_chapter > 1:
+        plant_list = ", ".join(plant_characters) if plant_characters else "(none auto-detected)"
+        deny = ", ".join(hygiene_denylist[:20]) if hygiene_denylist else "(see canon)"
+        plant_guidance = f"""
+ACTION-SHAPED PLANTS (pre-reveal chapters 1-{reveal_chapter - 1}):
+A major truth is sealed until chapter {reveal_chapter}. Before that chapter:
+- Beats must be ACTION-SHAPED: what a character on the page can see/hear/do.
+- Do NOT write meaning-shaped beats (who "secretly" is, who "really" controls what).
+- Do NOT use these sealed terms in pre-reveal beats: {deny}
+- These characters must appear as agents with observable action in multiple
+  pre-reveal chapters (so a later retrofit has material): {plant_list}.
+  Example action plant: "Mira arrives late, leaves a sealed letter on the table, does not explain."
+"""
     
     # Extract voice part 2
     voice_lines = voice.split('\n')
@@ -207,34 +251,67 @@ FORMAT REQUIREMENT:
 Your output must be structured markdown. Start the roadmap section with "## HIGH-LEVEL ROADMAP" and the ledger section with "## GLOBAL PLOT THREADS LEDGER".
 Each chapter entry must start with "### Chapter N:".
 """
+        # Roadmap generation is expensive on a thinking proxy. Tonel drift is a
+        # quality signal, not a hard gate — after retries we keep the last
+        # structurally valid roadmap instead of killing the whole foundation.
         roadmap_content = ""
-        for attempt in range(1, 4):
+        best_structurally_valid = ""
+        best_drift_feedback = ""
+        max_roadmap_attempts = int(os.getenv("GESAKU_OUTLINE_ROADMAP_ATTEMPTS", "6"))
+        for attempt in range(1, max_roadmap_attempts + 1):
             try:
                 res = call_writer(roadmap_prompt)
             except TruncationError as e:
                 print(f"  WARN: Roadmap attempt {attempt} truncated ({e}), retrying...", file=sys.stderr)
                 continue
-            if "## HIGH-LEVEL ROADMAP" in res and "## GLOBAL PLOT THREADS LEDGER" in res:
-                # Run the tonal drift check
+            except Exception as e:
+                print(f"  WARN: Roadmap attempt {attempt} failed: {e}", file=sys.stderr)
+                continue
+            if "## HIGH-LEVEL ROADMAP" not in res or "## GLOBAL PLOT THREADS LEDGER" not in res:
+                print(f"  WARN: Roadmap missing expected headers on attempt {attempt}, retrying...", file=sys.stderr)
+                continue
+
+            # Keep the last structurally valid draft even if drift check fails.
+            best_structurally_valid = res
+
+            try:
                 has_drift, feedback = verify_tonal_drift(res, seed, genre_name, total_chapters)
-                if not has_drift:
-                    roadmap_content = res
-                    break
-                else:
-                    print(f"  WARN: Roadmap attempt {attempt} failed tonal drift check:\n{feedback}", file=sys.stderr)
-                    # Add drift feedback to prompt for self-correction
-                    roadmap_prompt += f"\n\nERROR ON ATTEMPT {attempt}: {feedback}\nEnsure that the proposed outline maintains a consistent tone, stakes register, and world/magic rules between Act 1 and Acts 2/3."
-            else:
-                print(f"  WARN: Roadmap missing expected headers (## HIGH-LEVEL ROADMAP and/or ## GLOBAL PLOT THREADS LEDGER) on attempt {attempt}, retrying...", file=sys.stderr)
+            except TruncationError as e:
+                # Truncated judge verdict is unknown, not "no drift" — retry.
+                print(f"  WARN: Drift check attempt {attempt} truncated ({e}), retrying...", file=sys.stderr)
+                continue
+
+            if not has_drift:
+                roadmap_content = res
+                break
+
+            print(f"  WARN: Roadmap attempt {attempt} failed tonal drift check:\n{feedback}", file=sys.stderr)
+            best_drift_feedback = feedback
+            roadmap_prompt += (
+                f"\n\nERROR ON ATTEMPT {attempt}: {feedback}\n"
+                "Ensure that the proposed outline maintains a consistent tone, "
+                "stakes register, and world/magic rules between Act 1 and Acts 2/3."
+            )
+
         if not roadmap_content:
-            print("ERROR: Failed to generate valid roadmap.", file=sys.stderr)
-            sys.exit(1)
-            
+            if best_structurally_valid:
+                print(
+                    "  WARN: accepting last structurally valid roadmap despite tonal drift "
+                    "(quality gate, not fatal).",
+                    file=sys.stderr,
+                )
+                roadmap_content = best_structurally_valid
+            else:
+                print("ERROR: Failed to generate valid roadmap.", file=sys.stderr)
+                sys.exit(1)
+
         roadmap_path.write_text(roadmap_content, encoding="utf-8")
 
     # Phase 2: Block Expansion
-    # We will expand in blocks of 10 chapters
-    block_size = 10
+    # Larger blocks (10) blew past local-proxy timeouts for a 24-chapter
+    # thinking model. Smaller chunks finish and checkpoint outline.md so a
+    # resume does not restart from chapter 1.
+    block_size = int(os.getenv("GESAKU_OUTLINE_BLOCK_SIZE", "4"))
     blocks = []
     for start in range(1, total_chapters + 1, block_size):
         end = min(start + block_size - 1, total_chapters)
@@ -333,37 +410,93 @@ CRITICAL RULES:
     - beat_label: scene description
   using these beat labels IN ORDER: {numbered_beats}
   Each bullet's scene description is 1-2 sentences. Put this section right after the "Emotional Arc" line and before the other fields. Then continue with the remaining fields (Summary, Scene Stakes, Scene Beats, Plants & Harvests).
+{plant_guidance}
 """
         # Append retry feedback if editing Block 1
         if start == 1 and args.retry_feedback:
             block_prompt += f"\n\nYOUR PREVIOUS ATTEMPT FOR CHAPTER 1 HAD THESE ERRORS:\n{args.retry_feedback}\nMake sure Chapter 1 includes the PREMISE BEATS section in correct format."
 
         block_result = ""
+        last_err = ""
+        last_hygiene_leaks: list[str] = []
         for attempt in range(1, 4):
             try:
                 res = call_writer(block_prompt)
             except TruncationError as e:
+                last_err = f"truncated: {e}"
                 print(f"  WARN: Block Ch {start}-{end} attempt {attempt} truncated ({e}), retrying...", file=sys.stderr)
                 continue
+            except Exception as e:
+                last_err = str(e)
+                print(f"  WARN: Block Ch {start}-{end} attempt {attempt} failed: {e}", file=sys.stderr)
+                continue
             passed, err = validate_block_output(res, start, end)
+            if passed and reveal_chapter and reveal_chapter > 1:
+                leaks = plant_hygiene.check_pre_reveal_leaks(
+                    res, hygiene_denylist, reveal_chapter
+                )
+                if leaks:
+                    # Hygiene is a quality signal. On the final attempt we
+                    # accept a structurally valid block and warn — a ch1
+                    # "true nature"/"mask" phrasing should not kill foundation.
+                    last_hygiene_leaks = leaks
+                    if attempt < 3:
+                        passed = False
+                        err = "plant-hygiene: " + "; ".join(leaks[:8])
+                    else:
+                        print(
+                            f"  WARN: accepting Block Ch {start}-{end} despite "
+                            f"{len(leaks)} plant-hygiene finding(s): {leaks[:4]}",
+                            file=sys.stderr,
+                        )
             if passed:
                 block_result = res
                 break
+            last_err = err
             print(f"  WARN: Block Ch {start}-{end} validation failed on attempt {attempt}/3: {err}. Retrying...", file=sys.stderr)
             block_prompt += f"\n\nERROR ON ATTEMPT {attempt}: {err}\nEnsure you write detailed outlines for all chapters from {start} to {end}."
-            
+
         if not block_result:
-            print(f"ERROR: Failed to expand Block Ch {start}-{end}.", file=sys.stderr)
+            # Partial outline.md is better than a silent missing file: the
+            # caller can resume and skip already-expanded blocks.
+            if detailed_outlines:
+                full_outline_text = f"# {title.upper()}\n\n" + roadmap_content + "\n\n## DETAILED CHAPTER OUTLINES\n\n" + \
+                                    "\n\n---\n\n".join(detailed_outlines[ch] for ch in sorted(detailed_outlines.keys()))
+                outline_path.write_text(full_outline_text, encoding="utf-8")
+                print(f"  (saved partial outline.md with {len(detailed_outlines)} chapters before exit)",
+                      file=sys.stderr)
+            print(f"ERROR: Failed to expand Block Ch {start}-{end} after 3 attempts: {last_err}", file=sys.stderr)
             sys.exit(1)
 
-        # Parse and save the block chapters to detailed_outlines
-        for ch in range(start, end + 1):
-            pattern = rf'###\s*\*?\*?\s*(?:Chapter|Ch\.?)\s*\*?\*?\s*{ch}\b.*?(?=###\s*\*?\*?\s*(?:Chapter|Ch\.?)\s*\*?\*?\s*(?:\d+)\b|## Act|## Foreshadowing|$)'
-            match = re.search(pattern, block_result, re.IGNORECASE | re.DOTALL)
-            if match:
-                detailed_outlines[ch] = match.group(0).strip()
-            else:
-                print(f"ERROR: Could not isolate Chapter {ch} outline from block output.", file=sys.stderr)
+        # Parse block chapters. Keep any that isolated cleanly; retry only
+        # the missing ones so one bad header does not kill the whole run.
+        extracted, missing = extract_chapter_outlines(block_result, start, end)
+        if missing:
+            print(f"  WARN: Block Ch {start}-{end} missing chapters {missing}; retrying those once...",
+                  file=sys.stderr)
+            retry_prompt = block_prompt + (
+                f"\n\nPREVIOUS OUTPUT WAS MISSING: {missing}. "
+                "Output ONLY the detailed outlines for those chapters, each starting "
+                "with '### Chapter N: [Title]'."
+            )
+            try:
+                retry_res = call_writer(retry_prompt)
+                more, still_missing = extract_chapter_outlines(retry_res, start, end)
+                extracted.update(more)
+                missing = still_missing
+            except Exception as e:
+                print(f"  WARN: retry for missing chapters failed: {e}", file=sys.stderr)
+
+        detailed_outlines.update(extracted)
+        if missing:
+            print(f"  WARN: Block Ch {start}-{end} still missing {missing} after retry; continuing.",
+                  file=sys.stderr)
+            if not extracted:
+                print(f"ERROR: Block Ch {start}-{end} produced no isolatable chapters.", file=sys.stderr)
+                if detailed_outlines:
+                    full_outline_text = f"# {title.upper()}\n\n" + roadmap_content + "\n\n## DETAILED CHAPTER OUTLINES\n\n" + \
+                                        "\n\n---\n\n".join(detailed_outlines[ch] for ch in sorted(detailed_outlines.keys()))
+                    outline_path.write_text(full_outline_text, encoding="utf-8")
                 sys.exit(1)
 
         # Save active block progress in outline.md immediately
@@ -419,10 +552,28 @@ CRITICAL RULES:
     full_outline_text = f"# {title.upper()}\n\n" + roadmap_content + "\n\n## DETAILED CHAPTER OUTLINES\n\n" + \
                         "\n\n---\n\n".join(detailed_outlines[ch] for ch in sorted(detailed_outlines.keys()))
     outline_path.write_text(full_outline_text, encoding="utf-8")
-    
+
+    # Plant hygiene sidecar (leaks + coverage). Failures warn here; run_pipeline
+    # re-checks after foundation and can regenerate.
+    if reveal_chapter and reveal_chapter > 1:
+        hy_ok, hy_err, hy_side = plant_hygiene.validate_outline_plant_hygiene(
+            full_outline_text, canon_text, characters
+        )
+        side_path = paths.get_project_dir() / "plant_hygiene.json"
+        side_path.write_text(json.dumps(hy_side, indent=2), encoding="utf-8")
+        if not hy_ok:
+            print(f"[WARN] Outline plant hygiene failed: {hy_err}", file=sys.stderr)
+            print("See plant_hygiene.json — run_pipeline will gate on this.", file=sys.stderr)
+        else:
+            print(
+                f"Plant hygiene OK (reveal ch{reveal_chapter}, "
+                f"plants={hy_side.get('action_plant_characters')})",
+                file=sys.stderr,
+            )
+
     # Save a copy as .outline_part1.md for backwards compatibility
     (paths.get_project_dir() / ".outline_part1.md").write_text(full_outline_text, encoding="utf-8")
-    
+
     print("Outline generation complete!", file=sys.stderr)
 
 if __name__ == "__main__":

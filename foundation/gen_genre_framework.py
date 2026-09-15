@@ -294,6 +294,9 @@ def main():
                         help="Target word count per chapter (default: 3200)")
     parser.add_argument("--perspective", default="", choices=["", "first_person", "third_person"],
                         help="Force narrative perspective (first_person / third_person). Empty = let foundation decide.")
+    parser.add_argument("--prose-mode", default=os.environ.get("GESAKU_PROSE_MODE", ""),
+                        choices=["", "first_intimate", "first_voicey", "third_close", "third_scene"],
+                        help="Prose distance/rhythm pack. Empty = no pack (foundation defaults).")
     parser.add_argument("--notes", default=os.environ.get("GESAKU_NOTES", ""),
                         help="User's specific ideas: character names, plot twists, Chekhov's guns")
     args = parser.parse_args()
@@ -356,6 +359,17 @@ def main():
                 "draft instructions must require strict third-person. Never switch to first-person."
             )
 
+    prose_mode_directive = ""
+    if args.prose_mode:
+        from core.genre import load_prose_pack
+        pack = load_prose_pack(args.prose_mode)
+        prose_mode_directive = (
+            f"\n=== PROSE MODE ({args.prose_mode}) ===\n"
+            f"Bake this prose-distance pack into identity.chapter_system, "
+            f"generation.draft_chapter_instructions, generation.anti_pattern_rules, "
+            f"and evaluation.chapter so drafting and scoring enforce it.\n\n{pack}\n"
+        )
+
     print(f"Generating genre config for: {args.genre} ({chapter_count} chapters, {estimated_words:,} words)...", file=sys.stderr)
     if args.notes:
         print(f"User notes: {args.notes}", file=sys.stderr)
@@ -370,7 +384,7 @@ def main():
         words_per_chapter=args.words_per_chapter,
         beats_per_chapter=beats_per_chapter,
         words_per_beat=words_per_beat,
-        user_directives_block=user_block + perspective_directive
+        user_directives_block=user_block + perspective_directive + prose_mode_directive
     )
 
     config1 = None
@@ -442,7 +456,7 @@ def main():
         words_per_chapter=args.words_per_chapter,
         beats_per_chapter=beats_per_chapter,
         words_per_beat=words_per_beat,
-        user_directives_block=user_block + perspective_directive
+        user_directives_block=user_block + perspective_directive + prose_mode_directive
     )
 
     config2 = None
@@ -470,6 +484,7 @@ def main():
             merged_config["generation"] = config2["generation"]
             merged_config["user_directives"] = user_field
             merged_config["perspective"] = args.perspective or ""
+            merged_config["prose_mode"] = args.prose_mode or ""
 
             # Correct chapter counts and estimated words
             if "outline" in merged_config["generation"]:

@@ -13,6 +13,7 @@ sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
 from core.llm import call_llm, extract_text_from_response, get_max_tokens_with_thinking
 from core import paths
 from core import llm
+from core import canon as canon_mod
 import os
 import sys
 import json
@@ -37,18 +38,12 @@ def edit_chapter(ch_num):
     text = ch_path.read_text(encoding="utf-8")
     word_count = len(text.split())
 
-    # Load canon disclosure ceiling (everything revealed through prior chapters)
+    # Load prior-chapter disclosure only (no sealed foundation, no future as-of)
     canon_text = ""
     canon_path = paths.get_canon_path()
     if canon_path.exists():
         raw = canon_path.read_text(encoding="utf-8")
-        as_of_sections = re.findall(r'(## As of Chapter \d+.*?)(?=\n## |\Z)', raw, re.DOTALL)
-        if as_of_sections:
-            prior = [s for s in as_of_sections
-                     if re.search(r'## As of Chapter (\d+)', s)
-                     and int(re.search(r'## As of Chapter (\d+)', s).group(1)) < ch_num]
-            if prior:
-                canon_text = prior[-1]
+        canon_text = canon_mod.disclosure_md(canon_mod.parse_canon(raw), ch_num)
 
     prompt = EDIT_PROMPT.format(chapter_text=text, word_count=word_count, canon_context=canon_text or "(first chapter or no canon established yet)")
     raw = call_judge(prompt)

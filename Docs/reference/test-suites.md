@@ -15,6 +15,9 @@ via discovery: `uv run python -m unittest discover -s scratch -p "test_*.py"`.
 | `scratch/test_import_integrity.py` | AST-scans every import statement (incl. lazy function-level ones) resolves; utils.py stays deleted (2 tests) | unittest |
 | `scratch/test_gatekeepers.py` | outline gatekeepers execute for real — drift verdicts block/pass, short books skip without LLM calls (4 tests) | unittest |
 | `scratch/test_static_analysis.py` | ruff pyflakes gate: no undefined names (F821), no accidental redefinitions (F811) across the repo (1 test) | unittest |
+| `scratch/test_canon_scoping.py` | sealed foundation views, As-of chapter filter, denylist terms | unittest |
+| `scratch/test_plant_coverage.py` | pre-reveal outline leak regex + action-plant coverage floor | unittest |
+| `scratch/test_retrofit_gate.py` | retrofit coverage block + non-blocking continuity report | unittest |
 
 Script-style suites exit non-zero on failure and print `[PASS]/[FAIL]` lines.
 

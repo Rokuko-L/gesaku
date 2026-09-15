@@ -20,6 +20,7 @@ sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
 from core.llm import TruncationError, call_llm, extract_text_from_response, get_max_tokens_with_thinking, parse_json_response
 from core import paths
 from core import textstats
+from core import canon as canon_mod
 import argparse
 import json
 import os
@@ -422,7 +423,14 @@ def call_judge(prompt, max_tokens=2000):
         system += (f"\n\nPERSPECTIVE RULE: The novel is mandated {expected}. If the chapter drifts "
                    "out of this narration mode, flag it under prose_quality or voice_adherence "
                    "with a specific quote of the offending passage.")
-    return call_llm(prompt=prompt, system=system, model_key="judge", max_tokens=max_tokens, beta_context=True, timeout=180)
+    from core.genre import prose_mode_system_block
+    prose_block = prose_mode_system_block(genre_cfg)
+    if prose_block:
+        system += (prose_block +
+                   "\n\nPROSE MODE RULE: Score against this pack. Penalize staccato 1–4 word "
+                   "paragraph stacks, empty emotion labels, diary-summary interiority, wrong "
+                   "narrative distance, and repeated stock metaphors. Quote offenders.")
+    return call_llm(prompt=prompt, system=system, model_key="judge", max_tokens=max_tokens, beta_context=True, timeout=1800)
 
 
 def call_judge_json(prompt, max_tokens=8000, retries=3, model=None):
@@ -548,11 +556,11 @@ def evaluate_foundation():
 
 # --- Chapter Evaluation ---
 
-def build_chapter_prompt(voice, world, characters, canon, chapter_outline, prev_chapter_tail, chapter_text, disclosure_ceiling="", debt_warnings=None):
+def build_chapter_prompt(voice, world, characters, canon_view, chapter_outline, prev_chapter_tail, chapter_text, debt_warnings=None):
     cfg = load_genre()
     ccfg = cfg["evaluation"]["chapter"]
     prompt = ccfg["overall_calibration"] + "\n\n"
-    
+
     if debt_warnings:
         prompt += f"CRITICAL REQUIREMENT: This chapter MUST resolve the following active narrative setups/debts:\n"
         prompt += "\n".join(f"- {w}" for w in debt_warnings)
@@ -567,8 +575,10 @@ WORLD BIBLE (summary):
 CHARACTER REGISTRY:
 {characters}
 
-CANON (established hard facts -- violations are bugs):
-{canon}
+CANON AS OF THIS CHAPTER (hard facts the reader may already know — violations are bugs.
+Sealed author truths are withheld on purpose; do not treat missing secrets as errors,
+and do not reward prose for leaking them early):
+{canon_view}
 
 CHAPTER OUTLINE ENTRY:
 {chapter_outline}
@@ -579,9 +589,6 @@ PREVIOUS CHAPTER (last ~600 words):
 THE CHAPTER TO EVALUATE:
 {chapter_text}
 
-DISCLOSURE CEILING (everything that has been put on the page through the prior chapter):
-{disclosure_ceiling}
-
 CANON-GROUNDING RULES (read before scoring):
 - new_canon_entries: Each entry is an object with a "fact" string and a "scope" that is either "core" or "incremental".
   - core:     Permanent world rules, character relationships, secrets, faction alignments,
@@ -591,10 +598,12 @@ CANON-GROUNDING RULES (read before scoring):
   If in doubt, default to "incremental". Only mark as "core" if the fact is foundational
   and will never change.
   Record only what was explicitly shown or stated in this chapter's text. Never record
-  background facts from the world/character bible that haven't been put on the page.
+  background facts from the world/character bible that haven't put on the page.
 - unexplained_references: Names, titles, or terms used in this chapter whose meaning
   a first-time reader would not yet understand (e.g. if a character is addressed as "the Saint"
   but the role hasn't been explained yet).
+- Do not penalize the chapter for failing to reveal or use facts that are not in the
+  CANON AS OF THIS CHAPTER block. Do not dock for "over-caution" about unrevealed truths.
 
 CROSS-CHECKS (perform before scoring):
 1. QUOTE TEST: Find the 3 best sentences and 3 weakest sentences.
@@ -804,18 +813,8 @@ def evaluate_chapter(chapter_num):
     prev_text = load_chapter(chapter_num - 1) if chapter_num > 1 else "(first chapter)"
     prev_tail = textstats.tail_context(prev_text, max_words=600) if chapter_num > 1 else prev_text
 
-    # Extract disclosure ceiling from canon (everything revealed through chapter N-1)
-    disclosure_ceiling = ""
-    canon_text = layers["canon"]
-    if canon_text.strip():
-        as_of_sections = re.findall(r'(## As of Chapter \d+.*?)(?=\n## |\Z)', canon_text, re.DOTALL)
-        if as_of_sections:
-            # Filter to chapters before the current one
-            prior_sections = [s for s in as_of_sections
-                             if re.search(rf'## As of Chapter (\d+)', s)
-                             and int(re.search(r'## As of Chapter (\d+)', s).group(1)) < chapter_num]
-            if prior_sections:
-                disclosure_ceiling = "\n\n".join(prior_sections)
+    # Reader-knowledge view: public foundation + core + prior As-of. Sealed facts withheld.
+    canon_view = canon_mod.judge_view_md(canon_mod.parse_canon(layers["canon"]), chapter_num)
 
     # Check for active narrative debts to resolve in this chapter
     chapter_harvests = re.findall(r'\[Harvest:\s*([a-zA-Z0-9_-]+)', chapter_outline, re.IGNORECASE)
@@ -837,11 +836,10 @@ def evaluate_chapter(chapter_num):
         voice=layers["voice"],
         world=layers["world"][:4000],  # truncate world bible
         characters=layers["characters"],
-        canon=layers["canon"],
+        canon_view=canon_view,
         chapter_outline=chapter_outline,
         prev_chapter_tail=prev_tail,
         chapter_text=chapter_text,
-        disclosure_ceiling=disclosure_ceiling,
         debt_warnings=active_debts_to_resolve,
     )
     result = call_judge_json(prompt, max_tokens=8000, model=validation.ScoreOutput)

@@ -180,6 +180,29 @@ def format_prompt(template, **kwargs):
     return result
 
 
+PROSE_MODES = ("first_intimate", "first_voicey", "third_close", "third_scene")
+_PROSE_DIR = BASE_DIR.parent / "fuel" / "prose"
+
+
+def load_prose_pack(mode: str) -> str:
+    """Return fuel/prose/<mode>.md, or empty string if unset/missing."""
+    if not mode:
+        return ""
+    p = _PROSE_DIR / f"{mode}.md"
+    if not p.is_file():
+        return ""
+    return p.read_text(encoding="utf-8")
+
+
+def prose_mode_system_block(genre_cfg: dict) -> str:
+    """System-prompt fragment for the project's prose mode, if any."""
+    mode = (genre_cfg or {}).get("prose_mode") or ""
+    pack = load_prose_pack(mode)
+    if not pack:
+        return ""
+    return f"\n\n=== PROSE MODE ({mode}) ===\n{pack}\n"
+
+
 # CLI usage: python genre.py --validate
 if __name__ == "__main__":
     import argparse

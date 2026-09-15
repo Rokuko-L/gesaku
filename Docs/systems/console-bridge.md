@@ -41,6 +41,12 @@ in `localStorage.gesaku_active_project`.
   `run_pipeline.py` through `RunManager.launch` — detached process group,
   stdout captured to `logs/<ts>_webui.log`, metadata persisted to the
   project's `run.json` so liveness survives bridge restarts.
+- **Story creator (default):** `ProjectsGallery` structured form (logline,
+  protagonist gist, cast + awareness, arcs, optional hidden-truth/reveal,
+  optional freeform attach) is serialized client-side into `notes` before
+  launch. Toggle `[paste notes]` restores the classic dump box / file path.
+  `name` is the **project folder id**, not the novel title (pipeline invents
+  the title; optional `workingTitle` is author-only).
 - Liveness probes are signal-0-safe (`OpenProcess` on Windows — plain
   `os.kill(pid, 0)` would TerminateProcess there).
 - `POST /api/run/stop` terminates the run (in-process handle, or by pid for

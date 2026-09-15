@@ -7,10 +7,10 @@ import { useState } from 'react'
  */
 
 /** Collapsible info tooltip — inline onboarding without modal interruption. */
-export function Hint({ children, label = '?' }) {
+export function Hint({ children, label = '?', below = false }) {
   const [open, setOpen] = useState(false)
   return (
-    <span className="hint-wrap">
+    <span className={`hint-wrap${below ? ' hint-below' : ''}`}>
       <button
         type="button"
         aria-label="what is this?"

@@ -29,6 +29,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -155,19 +156,29 @@ def run_foundation(state: dict) -> dict:
         state["iteration"] = i
 
         # 1. Generate planning documents
+        # Thinking models on a local proxy routinely exceed 600s for world/
+        # character bibles and outline blocks; the old 600s cap killed
+        # gen_world / gen_outline mid-call.
+        FOUNDATION_STEP_TIMEOUT = int(os.getenv("GESAKU_FOUNDATION_TIMEOUT", "3600"))
         step("Generating world bible...")
-        uv_run("foundation/gen_world.py", timeout=600)
+        uv_run("foundation/gen_world.py", timeout=FOUNDATION_STEP_TIMEOUT)
 
         step("Generating characters...")
-        uv_run("foundation/gen_characters.py", timeout=600)
+        uv_run("foundation/gen_characters.py", timeout=FOUNDATION_STEP_TIMEOUT)
 
         step("Generating title tournament...")
         current_title = load_state().get("title", "")
         if not current_title or current_title == "Untitled":
-            uv_run("foundation/gen_title.py", timeout=600)
+            uv_run("foundation/gen_title.py", timeout=FOUNDATION_STEP_TIMEOUT)
+
+        # Canon before outline so plant hygiene can use sealed-fact denylist.
+        step("Generating canon...")
+        uv_run("foundation/gen_canon.py", timeout=FOUNDATION_STEP_TIMEOUT)
 
         step("Generating outline (part 1)...")
-        uv_run("foundation/gen_outline.py", timeout=900)
+        # Block-level LLM calls for a 24-chapter thinking model easily exceed
+        # 30 minutes when the proxy retries/timeouts stack.
+        uv_run("foundation/gen_outline.py", timeout=max(3600, FOUNDATION_STEP_TIMEOUT))
 
         # Validate Chapter 1 premise beats (pre-draft gate)
         outline_path = paths.get_outline_path()
@@ -217,22 +228,41 @@ def run_foundation(state: dict) -> dict:
         ph_passed, ph_error = validate_plants_harvests(outline_text)
         if not ph_passed:
             step(f"WARNING: Outline plants/harvests validation issues found:\n{ph_error}")
-        
+
+        # Plant hygiene: sealed-term leaks + action-plant coverage (twist stories)
+        try:
+            from core import canon as canon_mod
+            from core import plant_hygiene as plant_hygiene_mod
+            canon_text = paths.get_canon_path().read_text(encoding="utf-8")
+            characters_text = paths.get_characters_path().read_text(encoding="utf-8")
+            hy_ok, hy_err, hy_side = plant_hygiene_mod.validate_outline_plant_hygiene(
+                outline_text, canon_text, characters_text
+            )
+            (paths.get_project_dir() / "plant_hygiene.json").write_text(
+                json.dumps(hy_side, indent=2), encoding="utf-8"
+            )
+            if not hy_ok:
+                step(f"WARNING: Outline plant hygiene failed:\n{hy_err}")
+                # Block-level retries already ran in gen_outline. Here we only
+                # surface the sidecar; regenerating the whole outline on a
+                # late-block leak would throw away good earlier chapters.
+            else:
+                step(f"Plant hygiene OK (reveal={hy_side.get('reveal_chapter')})")
+        except Exception as e:
+            step(f"Plant hygiene check skipped: {e}")
+
         state.update(load_state())
         debts = extract_outline_debts(outline_text)
         state["debts"] = debts
         save_state(state)
         step(f"Logged {len(debts)} active narrative debts in project state.")
 
-        step("Generating canon...")
-        uv_run("foundation/gen_canon.py", timeout=600)
-
         step("Running voice fingerprint...")
         uv_run("pipeline/voice_fingerprint.py", timeout=600)
 
         # 2. Evaluate
         step("Evaluating foundation...")
-        eval_result = uv_run("pipeline/evaluate.py --phase=foundation", timeout=300)
+        eval_result = uv_run("pipeline/evaluate.py --phase=foundation", timeout=900)
         score = parse_score(eval_result.stdout, "overall_score")
         lore = parse_lore_score(eval_result.stdout)
 
@@ -351,6 +381,23 @@ def update_canon_from_eval(ch: int, attempt_num: int = None, eval_log_path=None)
         print(f"  WARN: Could not extract canon entries from eval log: {e}", file=sys.stderr)
 
 
+def on_chapter_kept(ch: int, reextract: bool = False) -> None:
+    """Fail-soft post-keep hook: extract prose-emergent micro-plants.
+
+    Never blocks drafting/revision. Distinct from outline-tag `state["debts"]`.
+    """
+    script = "pipeline/extract_micro_plants.py"
+    cmd = f'"{sys.executable}" {script} {ch}'
+    if reextract:
+        cmd += " --reextract"
+    try:
+        rep = run_tool(cmd, timeout=120, check=False)
+        if rep.returncode != 0:
+            step(f"micro-plant extract skipped for ch{ch} (rc={rep.returncode})")
+    except Exception as e:
+        step(f"micro-plant extract failed for ch{ch}: {e}")
+
+
 REVISION_CANON_HEADER = "## Revision Sync"
 
 
@@ -422,6 +469,42 @@ def resync_canon_after_cycle(kept_results: list, cycle: int):
 # ---------------------------------------------------------------------------
 # PHASE 2 — DRAFTING
 # ---------------------------------------------------------------------------
+
+def _maybe_run_reveal_retrofit(state: dict, ch: int) -> None:
+    """After the reveal chapter is kept, retrofit ch 1..R-1 once.
+
+    Under-planted outlines block the pass (see pipeline/retrofit_reveal.py).
+    Never retries in a loop — state flag marks completion either way.
+    """
+    if state.get("reveal_retrofit_done"):
+        return
+    try:
+        from core import canon as canon_mod
+        canon_path = paths.get_canon_path()
+        if not canon_path.exists():
+            return
+        parsed = canon_mod.parse_canon(canon_path.read_text(encoding="utf-8"))
+        reveal = parsed.reveal_chapter()
+        if not reveal or ch != reveal:
+            return
+        step(f"Reveal chapter {reveal} kept — running post-reveal retrofit...")
+        result = uv_run("pipeline/retrofit_reveal.py", timeout=1800)
+        state["reveal_retrofit_done"] = True
+        state["reveal_retrofit_exit"] = result.returncode
+        save_state(state)
+        if result.returncode == 2:
+            step("Retrofit BLOCKED (under-planted). See retrofit_report.json — "
+                 "continuing; revision cycles can still polish early chapters.")
+        elif result.returncode != 0:
+            step(f"Retrofit exited {result.returncode}; continuing drafting.")
+        else:
+            git_add_commit(f"retrofit: post-reveal pass through ch{reveal - 1}")
+            step("Retrofit complete.")
+    except Exception as e:
+        step(f"Reveal retrofit skipped due to error: {e}")
+        state["reveal_retrofit_done"] = True
+        save_state(state)
+
 
 def run_drafting(state: dict) -> dict:
     """
@@ -517,8 +600,21 @@ def run_drafting(state: dict) -> dict:
             step(f"Drafted {word_count} words")
 
             # Evaluate
-            eval_result = uv_run(f"pipeline/evaluate.py --chapter={ch}", timeout=300)
-            score = parse_score(eval_result.stdout, "overall_score")
+            # A timed-out eval is not a fatal drafting error — retry the eval
+            # before giving up on a scored keep.
+            eval_result = None
+            score = None
+            for eval_try in range(1, 4):
+                eval_result = uv_run(f"pipeline/evaluate.py --chapter={ch}", timeout=2400)
+                try:
+                    score = parse_score(eval_result.stdout, "overall_score")
+                    break
+                except ValueError as e:
+                    if eval_try < 3:
+                        step(f"eval parse failed for Ch {ch} (try {eval_try}/3): {e} — retrying eval")
+                        time.sleep(5 * eval_try)
+                        continue
+                    raise
             step(f"Chapter {ch} score: {score}")
 
             # Pin the exact eval log of THIS attempt (evaluate.py prints 'eval_log: <path>')
@@ -540,6 +636,8 @@ def run_drafting(state: dict) -> dict:
 
                 # Append canon entries from the eval JSON LOG FILE
                 update_canon_from_eval(ch, attempt_num=attempt, eval_log_path=eval_log_path)
+                on_chapter_kept(ch)
+                _maybe_run_reveal_retrofit(state, ch)
 
                 drafted = True
                 break
@@ -582,6 +680,8 @@ def run_drafting(state: dict) -> dict:
                     state["chapters_drafted"] = ch
                     save_state(state)
                     update_canon_from_eval(ch, attempt_num=attempt, eval_log_path=eval_log_path)
+                    on_chapter_kept(ch)
+                    _maybe_run_reveal_retrofit(state, ch)
                     drafted = True
                     break
 
@@ -608,7 +708,7 @@ def run_drafting(state: dict) -> dict:
                         if rep.returncode == 0:
                             rep_wc = len(ch_file.read_text(encoding="utf-8").split())
                             step(f"Repaired Ch {ch} ({rep_wc}w) — re-evaluating...")
-                            rep_eval = uv_run(f"pipeline/evaluate.py --chapter={ch}", timeout=300)
+                            rep_eval = uv_run(f"pipeline/evaluate.py --chapter={ch}", timeout=900)
                             rep_score = parse_score(rep_eval.stdout, "overall_score")
                             step(f"Repaired Ch {ch} score: {rep_score}")
                             if rep_score >= chapter_gate:
@@ -622,6 +722,8 @@ def run_drafting(state: dict) -> dict:
                                 state["chapters_drafted"] = ch
                                 save_state(state)
                                 update_canon_from_eval(ch, attempt_num=attempt, eval_log_path=eval_log_path)
+                                on_chapter_kept(ch)
+                                _maybe_run_reveal_retrofit(state, ch)
                                 drafted = True
                                 break
                             elif rep_score > best_score and rep_score > 0:
@@ -666,6 +768,8 @@ def run_drafting(state: dict) -> dict:
                 # Append canon entries of the best attempt even when force-kept
                 update_canon_from_eval(ch, attempt_num=best_attempt_num,
                                        eval_log_path=attempt_log_paths.get(best_attempt_num))
+                on_chapter_kept(ch)
+                _maybe_run_reveal_retrofit(state, ch)
             else:
                 if best_draft_content is None:
                     reason = "no valid drafts were generated"
@@ -888,7 +992,7 @@ def run_revision(
         if run_adv or run_cuts:
             # Evaluate current baseline score (before Step 1/2 edits)
             step("Evaluating baseline novel score before Cycle edits...")
-            baseline_eval = uv_run("pipeline/evaluate.py --full", timeout=600)
+            baseline_eval = uv_run("pipeline/evaluate.py --full", timeout=1800)
             cycle_baseline_score = parse_score(baseline_eval.stdout, "novel_score")
             if cycle_baseline_score < 0:
                 cycle_baseline_score = parse_score(baseline_eval.stdout, "overall_score")
@@ -918,7 +1022,7 @@ def run_revision(
                 
                 # Evaluate full novel score after Step 1
                 step("Evaluating novel score after Adversarial Edits...")
-                post_adv_eval = uv_run("pipeline/evaluate.py --full", timeout=600)
+                post_adv_eval = uv_run("pipeline/evaluate.py --full", timeout=1800)
                 post_adv_score = parse_score_any(post_adv_eval.stdout, "novel_score", "overall_score")
                 
                 step(f"Adversarial edits score shift: {cycle_baseline_score} -> {post_adv_score}")
@@ -950,7 +1054,7 @@ def run_revision(
                 
                 # Evaluate full novel score after Step 2
                 step("Evaluating novel score after Mechanical Cuts...")
-                post_cuts_eval = uv_run("pipeline/evaluate.py --full", timeout=600)
+                post_cuts_eval = uv_run("pipeline/evaluate.py --full", timeout=1800)
                 post_cuts_score = parse_score_any(post_cuts_eval.stdout, "novel_score", "overall_score")
 
                 step(f"Mechanical cuts score shift: {post_adv_score} -> {post_cuts_score}")
@@ -1014,7 +1118,7 @@ def run_revision(
                 ch_num = item["chapter"]
                 question = item["question"]
                 try:
-                    pre_eval = uv_run(f"pipeline/evaluate.py --chapter={ch_num}", timeout=300)
+                    pre_eval = uv_run(f"pipeline/evaluate.py --chapter={ch_num}", timeout=900)
                     pre_score = parse_score(pre_eval.stdout, "overall_score")
 
                     brief_file = briefs_dir / f"ch{ch_num:02d}_cycle{cycle}_{question}.md"
@@ -1043,7 +1147,7 @@ def run_revision(
                     step(f"Revising Ch {ch_num} with brief {brief_file.name}...")
                     uv_run(f'pipeline/gen_revision.py {ch_num} "{brief_file}"', timeout=600)
 
-                    post_eval = uv_run(f"pipeline/evaluate.py --chapter={ch_num}", timeout=300)
+                    post_eval = uv_run(f"pipeline/evaluate.py --chapter={ch_num}", timeout=900)
                     post_score = parse_score(post_eval.stdout, "overall_score")
                     eval_log_path = None
                     m = re.search(r"eval_log:\s*(\S+)", post_eval.stdout)
@@ -1123,6 +1227,8 @@ def run_revision(
                                f"Cycle {cycle}: {r['question']} regressed {r['pre_score']}->{r['post_score']}")
             if kept_this_cycle:
                 resync_canon_after_cycle(kept_this_cycle, cycle)
+                for r in kept_this_cycle:
+                    on_chapter_kept(r["ch_num"], reextract=True)
         elif not skip_targeted_revisions:
             step("No strong consensus items found from panel")
         else:
@@ -1131,7 +1237,7 @@ def run_revision(
         # -- Step 6: Full novel evaluation --
         if not skip_full_novel_eval:
             step("Running full novel evaluation...")
-            full_eval = uv_run("pipeline/evaluate.py --full", timeout=600)
+            full_eval = uv_run("pipeline/evaluate.py --full", timeout=1800)
             try:
                 novel_score = parse_score_any(full_eval.stdout, "novel_score", "overall_score")
             except ValueError as e:
@@ -1141,7 +1247,7 @@ def run_revision(
             if novel_score is None or novel_score <= 0.0:
                 # 0.0 is almost always a judge failure — retry once
                 step("Novel score missing/0.0 detected, retrying evaluation...")
-                retry_eval = uv_run("pipeline/evaluate.py --full", timeout=600)
+                retry_eval = uv_run("pipeline/evaluate.py --full", timeout=1800)
                 try:
                     novel_score = parse_score_any(retry_eval.stdout, "novel_score", "overall_score")
                 except ValueError as e:
@@ -1269,7 +1375,7 @@ def run_revision(
                         
                         # Evaluate pre-revision score
                         step(f"Evaluating Ch {ch_num} before revision...")
-                        pre_eval = uv_run(f"pipeline/evaluate.py --chapter={ch_num}", timeout=300)
+                        pre_eval = uv_run(f"pipeline/evaluate.py --chapter={ch_num}", timeout=900)
                         pre_score = parse_score(pre_eval.stdout, "overall_score")
                         
                         step(f"Revising Ch {ch_num} from review brief...")
@@ -1277,7 +1383,7 @@ def run_revision(
                         
                         # Evaluate post-revision score
                         step(f"Evaluating Ch {ch_num} after revision...")
-                        post_eval = uv_run(f"pipeline/evaluate.py --chapter={ch_num}", timeout=300)
+                        post_eval = uv_run(f"pipeline/evaluate.py --chapter={ch_num}", timeout=900)
                         post_score = parse_score(post_eval.stdout, "overall_score")
                         
                         # Compare against historical best
@@ -1321,7 +1427,7 @@ def run_revision(
             apply_cuts_py = paths.get_root_dir() / "apply_cuts.py"
             if apply_cuts_py.exists():
                 # Evaluate score before cuts
-                pre_cuts_eval = uv_run("pipeline/evaluate.py --full", timeout=600)
+                pre_cuts_eval = uv_run("pipeline/evaluate.py --full", timeout=1800)
                 pre_cuts_score = parse_score_any(pre_cuts_eval.stdout, "novel_score", "overall_score")
 
                 run_tool(
@@ -1329,7 +1435,7 @@ def run_revision(
                     timeout=300)
 
                 # Evaluate score after cuts
-                post_cuts_eval = uv_run("pipeline/evaluate.py --full", timeout=600)
+                post_cuts_eval = uv_run("pipeline/evaluate.py --full", timeout=1800)
                 post_cuts_score = parse_score_any(post_cuts_eval.stdout, "novel_score", "overall_score")
 
                 step(f"Mechanical cuts score shift: {pre_cuts_score} -> {post_cuts_score}")
@@ -1727,6 +1833,17 @@ def run_pipeline(args):
         voice_template = root_dir / "fuel" / "voice.md"
         if voice_template.exists():
             shutil.copy2(voice_template, paths.get_voice_path())
+            prose_mode = getattr(args, "prose_mode", "") or os.environ.get("GESAKU_PROSE_MODE", "")
+            if prose_mode:
+                from core.genre import load_prose_pack
+                pack = load_prose_pack(prose_mode)
+                if pack:
+                    voice_path = paths.get_voice_path()
+                    existing = voice_path.read_text(encoding="utf-8")
+                    voice_path.write_text(
+                        existing + f"\n\n---\n\n## Prose mode ({prose_mode})\n\n{pack}\n",
+                        encoding="utf-8",
+                    )
                 
         save_state(state)
     else:
@@ -1801,7 +1918,11 @@ def run_pipeline(args):
 
                 # Step 1: Initialize genre configuration
                 active_genre_path = paths.get_active_genre_path()
-                if (not active_genre_path.exists() or args.from_scratch or args.genre) and args.genre:
+                # Only (re)build genre when missing or --from-scratch. Passing
+                # --genre on a normal resume used to force a regen and clobber
+                # an existing active_genre.json (chapter count / prompts).
+                should_init_genre = args.from_scratch or not active_genre_path.exists()
+                if should_init_genre and args.genre:
                     banner("STEP 1: Initializing genre configuration")
                     cmd = [sys.executable, str(root_dir / "foundation" / "gen_genre_framework.py")]
                     if args.genre:
@@ -1814,9 +1935,26 @@ def run_pipeline(args):
                         cmd += ["--notes", notes_for_genre]
                     if args.perspective:
                         cmd += ["--perspective", args.perspective]
+                    if getattr(args, "prose_mode", ""):
+                        cmd += ["--prose-mode", args.prose_mode]
                     subprocess.run(cmd, check=True, timeout=900)
                     from core.genre import reload_genre
                     reload_genre()
+                    # Genre is the source of truth for chapter count once written.
+                    # Sync immediately — the startup sync already ran (and no-op'd
+                    # if this file did not exist yet).
+                    try:
+                        genre_cfg = load_genre()
+                        genre_total = int(
+                            genre_cfg["generation"]["outline"]["estimated_chapters"]
+                        )
+                        if genre_total and genre_total != state.get("chapters_total"):
+                            state["chapters_total"] = genre_total
+                            save_state(state)
+                            print(f"  chapters_total synced from genre config → {genre_total}")
+                    except (FileNotFoundError, KeyError, TypeError, ValueError) as e:
+                        print(f"  WARN: could not sync chapters_total from genre: {e}",
+                              file=sys.stderr)
                     print("Genre config ready.\n")
 
                 state = run_foundation(state)
@@ -1930,6 +2068,11 @@ Examples:
         choices=["", "first_person", "third_person"],
         help="Force narrative perspective (first_person / third_person). "
              "Empty = foundation decides.")
+    parser.add_argument(
+        "--prose-mode", dest="prose_mode",
+        default=os.environ.get("GESAKU_PROSE_MODE", ""),
+        choices=["", "first_intimate", "first_voicey", "third_close", "third_scene"],
+        help="Prose distance pack (fuel/prose/*.md). Empty = no pack.")
     parser.add_argument("--genre", default=os.environ.get("GESAKU_GENRE", ""),
                         help="Genre description (e.g., 'Cyberpunk Noir')")
     parser.add_argument("--chapters", default=os.environ.get("GESAKU_CHAPTERS", "24"),
