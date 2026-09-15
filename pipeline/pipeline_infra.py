@@ -27,30 +27,41 @@ load_dotenv()
 
 
 class Tee:
-    """Duplicate writes to both an original stream and a shared log file."""
+    """Duplicate writes to both an original stream and a shared log file.
+
+    Flushes the log file on every write. The wrapped handle is a plain
+    `open()`, which is BLOCK-buffered by default — `reconfigure(
+    line_buffering=True)` on the original stdout does not reach it, so
+    without this flush the on-disk log sits at 0B for many minutes while
+    the run is actively working (the whole point of the log is to be
+    watchable live).
+    """
     def __init__(self, fh, original):
         self.fh = fh
         self.original = original
 
     def write(self, data):
-        # A log-file failure (disk full, closed pipe) must never kill the run
+        # A log-file failure (disk full, closed handle, dead pipe) must never
+        # kill the run — a closed file raises ValueError, not OSError.
         try:
             self.fh.write(data)
-        except OSError:
+            self.fh.flush()
+        except (OSError, ValueError):
             pass
         try:
             self.original.write(data)
-        except OSError:
+            self.original.flush()
+        except (OSError, ValueError):
             pass
 
     def flush(self):
         try:
             self.fh.flush()
-        except OSError:
+        except (OSError, ValueError):
             pass
         try:
             self.original.flush()
-        except OSError:
+        except (OSError, ValueError):
             pass
 
     def isatty(self):

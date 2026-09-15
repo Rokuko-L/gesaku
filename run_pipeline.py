@@ -57,7 +57,7 @@ def run_pipeline(args):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
     sys.stderr.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
     log_path = paths.get_logs_dir() / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_pipeline.log"
-    log_fh = open(log_path, "w", encoding="utf-8")
+    log_fh = open(log_path, "w", encoding="utf-8", buffering=1)
     sys.stdout = Tee(log_fh, sys.stdout)
     sys.stderr = Tee(log_fh, sys.stderr)
     step(f"Pipeline log: {log_path}")
