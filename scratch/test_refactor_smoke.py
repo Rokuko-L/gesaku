@@ -157,11 +157,11 @@ class RefactorSmoke(unittest.TestCase):
 
     def test_gen_brief_importable_errors(self):
         self._real_root()
-        from pipeline import gen_brief
+        from pipeline.briefs import context as brief_context
 
         self._bind("smoke_brief")
         with self.assertRaises(FileNotFoundError):
-            gen_brief.chapter_text(99)
+            brief_context.chapter_text(99)
 
     # -- 6. tolerances are one named policy --------------------------------
 

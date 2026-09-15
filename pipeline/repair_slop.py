@@ -41,7 +41,7 @@ import sys
 from pathlib import Path
 
 from core import _utf8
-from pipeline.evaluate import (
+from pipeline.slop import (
     PROSE_TIC_PATTERNS,
     FICTION_AI_TELLS,
     STRUCTURAL_AI_TICS,
