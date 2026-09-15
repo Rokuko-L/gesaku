@@ -169,6 +169,14 @@ Copy `.env.example` → `.env`.
 | `GESAKU_MIN_REVISION_CYCLES` | `3` | Floor before plateau stop |
 | `GESAKU_MAX_REVISION_CYCLES` | `6` | Revision cap |
 | `GESAKU_PLATEAU_DELTA` | `0.3` | Score delta that counts as stalled |
+| `GESAKU_TIMEOUT_SHORT` | `300` | Subprocess cap: mechanical steps (sanitize, cuts, tex) |
+| `GESAKU_TIMEOUT_STANDARD` | `900` | Subprocess cap: single generation passes (draft, revision) |
+| `GESAKU_TIMEOUT_LONG` | `1800` | Subprocess cap: full-novel / chapter evals |
+| `GESAKU_TIMEOUT_XLONG` | `3600` | Subprocess cap: foundation generation blocks |
+| `GESAKU_LLM_TIMEOUT_SHORT` | `120` | LLM call budget: summaries, titles, extracts |
+| `GESAKU_LLM_TIMEOUT_STANDARD` | `300` | LLM call budget: drafting, revision |
+| `GESAKU_LLM_TIMEOUT_LONG` | `900` | LLM call budget: long reviews |
+| `GESAKU_LLM_TIMEOUT_XLONG` | `1800` | LLM call budget: foundation bibles, full evals |
 
 ### Examples
 

@@ -25,7 +25,7 @@ def parse_json(text):
 
 
 def call_model(prompt, max_tokens=1500):
-    return call_llm(prompt=prompt, system="You produce structured outline entries for novel chapters. Be precise about what HAPPENS, what CHANGES, and what threads are planted/harvested. Output valid JSON only.", model_key="judge", max_tokens=max_tokens, temperature=0.1, timeout=120)
+    return call_llm(prompt=prompt, system="You produce structured outline entries for novel chapters. Be precise about what HAPPENS, what CHANGES, and what threads are planted/harvested. Output valid JSON only.", model_key="judge", max_tokens=max_tokens, temperature=0.1, timeout_role="short")
 
 def process_chapter_outline(path, ch, text, wc, title_line):
     import time

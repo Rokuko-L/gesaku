@@ -218,7 +218,7 @@ def main():
         model_key="writer",
         max_tokens=16000,
         temperature=0.7,
-        timeout=300,
+        timeout_role="standard",
     )
 
     # Extract LaTeX from code fences

@@ -63,6 +63,34 @@ def _looks_like_reasoning_model(model: str) -> bool:
     return bool(_REASONING_MODEL_RE.match(model.strip().lower()))
 
 
+# LLM per-call budgets, mirroring pipeline_infra.timeout_for naming.
+# Env-tunable; callers pass a role (short/standard/long/xlong) or an
+# explicit timeout. Explicit values always win.
+LLM_TIMEOUTS = {
+    "short": 120,
+    "standard": 300,
+    "long": 900,
+    "xlong": 1800,
+}
+
+LLM_TIMEOUT_ENV = {
+    "short": "GESAKU_LLM_TIMEOUT_SHORT",
+    "standard": "GESAKU_LLM_TIMEOUT_STANDARD",
+    "long": "GESAKU_LLM_TIMEOUT_LONG",
+    "xlong": "GESAKU_LLM_TIMEOUT_XLONG",
+}
+
+
+def llm_timeout(role: str = "standard") -> int:
+    """Named LLM budget in seconds."""
+    default = LLM_TIMEOUTS.get(role, LLM_TIMEOUTS["standard"])
+    try:
+        val = int(float(os.getenv(LLM_TIMEOUT_ENV.get(role, ""), "")))
+        return val if val > 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
 class ProviderError(Exception):
     """Raised when provider configuration is missing or contradictory.
 
@@ -357,9 +385,12 @@ def call_llm(
     max_tokens=4000,
     temperature=0.3,
     beta_context=False,
-    timeout=300,
+    timeout=None,
+    timeout_role="standard",
     raise_on_truncation=True,
 ):
+    if timeout is None:
+        timeout = llm_timeout(timeout_role)
     provider = resolve_provider(model_key)
     model = _resolve_model(provider, model_key)
     base_url = _resolve_base_url(provider, model_key)

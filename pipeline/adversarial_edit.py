@@ -24,7 +24,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 def call_judge(prompt, max_tokens=8000):
-    return call_llm(prompt=prompt, system="You are a ruthless literary editor. You cut fat from prose. You have no sentiment about good-enough sentences -- if a sentence isn't earning its place, it goes. You quote exactly from the text. You never invent or paraphrase. Always respond with valid JSON.", model_key="judge", max_tokens=max_tokens, temperature=0.3, timeout=300)
+    return call_llm(prompt=prompt, system="You are a ruthless literary editor. You cut fat from prose. You have no sentiment about good-enough sentences -- if a sentence isn't earning its place, it goes. You quote exactly from the text. You never invent or paraphrase. Always respond with valid JSON.", model_key="judge", max_tokens=max_tokens, temperature=0.3, timeout_role="standard")
 
 def parse_json(text):
     return llm.parse_json_response(text)

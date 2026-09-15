@@ -18,7 +18,7 @@ from core import paths
 load_dotenv()
 
 def call_writer(prompt, max_tokens=get_max_tokens_with_thinking(16000)):
-    return call_llm(prompt=prompt, model_key="writer", max_tokens=max_tokens, beta_context=True, timeout=600)
+    return call_llm(prompt=prompt, model_key="writer", max_tokens=max_tokens, beta_context=True, timeout_role="standard")
 
 def validate_block_output(text, start, end):
     missing = []

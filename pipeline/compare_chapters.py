@@ -27,7 +27,7 @@ from core import llm
 load_dotenv()
 
 def call_judge(prompt, max_tokens=4000):
-    return call_llm(prompt=prompt, system="You are a literary editor comparing two chapters of the same novel. You pick the better one. You are not allowed to call it a tie. You quote specific passages to justify your choice. Respond with valid JSON only.", model_key="judge", max_tokens=max_tokens, temperature=0.2, timeout=300)
+    return call_llm(prompt=prompt, system="You are a literary editor comparing two chapters of the same novel. You pick the better one. You are not allowed to call it a tie. You quote specific passages to justify your choice. Respond with valid JSON only.", model_key="judge", max_tokens=max_tokens, temperature=0.2, timeout_role="standard")
 
 def parse_json(text):
     return llm.parse_json_response(text)

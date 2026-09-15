@@ -72,11 +72,11 @@ DEFAULT_TITLE_JUDGES = [
 
 
 def call_writer(prompt, temp=0.7):
-    return call_llm(prompt=prompt, model_key="writer", max_tokens=2000, temperature=temp, timeout=300)
+    return call_llm(prompt=prompt, model_key="writer", max_tokens=2000, temperature=temp, timeout_role="standard")
 
 
 def call_judge(prompt, system_prompt, temp=0.1):
-    return call_llm(prompt=prompt, system=system_prompt, model_key="judge", max_tokens=2000, temperature=temp, timeout=120)
+    return call_llm(prompt=prompt, system=system_prompt, model_key="judge", max_tokens=2000, temperature=temp, timeout_role="short")
 
 
 def parse_titles_list(raw_response):
@@ -155,7 +155,7 @@ def persist_judges(judges):
     state_path = paths.get_state_path()
     genre_path = state_path.parent / "active_genre.json"
     if genre_path.exists():
-        genre_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        paths.save_json_atomic(cfg, genre_path)
         print(f"Saved title_judges to {genre_path}", file=sys.stderr)
 
 
@@ -350,7 +350,7 @@ Return ONLY a numbered list."""
     state_path = paths.get_state_path()
     state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
     state["title"] = winner
-    state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    paths.save_json_atomic(state, state_path)
 
     registry_path = paths.get_registry_path()
     registry = json.loads(registry_path.read_text(encoding="utf-8")) if registry_path.exists() else {}

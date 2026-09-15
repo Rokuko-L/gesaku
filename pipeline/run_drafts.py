@@ -25,9 +25,10 @@ import sys
 from core.paths import get_chapters_dir, get_state_path
 
 
-def run(cmd, timeout=600):
+def run(cmd, timeout=None):
+    from pipeline.pipeline_infra import timeout_for
     r = subprocess.run(shlex.split(cmd), capture_output=True, text=True,
-                       encoding="utf-8", timeout=timeout)
+                       encoding="utf-8", timeout=timeout or timeout_for("standard"))
     return r.stdout + r.stderr, r.returncode
 
 
@@ -49,7 +50,8 @@ def pattern_check(ch):
 
 
 def spot_eval(ch):
-    out, rc = run(f'"{sys.executable}" evaluate.py --chapter={ch}', timeout=300)
+    from pipeline.pipeline_infra import timeout_for
+    out, rc = run(f'"{sys.executable}" evaluate.py --chapter={ch}', timeout=timeout_for("short"))
     m_overall = re.search(r"overall_score: ([\d.]+)", out)
     m_raw = re.search(r"raw_judge_score: (\d+)", out)
     if m_overall and m_raw:
@@ -62,7 +64,8 @@ def update_state(ch):
     state = json.loads(state_path.read_text(encoding="utf-8"))
     state["current_focus"] = f"ch_{ch:02d}"
     state["chapters_drafted"] = ch
-    state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    from core.paths import save_json_atomic
+    save_json_atomic(state, state_path)
 
 
 def main():

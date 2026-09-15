@@ -397,7 +397,7 @@ def main():
             model_key="judge",  # Premium model for Pass 1
             max_tokens=16000,
             temperature=0.7,
-            timeout=300
+            timeout_role="standard"
         )
         cleaned1 = strip_json_fences(raw1)
         try:
@@ -469,7 +469,7 @@ def main():
             model_key="writer",  # Creative writer model for prompt templates
             max_tokens=16000,
             temperature=0.7,
-            timeout=300
+            timeout_role="standard"
         )
         cleaned2 = strip_json_fences(raw2)
         try:

@@ -20,7 +20,7 @@ load_dotenv()
 
 def call_writer(prompt, max_tokens=get_max_tokens_with_thinking(16000)):
     # Local thinking-proxy outline blocks routinely need >600s.
-    return call_llm(prompt=prompt, model_key="writer", max_tokens=max_tokens, beta_context=True, timeout=1200)
+    return call_llm(prompt=prompt, model_key="writer", max_tokens=max_tokens, beta_context=True, timeout_role="long")
 
 def validate_block_output(text, start, end):
     missing = []

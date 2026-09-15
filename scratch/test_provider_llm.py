@@ -80,7 +80,7 @@ class EnvIsolationTestBase(unittest.TestCase):
         llm.set_client(self._saved_client)
 
 
-class ProviderResolutionTest(unittest.TestCase):
+class ProviderResolutionTest(EnvIsolationTestBase):
     def test_default_is_anthropic(self):
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("GESAKU_PROVIDER", None)
@@ -115,8 +115,10 @@ class ProviderResolutionTest(unittest.TestCase):
     def test_role_model_env_var_respected(self):
         with patch.dict(os.environ, {"GESAKU_JUDGE_MODEL": "some/gateway-model"}):
             self.assertEqual(llm._resolve_model("anthropic", "judge"), "some/gateway-model")
-        self.assertEqual(
-            llm._resolve_model("openai", "judge"), llm.DEFAULT_MODELS["openai"]["judge"])
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("GESAKU_JUDGE_MODEL", None)
+            self.assertEqual(
+                llm._resolve_model("openai", "judge"), llm.DEFAULT_MODELS["openai"]["judge"])
 
 
 class AnthropicWireFormatTest(EnvIsolationTestBase):

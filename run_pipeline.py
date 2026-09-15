@@ -136,6 +136,43 @@ from pipeline.pipeline_infra import _chapter_num_key  # noqa: F401
 # PHASE 1 — FOUNDATION
 # ---------------------------------------------------------------------------
 
+def _foundation_artifact_ok(path, min_chars: int = 500,
+                            require_chapters: int = 0) -> bool:
+    """Cheap validity check for a foundation output file.
+
+    Exists + non-trivial size (+ all chapter headers present when asked).
+    Deeper validation (premise beats, hygiene) still runs below.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    if len(text) < min_chars:
+        return False
+    if require_chapters:
+        found = set(int(m) for m in re.findall(
+            r'###\s*\*?\*?\s*Ch(?:apter)?\b\s*\*?\*?\s*(\d+)',
+            text, re.IGNORECASE))
+        if len(found) < require_chapters:
+            return False
+    return True
+
+
+def _foundation_part2_ok(outline_path, total_ch: int) -> bool:
+    """Part-2 polish marker: later chapters carry a foreshadowing section."""
+    try:
+        text = outline_path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    tail_start = max(1, total_ch - 3)
+    heads = set(int(m) for m in re.findall(
+        r'###\s*\*?\*?\s*Ch(?:apter)?\b\s*\*?\*?\s*(\d+)',
+        text, re.IGNORECASE))
+    if any(ch not in heads for ch in range(tail_start, total_ch + 1)):
+        return False
+    return "FORESHADOW" in text.upper()
+
+
 def run_foundation(state: dict) -> dict:
     """
     Build planning documents (world, characters, outline, voice, canon).
@@ -155,33 +192,59 @@ def run_foundation(state: dict) -> dict:
         banner(f"Foundation Iteration {i}", "-")
         state["iteration"] = i
 
-        # 1. Generate planning documents
-        # Thinking models on a local proxy routinely exceed 600s for world/
-        # character bibles and outline blocks; the old 600s cap killed
-        # gen_world / gen_outline mid-call.
-        FOUNDATION_STEP_TIMEOUT = int(os.getenv("GESAKU_FOUNDATION_TIMEOUT", "3600"))
-        step("Generating world bible...")
-        uv_run("foundation/gen_world.py", timeout=FOUNDATION_STEP_TIMEOUT)
+        # Per-artifact checkpointing: skip steps whose outputs already exist
+        # and pass a cheap validity check, so a crash no longer burns a full
+        # regen of world/characters/canon/outline. --from-scratch wipes the
+        # files, which is the explicit invalidation path.
+        world_ok = _foundation_artifact_ok(
+            paths.get_world_path(), min_chars=2000)
+        chars_ok = _foundation_artifact_ok(
+            paths.get_characters_path(), min_chars=1000)
+        canon_path = paths.get_canon_path()
+        outline_path = paths.get_outline_path()
+        total_ch = get_total_chapters(state)
+        outline_ok = _foundation_artifact_ok(
+            outline_path, min_chars=2000 * total_ch // 4,
+            require_chapters=total_ch)
 
-        step("Generating characters...")
-        uv_run("foundation/gen_characters.py", timeout=FOUNDATION_STEP_TIMEOUT)
+        # 1. Generate planning documents (skipping valid checkpoints)
+        FX = timeout_for("xlong")
+        if world_ok:
+            step("World bible exists — skipping regen (checkpoint)")
+        else:
+            step("Generating world bible...")
+            uv_run("foundation/gen_world.py", timeout=FX)
+
+        if chars_ok:
+            step("Characters exist — skipping regen (checkpoint)")
+        else:
+            step("Generating characters...")
+            uv_run("foundation/gen_characters.py", timeout=FX)
 
         step("Generating title tournament...")
         current_title = load_state().get("title", "")
         if not current_title or current_title == "Untitled":
-            uv_run("foundation/gen_title.py", timeout=FOUNDATION_STEP_TIMEOUT)
+            uv_run("foundation/gen_title.py", timeout=FX)
+            try:
+                from core.genre import reload_genre
+                reload_genre()
+            except Exception:
+                pass
 
         # Canon before outline so plant hygiene can use sealed-fact denylist.
-        step("Generating canon...")
-        uv_run("foundation/gen_canon.py", timeout=FOUNDATION_STEP_TIMEOUT)
+        if _foundation_artifact_ok(canon_path, min_chars=500):
+            step("Canon exists — skipping regen (checkpoint)")
+        else:
+            step("Generating canon...")
+            uv_run("foundation/gen_canon.py", timeout=FX)
 
-        step("Generating outline (part 1)...")
-        # Block-level LLM calls for a 24-chapter thinking model easily exceed
-        # 30 minutes when the proxy retries/timeouts stack.
-        uv_run("foundation/gen_outline.py", timeout=max(3600, FOUNDATION_STEP_TIMEOUT))
+        if outline_ok:
+            step("Outline exists — skipping regen (checkpoint)")
+        else:
+            step("Generating outline (part 1)...")
+            uv_run("foundation/gen_outline.py", timeout=FX)
 
         # Validate Chapter 1 premise beats (pre-draft gate)
-        outline_path = paths.get_outline_path()
         genre_cfg = load_genre()
         required_beats = genre_cfg.get("framework", {}).get("premise_arc_beats", [])
         premise_passed = False
@@ -203,7 +266,7 @@ def run_foundation(state: dict) -> dict:
                 " Use bullet format: '- beat_label: scene description'"
                 " — one line per beat inside the PREMISE BEATS section."
             )
-            uv_run(f'foundation/gen_outline.py --retry-feedback "{error}.{format_hint}"', timeout=900)
+            uv_run(f'foundation/gen_outline.py --retry-feedback "{error}.{format_hint}"', timeout=timeout_for("standard"))
 
         # Write premise validation sidecar
         prem_val_path = paths.get_project_dir() / "premise_validation.json"
@@ -213,15 +276,17 @@ def run_foundation(state: dict) -> dict:
             "last_error": "" if premise_passed else premise_last_error,
         }, indent=2), encoding="utf-8")
 
-        step("Generating outline (part 2 — foreshadowing)...")
-        # Each block is one 600s LLM call with up to 3 validation retries; the
-        # subprocess cap must cover ALL blocks or a legitimate run gets killed
-        # mid-polish, leaving outline.md with only the polished prefix.
-        n_blocks = max(1, -(-get_total_chapters(state) // 10))
-        uv_run("foundation/gen_outline_part2.py", timeout=max(900, n_blocks * 900))
+        part2_ok = _foundation_part2_ok(outline_path, total_ch)
+        if outline_ok and part2_ok:
+            step("Outline part 2 exists — skipping regen (checkpoint)")
+        else:
+            step("Generating outline (part 2 — foreshadowing)...")
+            n_blocks = max(1, -(-get_total_chapters(state) // 10))
+            uv_run("foundation/gen_outline_part2.py",
+                   timeout=max(timeout_for("standard"), n_blocks * timeout_for("short")))
 
         step("Sanitizing chapter titles...")
-        uv_run("pipeline/sanitize_outline_titles.py", timeout=300)
+        uv_run("pipeline/sanitize_outline_titles.py", timeout=timeout_for("short"))
 
         # Validate plants & harvests consistency and extract active debts
         outline_text = outline_path.read_text(encoding="utf-8")
@@ -258,11 +323,11 @@ def run_foundation(state: dict) -> dict:
         step(f"Logged {len(debts)} active narrative debts in project state.")
 
         step("Running voice fingerprint...")
-        uv_run("pipeline/voice_fingerprint.py", timeout=600)
+        uv_run("pipeline/voice_fingerprint.py", timeout=timeout_for("standard"))
 
         # 2. Evaluate
         step("Evaluating foundation...")
-        eval_result = uv_run("pipeline/evaluate.py --phase=foundation", timeout=900)
+        eval_result = uv_run("pipeline/evaluate.py --phase=foundation", timeout=timeout_for("standard"))
         score = parse_score(eval_result.stdout, "overall_score")
         lore = parse_lore_score(eval_result.stdout)
 
@@ -308,9 +373,9 @@ def run_foundation(state: dict) -> dict:
         step(f"WARNING: max iterations ({MAX_FOUNDATION_ITERS}) reached "
              f"with score {best_score}")
 
-    # Determine total chapters from state (preset by genre config in run_pipeline)
-    total = state.get("chapters_total", CHAPTERS_TOTAL)
-    state["chapters_total"] = total
+    # Chapter count has one owner: the genre config. Resolve (syncing
+    # state) instead of stamping a stale state value.
+    total = resolve_chapters_total(state)
     state["phase"] = "drafting"
     state["current_focus"] = "chapter_drafting"
     save_state(state)
@@ -391,7 +456,7 @@ def on_chapter_kept(ch: int, reextract: bool = False) -> None:
     if reextract:
         cmd += " --reextract"
     try:
-        rep = run_tool(cmd, timeout=120, check=False)
+        rep = run_tool(cmd, timeout=timeout_for("short"), check=False)
         if rep.returncode != 0:
             step(f"micro-plant extract skipped for ch{ch} (rc={rep.returncode})")
     except Exception as e:
@@ -488,7 +553,7 @@ def _maybe_run_reveal_retrofit(state: dict, ch: int) -> None:
         if not reveal or ch != reveal:
             return
         step(f"Reveal chapter {reveal} kept — running post-reveal retrofit...")
-        result = uv_run("pipeline/retrofit_reveal.py", timeout=1800)
+        result = uv_run("pipeline/retrofit_reveal.py", timeout=timeout_for("long"))
         state["reveal_retrofit_done"] = True
         state["reveal_retrofit_exit"] = result.returncode
         save_state(state)
@@ -512,7 +577,7 @@ def run_drafting(state: dict) -> dict:
     """
     banner("PHASE 2: DRAFTING", "=")
 
-    total = get_total_chapters(state)
+    total = resolve_chapters_total(state)
     start_chapter = state.get("chapters_drafted", 0) + 1
 
     # Hard word-count floor for accepting a draft (below the eval's 80% tolerance,
@@ -559,7 +624,7 @@ def run_drafting(state: dict) -> dict:
                     fb_path.write_text(retry_feedback, encoding="utf-8")
                     cmd = (f"\"{sys.executable}\" pipeline/draft_chapter.py {ch} "
                            f"--retry-feedback \"{fb_path}\"")
-                draft_result = run_tool(cmd, timeout=900, check=False)
+                draft_result = run_tool(cmd, timeout=timeout_for("standard"), check=False)
                 if draft_result.returncode != 0:
                     step(f"Draft failed (exit {draft_result.returncode}), retrying...")
                     continue
@@ -599,13 +664,13 @@ def run_drafting(state: dict) -> dict:
             word_count = len(ch_file.read_text(encoding="utf-8").split())
             step(f"Drafted {word_count} words")
 
-            # Evaluate
-            # A timed-out eval is not a fatal drafting error — retry the eval
-            # before giving up on a scored keep.
+            # Evaluate. A dead judge must not kill a good draft: retry the
+            # eval, and if it still fails treat the attempt as unscored
+            # (warning + continue) rather than a fatal drafting error.
             eval_result = None
             score = None
             for eval_try in range(1, 4):
-                eval_result = uv_run(f"pipeline/evaluate.py --chapter={ch}", timeout=2400)
+                eval_result = uv_run(f"pipeline/evaluate.py --chapter={ch}", timeout=timeout_for("long"))
                 try:
                     score = parse_score(eval_result.stdout, "overall_score")
                     break
@@ -614,7 +679,14 @@ def run_drafting(state: dict) -> dict:
                         step(f"eval parse failed for Ch {ch} (try {eval_try}/3): {e} — retrying eval")
                         time.sleep(5 * eval_try)
                         continue
-                    raise
+                    step(f"WARNING: eval failed 3x for Ch {ch} — keeping draft unscored, "
+                         f"judge output unusable ({e}). Attempt discarded, drafting continues.")
+                    log_result("unevaluated", f"ch{ch:02d}", 0, word_count,
+                               "discard", f"Chapter {ch} attempt {attempt}: eval judge failed")
+                    score = None
+                    break
+            if score is None:
+                continue
             step(f"Chapter {ch} score: {score}")
 
             # Pin the exact eval log of THIS attempt (evaluate.py prints 'eval_log: <path>')
@@ -704,12 +776,17 @@ def run_drafting(state: dict) -> dict:
                              f"repairing Ch {ch} in place instead of regenerating")
                         rep = run_tool(
                             f"\"{sys.executable}\" pipeline/repair_slop.py {ch}",
-                            timeout=600, check=False)
+                            timeout=timeout_for("standard"), check=False)
                         if rep.returncode == 0:
                             rep_wc = len(ch_file.read_text(encoding="utf-8").split())
                             step(f"Repaired Ch {ch} ({rep_wc}w) — re-evaluating...")
-                            rep_eval = uv_run(f"pipeline/evaluate.py --chapter={ch}", timeout=900)
-                            rep_score = parse_score(rep_eval.stdout, "overall_score")
+                            rep_eval = uv_run(f"pipeline/evaluate.py --chapter={ch}", timeout=timeout_for("standard"))
+                            try:
+                                rep_score = parse_score(rep_eval.stdout, "overall_score")
+                            except ValueError as e:
+                                step(f"WARNING: repair re-eval unparseable for Ch {ch} ({e}) — "
+                                     f"keeping pre-repair draft as fallback")
+                                rep_score = score
                             step(f"Repaired Ch {ch} score: {rep_score}")
                             if rep_score >= chapter_gate:
                                 step(f"Repair lifted Ch {ch} over the bar — keeping")
@@ -992,7 +1069,7 @@ def run_revision(
         if run_adv or run_cuts:
             # Evaluate current baseline score (before Step 1/2 edits)
             step("Evaluating baseline novel score before Cycle edits...")
-            baseline_eval = uv_run("pipeline/evaluate.py --full", timeout=1800)
+            baseline_eval = uv_run("pipeline/evaluate.py --full", timeout=timeout_for("long"))
             cycle_baseline_score = parse_score(baseline_eval.stdout, "novel_score")
             if cycle_baseline_score < 0:
                 cycle_baseline_score = parse_score(baseline_eval.stdout, "overall_score")
@@ -1001,15 +1078,16 @@ def run_revision(
             if run_adv:
                 # -- Step 1: Adversarial editing pass (parallel per chapter) --
                 step("Running adversarial editing on all chapters...")
-                total_ch = get_total_chapters(state)
+                total_ch = resolve_chapters_total(state)
                 # Parallelism: default 4 workers even for local proxies —
                 # build_arc_summary/build_outline already run 4-12 concurrent
                 # LLM calls against the same endpoint. Override with
                 # GESAKU_MAX_WORKERS (e.g. =1 for weak single-request models).
                 max_workers = int(os.getenv("GESAKU_MAX_WORKERS", "4"))
+                adv_timeout = timeout_for("standard")
                 with ThreadPoolExecutor(max_workers=max_workers) as pool:
                     futures = {
-                        pool.submit(uv_run, f"adversarial_edit.py {ch}", 600): ch
+                        pool.submit(uv_run, f"adversarial_edit.py {ch}", adv_timeout): ch
                         for ch in range(1, total_ch + 1)
                     }
                     for future in as_completed(futures):
@@ -1019,10 +1097,10 @@ def run_revision(
                              step(f"  ch {ch}: done")
                          except Exception:
                              step(f"  ch {ch}: edit failed, continuing anyway")
-                
+
                 # Evaluate full novel score after Step 1
                 step("Evaluating novel score after Adversarial Edits...")
-                post_adv_eval = uv_run("pipeline/evaluate.py --full", timeout=1800)
+                post_adv_eval = uv_run("pipeline/evaluate.py --full", timeout=timeout_for("long"))
                 post_adv_score = parse_score_any(post_adv_eval.stdout, "novel_score", "overall_score")
                 
                 step(f"Adversarial edits score shift: {cycle_baseline_score} -> {post_adv_score}")
@@ -1050,11 +1128,11 @@ def run_revision(
                 # -- Step 2: Apply mechanical cuts --
                 step("Applying mechanical cuts (OVER-EXPLAIN, REDUNDANT)...")
                 run_tool("uv run python pipeline/apply_cuts.py all "
-                         "--types OVER-EXPLAIN REDUNDANT --min-fat 15", timeout=300)
-                
+                         "--types OVER-EXPLAIN REDUNDANT --min-fat 15", timeout=timeout_for("short"))
+
                 # Evaluate full novel score after Step 2
                 step("Evaluating novel score after Mechanical Cuts...")
-                post_cuts_eval = uv_run("pipeline/evaluate.py --full", timeout=1800)
+                post_cuts_eval = uv_run("pipeline/evaluate.py --full", timeout=timeout_for("long"))
                 post_cuts_score = parse_score_any(post_cuts_eval.stdout, "novel_score", "overall_score")
 
                 step(f"Mechanical cuts score shift: {post_adv_score} -> {post_cuts_score}")
@@ -1067,32 +1145,33 @@ def run_revision(
                     log_result(commit_hash, f"rev-cycle-{cycle}-cuts", post_cuts_score,
                                count_words_in_chapters(), "keep",
                                f"Cycle {cycle}: Step 2 mechanical cuts kept {post_adv_score}->{post_cuts_score}")
-                    store_novel_score(state, post_cuts_score)
+                    post_cuts_commit = commit_hash
+                    record_novel_score(state, post_cuts_score, post_cuts_commit)
                 else:
                     step(f"Mechanical cuts made the novel worse ({post_cuts_score} < {post_adv_score - 0.05}), reverting cuts")
                     git_reset_hard("HEAD")
                     log_result("reverted", f"rev-cycle-{cycle}-cuts", post_cuts_score,
                                count_words_in_chapters(), "discard",
                                f"Cycle {cycle}: Step 2 mechanical cuts regressed {post_adv_score}->{post_cuts_score}")
-                    store_novel_score(state, post_adv_score)
+                    record_novel_score(state, post_adv_score, git_short_hash())
             else:
                 if skip_mechanical_cuts:
                     step("Skipping mechanical cuts as requested")
                 else:
                     step("apply_cuts.py not found, skipping mechanical cuts")
-                store_novel_score(state, post_adv_score)
+                record_novel_score(state, post_adv_score, git_short_hash())
         else:
             step("Skipping both adversarial editing and mechanical cuts — no Cycle edits to apply")
 
         # -- Step 3: Generate arc summary + Reader panel --
         if not skip_reader_panel:
             step("Generating arc summary for reader panel...")
-            # 4 workers × 120s per chapter call; cap must cover all chapters
             n_ch_arc = count_chapter_files()
-            uv_run("pipeline/build_arc_summary.py", timeout=max(300, -(-n_ch_arc // 4) * 150 + 60))
+            arc_timeout = max(timeout_for("short"),
+                              -(-n_ch_arc // 4) * timeout_for("short") // 2 + 60)
+            uv_run("pipeline/build_arc_summary.py", timeout=arc_timeout)
             step("Running reader panel evaluation...")
-            # 4 sequential readers × (300s call + retries) — don't kill a slow panel
-            uv_run("pipeline/reader_panel.py", timeout=1800)
+            uv_run("pipeline/reader_panel.py", timeout=timeout_for("long"))
         else:
             step("Skipping reader panel as requested")
 
@@ -1118,13 +1197,15 @@ def run_revision(
                 ch_num = item["chapter"]
                 question = item["question"]
                 try:
-                    pre_eval = uv_run(f"pipeline/evaluate.py --chapter={ch_num}", timeout=900)
+                    T_STD = timeout_for("standard")
+                    T_SHORT = timeout_for("short")
+                    pre_eval = uv_run(f"pipeline/evaluate.py --chapter={ch_num}", timeout=T_STD)
                     pre_score = parse_score(pre_eval.stdout, "overall_score")
 
                     brief_file = briefs_dir / f"ch{ch_num:02d}_cycle{cycle}_{question}.md"
                     gen_brief_py = paths.get_root_dir() / "pipeline" / "gen_brief.py"
                     if gen_brief_py.exists():
-                        run_tool(f"uv run python pipeline/gen_brief.py --panel {ch_num}", timeout=300)
+                        run_tool(f"uv run python pipeline/gen_brief.py --panel {ch_num}", timeout=T_SHORT)
                         brief_candidates = sorted(
                             briefs_dir.glob(f"ch{ch_num:02d}*.md"),
                             key=lambda p: p.stat().st_mtime, reverse=True)
@@ -1145,9 +1226,9 @@ def run_revision(
                                 "pre_score": pre_score, "post_score": pre_score}
 
                     step(f"Revising Ch {ch_num} with brief {brief_file.name}...")
-                    uv_run(f'pipeline/gen_revision.py {ch_num} "{brief_file}"', timeout=600)
+                    uv_run(f'pipeline/gen_revision.py {ch_num} "{brief_file}"', timeout=T_STD)
 
-                    post_eval = uv_run(f"pipeline/evaluate.py --chapter={ch_num}", timeout=900)
+                    post_eval = uv_run(f"pipeline/evaluate.py --chapter={ch_num}", timeout=T_STD)
                     post_score = parse_score(post_eval.stdout, "overall_score")
                     eval_log_path = None
                     m = re.search(r"eval_log:\s*(\S+)", post_eval.stdout)
@@ -1237,7 +1318,8 @@ def run_revision(
         # -- Step 6: Full novel evaluation --
         if not skip_full_novel_eval:
             step("Running full novel evaluation...")
-            full_eval = uv_run("pipeline/evaluate.py --full", timeout=1800)
+            T_LONG = timeout_for("long")
+            full_eval = uv_run("pipeline/evaluate.py --full", timeout=T_LONG)
             try:
                 novel_score = parse_score_any(full_eval.stdout, "novel_score", "overall_score")
             except ValueError as e:
@@ -1245,9 +1327,8 @@ def run_revision(
                 novel_score = prev_score
 
             if novel_score is None or novel_score <= 0.0:
-                # 0.0 is almost always a judge failure — retry once
                 step("Novel score missing/0.0 detected, retrying evaluation...")
-                retry_eval = uv_run("pipeline/evaluate.py --full", timeout=1800)
+                retry_eval = uv_run("pipeline/evaluate.py --full", timeout=T_LONG)
                 try:
                     novel_score = parse_score_any(retry_eval.stdout, "novel_score", "overall_score")
                 except ValueError as e:
@@ -1270,7 +1351,7 @@ def run_revision(
                    total_words, "cycle",
                    f"Cycle {cycle}: novel_score {fmt_score(prev_score)}->{fmt_score(novel_score)}")
 
-        stored = store_novel_score(state, novel_score)
+        stored = record_novel_score(state, novel_score, None)
         state["revision_cycle"] = cycle
         save_state(state)
 
@@ -1286,7 +1367,7 @@ def run_revision(
             )
             if comparable:
                 # Secondary gate: don't stop while >30% of chapters are below threshold
-                total_ch = get_total_chapters(state)
+                total_ch = resolve_chapters_total(state)
                 below = 0
                 with_history = 0
                 for cn in range(1, total_ch + 1):
@@ -1309,24 +1390,31 @@ def run_revision(
 
     # =========================================================
     # PHASE 3b: OPUS REVIEW LOOP (deep, prose-level refinement)
+    # Non-blocking by design: the novel is already written — a failed
+    # critic pass writes a warning and falls through to export.
     # =========================================================
     review_py = paths.get_root_dir() / "pipeline" / "review.py"
     if not skip_opus_review and review_py.exists():
         banner("PHASE 3b: OPUS REVIEW LOOP", "=")
-        
+
         max_review_rounds = 4
         for rnd in range(1, max_review_rounds + 1):
             banner(f"Opus Review Round {rnd}/{max_review_rounds}", "-")
-            
+
             # Step 1: Generate the review
             step("Sending manuscript to Opus for review...")
-            review_result = uv_run(
-                f'pipeline/review.py --output "{paths.get_reviews_path()}"', timeout=900)
-            
+            try:
+                review_result = uv_run(
+                    f'pipeline/review.py --output "{paths.get_reviews_path()}"',
+                    timeout=timeout_for("standard"))
+            except Exception as e:
+                step(f"WARNING: Opus review round {rnd} failed ({e}) — skipping to export")
+                break
+
             # Step 2: Parse the review
             step("Parsing review...")
             parse_result = run_tool(
-                "uv run python pipeline/review.py --parse", timeout=60)
+                "uv run python pipeline/review.py --parse", timeout=timeout_for("short"))
             print(parse_result.stdout if parse_result else "")
             
             # Step 3: Check stopping condition (uses review.py's should_stop)
@@ -1360,7 +1448,7 @@ def run_revision(
                 step("Generating revision briefs from review...")
                 gen_brief_py = paths.get_root_dir() / "pipeline" / "gen_brief.py"
                 if gen_brief_py.exists():
-                    run_tool("uv run python pipeline/gen_brief.py --auto", timeout=300)
+                    run_tool("uv run python pipeline/gen_brief.py --auto", timeout=timeout_for("short"))
                 
                 # Find any generated briefs and apply the top one
                 recent_briefs = sorted(
@@ -1375,15 +1463,15 @@ def run_revision(
                         
                         # Evaluate pre-revision score
                         step(f"Evaluating Ch {ch_num} before revision...")
-                        pre_eval = uv_run(f"pipeline/evaluate.py --chapter={ch_num}", timeout=900)
+                        pre_eval = uv_run(f"pipeline/evaluate.py --chapter={ch_num}", timeout=timeout_for("standard"))
                         pre_score = parse_score(pre_eval.stdout, "overall_score")
-                        
+
                         step(f"Revising Ch {ch_num} from review brief...")
-                        uv_run(f'pipeline/gen_revision.py {ch_num} "{brief}"', timeout=600)
-                        
+                        uv_run(f'pipeline/gen_revision.py {ch_num} "{brief}"', timeout=timeout_for("standard"))
+
                         # Evaluate post-revision score
                         step(f"Evaluating Ch {ch_num} after revision...")
-                        post_eval = uv_run(f"pipeline/evaluate.py --chapter={ch_num}", timeout=900)
+                        post_eval = uv_run(f"pipeline/evaluate.py --chapter={ch_num}", timeout=timeout_for("standard"))
                         post_score = parse_score(post_eval.stdout, "overall_score")
                         
                         # Compare against historical best
@@ -1427,15 +1515,15 @@ def run_revision(
             apply_cuts_py = paths.get_root_dir() / "apply_cuts.py"
             if apply_cuts_py.exists():
                 # Evaluate score before cuts
-                pre_cuts_eval = uv_run("pipeline/evaluate.py --full", timeout=1800)
+                pre_cuts_eval = uv_run("pipeline/evaluate.py --full", timeout=timeout_for("long"))
                 pre_cuts_score = parse_score_any(pre_cuts_eval.stdout, "novel_score", "overall_score")
 
                 run_tool(
                     "uv run python pipeline/apply_cuts.py all --types OVER-EXPLAIN REDUNDANT --min-fat 15",
-                    timeout=300)
+                    timeout=timeout_for("short"))
 
                 # Evaluate score after cuts
-                post_cuts_eval = uv_run("pipeline/evaluate.py --full", timeout=1800)
+                post_cuts_eval = uv_run("pipeline/evaluate.py --full", timeout=timeout_for("long"))
                 post_cuts_score = parse_score_any(post_cuts_eval.stdout, "novel_score", "overall_score")
 
                 step(f"Mechanical cuts score shift: {pre_cuts_score} -> {post_cuts_score}")
@@ -1458,6 +1546,26 @@ def run_revision(
     state["phase"] = "export"
     state["current_focus"] = "export"
     save_state(state)
+
+    # Ship the peak, not the latest: restore the best-scoring cycle commit
+    # before export so later adversarial edits that passed tolerance but
+    # lowered the score (v4: 7.65 -> 6.86) don't cost quality.
+    best_score, best_commit = best_novel_checkpoint(state)
+    current = state.get("novel_score")
+    if best_score is not None and best_commit and current is not None:
+        try:
+            if float(current) < float(best_score):
+                step(f"Restoring best novel {best_commit} ({best_score}) over current {current}")
+                res = run_tool(f"git checkout {best_commit} -- chapters",
+                               cwd=str(paths.get_project_dir()))
+                if res.returncode == 0:
+                    git_add_commit(f"restore best novel {best_commit} (score {best_score}) for export")
+                    state["novel_score"] = best_score
+                    save_state(state)
+                else:
+                    step(f"WARNING: best-commit restore failed — exporting current {current}")
+        except (TypeError, ValueError):
+            pass
 
     banner(f"REVISION COMPLETE — {state.get('revision_cycle', 0)} cycles, "
            f"novel_score {fmt_score(state.get('novel_score'))}")
@@ -1486,14 +1594,16 @@ def run_export(state: dict) -> dict:
     build_outline = root_dir / "pipeline" / "build_outline.py"
     if build_outline.exists():
         step("Rebuilding outline from chapters...")
-        uv_run("pipeline/build_outline.py", timeout=1200)
+        uv_run("pipeline/build_outline.py", timeout=timeout_for("long"))
 
     # 2. Build arc summary
     build_arc = root_dir / "pipeline" / "build_arc_summary.py"
     if build_arc.exists():
         step("Building arc summary...")
         n_ch_arc = count_chapter_files()
-        uv_run("pipeline/build_arc_summary.py", timeout=max(300, -(-n_ch_arc // 4) * 150 + 60))
+        uv_run("pipeline/build_arc_summary.py",
+               timeout=max(timeout_for("short"),
+                           -(-n_ch_arc // 4) * timeout_for("short") // 2 + 60))
 
     # 3. Pre-export cleanup: strip AI-tell formatting patterns for the EXPORTED
     #    deliverables only — the canonical chapter files are never mutated.
@@ -1532,8 +1642,7 @@ def run_export(state: dict) -> dict:
     build_tex = root_dir / "typeset" / "build_tex.py"
     if build_tex.exists():
         step("Building LaTeX content...")
-        # Run with cwd set to project typeset dir so aux files stay isolated
-        run_tool(f'uv run python "{build_tex}"', timeout=120, cwd=str(paths.get_typeset_dir()))
+        run_tool(f'uv run python "{build_tex}"', timeout=timeout_for("short"), cwd=str(paths.get_typeset_dir()))
 
         # 5. Typeset with tectonic (if available)
         novel_tex = typeset_dir / "novel.tex"
@@ -1546,7 +1655,7 @@ def run_export(state: dict) -> dict:
             step("novel.tex not found, empty, or incomplete (no \\end{document}) — generating via LLM...")
             for tex_attempt in range(3):
                 try:
-                    uv_run("pipeline/gen_novel_tex.py", timeout=300)
+                    uv_run("pipeline/gen_novel_tex.py", timeout=timeout_for("short"))
                     if novel_tex.exists() and novel_tex.stat().st_size >= 100 and "\\end{document}" in novel_tex.read_text(encoding="utf-8"):
                         break
                 except Exception as e:
@@ -1562,7 +1671,7 @@ def run_export(state: dict) -> dict:
                 install_fonts_script = root_dir / "install_fonts.py"
                 if install_fonts_script.exists():
                     step("Ensuring fonts are installed...")
-                    uv_run("install_fonts.py", timeout=120)
+                    uv_run("install_fonts.py", timeout=timeout_for("short"))
 
                 # Retry loop for tectonic compilation with LLM debugging
                 max_latex_fixes = 3
@@ -1575,7 +1684,7 @@ def run_export(state: dict) -> dict:
 
                     # Use explicit bundle to avoid DNS/network connection failure
                     cmd = f"tectonic --bundle https://archive.org/services/purl/net/pkgwpub/tectonic-default {novel_tex.name}"
-                    res = run_tool(cmd, timeout=300, cwd=str(paths.get_typeset_dir()))
+                    res = run_tool(cmd, timeout=timeout_for("short"), cwd=str(paths.get_typeset_dir()))
                     
                     pdf_out = typeset_dir / "novel.pdf"
                     if res.returncode == 0 and pdf_out.exists() and pdf_out.stat().st_size > 1000:
@@ -1643,7 +1752,7 @@ Rules:
                          "the deterministic default template...")
                     try:
                         novel_tex_module.generate_default_novel_tex(novel_tex)
-                        res = run_tool(cmd, timeout=300, cwd=str(paths.get_typeset_dir()))
+                        res = run_tool(cmd, timeout=timeout_for("short"), cwd=str(paths.get_typeset_dir()))
                         if res.returncode == 0 and pdf_out.exists() and pdf_out.stat().st_size > 1000:
                             step(f"PDF generated from default template: {pdf_out} "
                                  f"({pdf_out.stat().st_size // 1024} KB)")
@@ -1708,11 +1817,31 @@ def sanity_check(args):
         else:
             print(f"WARN: {msg.replace('FAIL', '')} — continuing anyway (custom endpoint may be keyless)", file=sys.stderr)
 
-    # 3. API endpoint reachable
+    # 3. LLM proxy reachable + model name known. Fail fast: a doomed
+    # launch otherwise costs 10+ minutes before the first call errors.
     try:
-        httpx.get(base, timeout=5)
-    except Exception:
-        print(f"WARN: {base} unreachable — continuing anyway", file=sys.stderr)
+        from core.llm import _resolve_model, _resolve_base_url
+        model = _resolve_model(provider, "writer")
+        try:
+            probe = httpx.post(
+                f"{_resolve_base_url(provider, 'writer')}"
+                f"{'/v1/messages' if provider == 'anthropic' else '/chat/completions'}",
+                headers={"content-type": "application/json"},
+                json={"model": model, "max_tokens": 1,
+                      "messages": [{"role": "user", "content": "ping"}]},
+                timeout=15,
+            )
+            if probe.status_code == 404:
+                print(f"FAIL: proxy reachable but model '{model}' not found (404) — "
+                      f"check GESAKU_WRITER_MODEL", file=sys.stderr)
+                ok = False
+        except Exception as e:
+            print(f"FAIL: LLM proxy unreachable ({e}) — refusing to launch a doomed run",
+                  file=sys.stderr)
+            ok = False
+    except Exception as e:
+        print(f"FAIL: provider config broken ({e})", file=sys.stderr)
+        ok = False
 
     # 4. At least one of seed.txt or --notes exists
     if not (root_dir / "seed.txt").exists() and not paths.get_seed_path().exists() and not notes_provided:
@@ -1771,8 +1900,10 @@ def run_pipeline(args):
     project_dir.mkdir(parents=True, exist_ok=True)
 
     # Tee stdout/stderr to a per-run log file in projects/<name>/logs/
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    # line_buffering=True so progress is visible while the run is live —
+    # block-buffered logs sat at 0B for 10+ minutes.
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
     log_path = paths.get_logs_dir() / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_pipeline.log"
     log_fh = open(log_path, "w", encoding="utf-8")
     sys.stdout = Tee(log_fh, sys.stdout)
@@ -1849,17 +1980,30 @@ def run_pipeline(args):
     else:
         state = load_state()
 
-    # Sync chapters_total from genre config on every entry (not just foundation)
-    # This prevents stale state.json values from persisting across resume runs.
+    # Single owner for chapter count: genre config once written, else the
+    # launch --chapters, else the default. Never silently overwrite.
     try:
-        genre_cfg = load_genre()
-        genre_total = genre_cfg["generation"]["outline"]["estimated_chapters"]
-        current_total = state.get("chapters_total", 0)
-        if genre_total != current_total:
-            state["chapters_total"] = genre_total
-            save_state(state)
-    except (FileNotFoundError, KeyError):
-        pass  # pre-foundation — no genre config yet, use default or --chapters
+        genre_total = genre_chapters_total()
+        if genre_total:
+            current_total = state.get("chapters_total", 0)
+            if genre_total != current_total:
+                if current_total:
+                    step(f"Chapter count: genre config says {genre_total}, "
+                         f"state said {current_total} — genre wins")
+                state["chapters_total"] = genre_total
+                save_state(state)
+        elif not args.from_scratch and args.chapters:
+            try:
+                want = int(args.chapters)
+                if state.get("chapters_total", 0) != want:
+                    step(f"Chapter count: --chapters {want} overrides state "
+                         f"{state.get('chapters_total')} (no genre config yet)")
+                    state["chapters_total"] = want
+                    save_state(state)
+            except ValueError:
+                pass
+    except Exception:
+        pass
 
     # Ensure directories exist (helpers create them)
     paths.get_chapters_dir()
@@ -1937,24 +2081,12 @@ def run_pipeline(args):
                         cmd += ["--perspective", args.perspective]
                     if getattr(args, "prose_mode", ""):
                         cmd += ["--prose-mode", args.prose_mode]
-                    subprocess.run(cmd, check=True, timeout=900)
+                    subprocess.run(cmd, check=True, timeout=timeout_for("standard"))
                     from core.genre import reload_genre
                     reload_genre()
                     # Genre is the source of truth for chapter count once written.
-                    # Sync immediately — the startup sync already ran (and no-op'd
-                    # if this file did not exist yet).
-                    try:
-                        genre_cfg = load_genre()
-                        genre_total = int(
-                            genre_cfg["generation"]["outline"]["estimated_chapters"]
-                        )
-                        if genre_total and genre_total != state.get("chapters_total"):
-                            state["chapters_total"] = genre_total
-                            save_state(state)
-                            print(f"  chapters_total synced from genre config → {genre_total}")
-                    except (FileNotFoundError, KeyError, TypeError, ValueError) as e:
-                        print(f"  WARN: could not sync chapters_total from genre: {e}",
-                              file=sys.stderr)
+                    resolve_chapters_total(state)
+                    print(f"  chapters_total resolved → {state.get('chapters_total')}")
                     print("Genre config ready.\n")
 
                 state = run_foundation(state)

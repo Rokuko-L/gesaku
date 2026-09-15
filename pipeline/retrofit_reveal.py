@@ -61,7 +61,7 @@ def call_writer(prompt: str, max_tokens: int = 16000) -> str:
         model_key="writer",
         max_tokens=max_tokens,
         beta_context=True,
-        timeout=600,
+        timeout_role="standard",
         temperature=0.7,
         raise_on_truncation=True,
     )

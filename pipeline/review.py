@@ -45,13 +45,13 @@ def call_opus(prompt, max_tokens=32000):
     try:
         return call_llm(
             prompt=prompt, model_key="review", max_tokens=max_tokens,
-            beta_context=True, timeout=900, raise_on_truncation=True,
+            beta_context=True, timeout_role="long", raise_on_truncation=True,
         )
     except TruncationError as e:
         print(f"  WARN: review truncated ({e}); using partial review.", file=sys.stderr)
         return call_llm(
             prompt=prompt, model_key="review", max_tokens=max_tokens,
-            beta_context=True, timeout=900, raise_on_truncation=False,
+            beta_context=True, timeout_role="long", raise_on_truncation=False,
         )
 
 

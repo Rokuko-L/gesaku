@@ -36,7 +36,7 @@ def chapter_path(ch: int) -> Path:
 def chapter_text(ch: int) -> str:
     p = chapter_path(ch)
     if not p.exists():
-        sys.exit(f"ERROR: chapter file not found: {p}")
+        raise FileNotFoundError(f"chapter file not found: {p}")
     return p.read_text(encoding="utf-8")
 
 
@@ -250,7 +250,7 @@ def panel_mentions_for_chapter(panel: dict, ch: int) -> dict:
 def build_panel_brief(ch: int, extra_rules: list[str] | None = None) -> str:
     panel = load_panel()
     if panel is None:
-        sys.exit("ERROR: edit_logs/reader_panel.json not found")
+        raise FileNotFoundError("edit_logs/reader_panel.json not found")
 
     text = chapter_text(ch)
     title = chapter_title(text)
@@ -448,7 +448,7 @@ def build_eval_brief(ch: int, extra_rules: list[str] | None = None) -> str:
     full_eval_path = latest_full_eval()
 
     if ch_eval_path is None and full_eval_path is None:
-        sys.exit(f"ERROR: no eval logs found for chapter {ch}")
+        raise FileNotFoundError(f"no eval logs found for chapter {ch}")
 
     text = chapter_text(ch)
     title = chapter_title(text)
@@ -591,7 +591,7 @@ def build_eval_brief(ch: int, extra_rules: list[str] | None = None) -> str:
 def build_cuts_brief(ch: int, extra_rules: list[str] | None = None) -> str:
     cuts_data = load_cuts(ch)
     if cuts_data is None:
-        sys.exit(f"ERROR: edit_logs/ch{ch:02d}_cuts.json not found")
+        raise FileNotFoundError(f"edit_logs/ch{ch:02d}_cuts.json not found")
 
     text = chapter_text(ch)
     title = chapter_title(text)
@@ -712,12 +712,12 @@ def build_auto_brief(extra_rules: list[str] | None = None) -> tuple[int, str]:
         subprocess.run([sys.executable, "pipeline/evaluate.py", "--full"], check=True)
         full_eval_path = latest_full_eval()
         if full_eval_path is None:
-            sys.exit("ERROR: no *_full.json found in eval_logs/ even after running evaluate.py --full")
+            raise FileNotFoundError("no *_full.json found in eval_logs/ even after running evaluate.py --full")
 
     full_eval = load_json(full_eval_path)
     ch = full_eval.get("weakest_chapter")
     if ch is None:
-        sys.exit("ERROR: full eval does not contain 'weakest_chapter'")
+        raise ValueError("full eval does not contain 'weakest_chapter'")
 
     print(f"Auto-detected weakest chapter: {ch}", file=sys.stderr)
     print(f"  Source: {full_eval_path.name}", file=sys.stderr)
@@ -912,12 +912,19 @@ def main():
 
     args = parser.parse_args()
 
-    # Load voice calibration sample if provided
+    try:
+        return _main_inner(args, parser)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _main_inner(args, parser):
     calibrated_rules = []
     if args.sample:
         sample_path = Path(args.sample)
         if not sample_path.exists():
-            sys.exit(f"ERROR: sample file not found: {args.sample}")
+            raise FileNotFoundError(f"sample file not found: {args.sample}")
         sample_text = sample_path.read_text(encoding="utf-8")
         calibrated_rules = analyze_writing_sample(sample_text)
         if calibrated_rules:

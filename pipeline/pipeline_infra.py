@@ -95,6 +95,91 @@ CHAPTERS_TOTAL = 24  # default; overridden by genre config at runtime
 PHASE_ORDER = ["foundation", "drafting", "revision", "export"]
 
 
+# ---------------------------------------------------------------------------
+# Timeout policy (single owner for every subprocess + LLM budget)
+# ---------------------------------------------------------------------------
+
+# Subprocess caps for pipeline stages. Env-tunable; call sites ask for a
+# named budget instead of inventing literals. LLM per-call timeouts live in
+# core.llm.llm_timeout() under the same naming scheme.
+TIMEOUT_SHORT = 300      # quick mechanical steps (sanitize, cuts, tex)
+TIMEOUT_STANDARD = 900   # single generation passes (draft, revision)
+TIMEOUT_LONG = 1800      # full-novel evals, chapter evals on slow proxies
+TIMEOUT_XLONG = 3600     # foundation-scale generation blocks
+
+
+def _env_timeout(name: str, default: int) -> int:
+    try:
+        val = int(float(os.getenv(name, "")))
+        return val if val > 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
+def timeout_for(stage: str) -> int:
+    """Named subprocess budget: short | standard | long | xlong."""
+    table = {
+        "short": _env_timeout("GESAKU_TIMEOUT_SHORT", TIMEOUT_SHORT),
+        "standard": _env_timeout("GESAKU_TIMEOUT_STANDARD", TIMEOUT_STANDARD),
+        "long": _env_timeout("GESAKU_TIMEOUT_LONG", TIMEOUT_LONG),
+        "xlong": _env_timeout("GESAKU_TIMEOUT_XLONG", TIMEOUT_XLONG),
+    }
+    return table.get(stage, table["standard"])
+
+
+# ---------------------------------------------------------------------------
+# Chapter-count ownership (single source of truth)
+# ---------------------------------------------------------------------------
+
+def genre_chapters_total() -> int | None:
+    """Chapter count from the genre config, the canonical owner once written."""
+    try:
+        from core.genre import reload_genre
+        total = reload_genre()["generation"]["outline"]["estimated_chapters"]
+        return int(total) if total else None
+    except Exception:
+        return None
+
+
+def resolve_chapters_total(state: dict) -> int:
+    """Single owner: genre config once written, else state, else default."""
+    genre_total = genre_chapters_total()
+    if genre_total:
+        if state.get("chapters_total") != genre_total:
+            state["chapters_total"] = genre_total
+            save_state(state)
+        return genre_total
+    if state.get("chapters_total", 0) > 0:
+        return state["chapters_total"]
+    return CHAPTERS_TOTAL
+
+
+# ---------------------------------------------------------------------------
+# Best-novel tracking (ship the peak, not the latest)
+# ---------------------------------------------------------------------------
+
+def record_novel_score(state: dict, score, commit: str | None = None) -> float | None:
+    """Store the latest score and track the all-time best commit."""
+    stored = store_novel_score(state, score)
+    if stored is None:
+        return state.get("novel_score")
+    best = state.get("best_novel_score")
+    try:
+        best_f = float(best) if best is not None else None
+    except (TypeError, ValueError):
+        best_f = None
+    if best_f is None or stored > best_f:
+        state["best_novel_score"] = stored
+        state["best_novel_commit"] = commit if commit else git_short_hash()
+    save_state(state)
+    return stored
+
+
+def best_novel_checkpoint(state: dict) -> tuple[float | None, str | None]:
+    """Return (best_score, best_commit) tracked in state."""
+    return state.get("best_novel_score"), state.get("best_novel_commit")
+
+
 def _env_float(name: str, default: float) -> float:
     raw = os.getenv(name)
     if raw is None or raw == "":
@@ -206,6 +291,8 @@ def default_state() -> dict:
         "chapters_drafted": 0,
         "chapters_total": CHAPTERS_TOTAL,
         "novel_score": None,  # null = never scored; 0.0 is a real (failed) score
+        "best_novel_score": None,
+        "best_novel_commit": None,
         "revision_cycle": 0,
         "debts": [],
     }
@@ -519,7 +606,7 @@ def process_notes(notes_input, genre):
             model_key="judge",
             max_tokens=2000,
             temperature=0.8,
-            timeout=120,
+            timeout_role="short",
         )
         seed_file.write_text(expanded, encoding="utf-8")
         step(f"seed.txt written ({len(expanded.split())}w, expanded from {word_count})")
@@ -541,7 +628,7 @@ def process_notes(notes_input, genre):
         model_key="judge",
         max_tokens=2000,
         temperature=0.3,
-        timeout=120,
+        timeout_role="short",
     )
     seed_file.write_text(notes, encoding="utf-8")
     step(f"seed.txt written with full {word_count}w doc. Summary ({len(summary.split())}w) sent to genre framework.")

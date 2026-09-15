@@ -236,7 +236,7 @@ def main():
                 model_key="writer",  # Use writer model for creative title rewriting
                 max_tokens=4000,
                 temperature=0.8,
-                timeout=180
+                timeout_role="short"
             )
             
             raw_json = parse_json_response(raw_response)

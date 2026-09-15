@@ -281,7 +281,7 @@ def main():
             model_key="writer",
             max_tokens=6000,
             temperature=0.6,
-            timeout=300,
+            timeout_role="standard",
         )
         if not raw or len(raw.strip()) < 20:
             print("REPAIR_FAILED empty LLM response", file=sys.stderr)
@@ -309,7 +309,7 @@ def main():
 
     if n_pre == 0 and total_llm == 0:
         print(f"NO_SLOP Chapter {chapter_num} — nothing to repair", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(0)
 
     ch_path.write_text(text, encoding="utf-8")
     print(f"REPAIRED Chapter {chapter_num}: {n_pre} pre-pass + {total_llm} LLM paragraph(s)", file=sys.stderr)
