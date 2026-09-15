@@ -2,7 +2,7 @@ import sys
 from pathlib import Path
 
 root = Path(r"D:\Tugas\LLM\autonovel")
-sys.path[:0] = [str(root), str(root / "webui"), str(root / "scratch")]
+sys.path[:0] = [str(root), str(root / "webui")]
 
 from fastapi.staticfiles import StaticFiles
 from server import app

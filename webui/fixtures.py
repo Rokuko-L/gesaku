@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate webui fixtures from a REAL project directory.
 
-Usage: uv run python scratch/gen_webui_fixtures.py [project_dir_name]
+Usage: uv run python webui/fixtures.py [project_dir_name]
 
 Reads world/characters/canon/outline files and emits JSON shaped exactly
 like contract.js types into webui/frontend/src/fixtures/. The mock client

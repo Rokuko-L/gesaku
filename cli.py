@@ -47,7 +47,7 @@ def _find_root() -> Path:
 
 
 def _bootstrap(root: Path) -> None:
-    for p in (root, root / "webui", root / "scratch"):
+    for p in (root, root / "webui"):
         s = str(p)
         if s not in sys.path:
             sys.path.insert(0, s)
@@ -94,7 +94,7 @@ def _serve_static(root: Path, host: str, port: int) -> subprocess.Popen:
 import sys
 from pathlib import Path
 root = Path({str(root)!r})
-sys.path[:0] = [str(root), str(root / "webui"), str(root / "scratch")]
+sys.path[:0] = [str(root), str(root / "webui")]
 from fastapi.staticfiles import StaticFiles
 from server import app
 dist = root / "webui" / "frontend" / "dist"

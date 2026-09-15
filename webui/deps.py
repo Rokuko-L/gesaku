@@ -15,7 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 WEBUI_DIR = Path(__file__).resolve().parent
-for _p in (ROOT, ROOT / "scratch", WEBUI_DIR):
+for _p in (ROOT, WEBUI_DIR):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 

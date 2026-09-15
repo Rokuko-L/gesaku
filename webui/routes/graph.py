@@ -5,7 +5,7 @@ from pathlib import Path as _Path
 
 ROOT = _Path(__file__).resolve().parent.parent.parent
 WEBUI_DIR = _Path(__file__).resolve().parent.parent
-for _p in (ROOT, ROOT / "scratch", WEBUI_DIR):
+for _p in (ROOT, WEBUI_DIR):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
@@ -21,7 +21,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-import gen_webui_fixtures as gen
+import fixtures as gen
 from core import paths
 from pydantic import BaseModel, Field
 

@@ -30,12 +30,12 @@ from starlette.responses import StreamingResponse
 
 ROOT = Path(__file__).resolve().parent.parent
 WEBUI_DIR = Path(__file__).resolve().parent
-for _p in (ROOT, ROOT / "scratch", WEBUI_DIR):
+for _p in (ROOT, WEBUI_DIR):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
 from core import paths  # noqa: E402
-import gen_webui_fixtures as gen  # noqa: E402
+import fixtures as gen  # noqa: E402
 from pipeline import pipeline_infra  # noqa: E402
 from run_manager import SEEDS_DIR  # noqa: E402
 
