@@ -102,14 +102,16 @@ function RunTab({ project }) {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight })
   }, [logLines])
 
-  const visible = useMemo(
-    () => (filter === 'all'
-      ? logLines
-      : logLines.filter((l) => (filter === 'errors'
-        ? /error|traceback|fail/i.test(l.text)
-        : true))),
-    [logLines, filter],
-  )
+  const visible = useMemo(() => {
+    if (filter === 'all') return logLines
+    // Levels come from the bridge now, so filtering is structural rather than
+    // a substring guess over the raw text.
+    if (filter === 'steps') {
+      return logLines.filter((l) => l.level === 'step' || l.level === 'banner')
+    }
+    if (filter === 'warn') return logLines.filter((l) => l.level === 'warn')
+    return logLines.filter((l) => /error|traceback|fatal|exception/i.test(l.text))
+  }, [logLines, filter])
 
   return (
     <div className="grid min-h-[520px] grid-cols-1 gap-5 lg:grid-cols-12">
@@ -189,13 +191,13 @@ function RunTab({ project }) {
           <SectionHead>
             stdout_stream{' '}
             <Hint below>
-              Raw output of the running pipeline. New lines stream in live while a run is active.
-              If this is empty and process says not running, the run already exited — check the
-              project's logs/ folder for the fatal error.
+              Raw output of the pipeline. Opening this backfills the tail of the run's log, so a
+              finished run is readable too; new lines stream in live while a run is active.
+              Filter by level, or download the whole log.
             </Hint>
           </SectionHead>
-          <div className="flex gap-1">
-            {['all', 'errors'].map((f) => (
+          <div className="flex items-center gap-1">
+            {['all', 'steps', 'warn', 'errors'].map((f) => (
               <button
                 key={f}
                 onClick={() => setFilter(f)}
@@ -206,6 +208,14 @@ function RunTab({ project }) {
                 [{f}]
               </button>
             ))}
+            <a
+              href={api.logUrl(project)}
+              download
+              title="download the raw log"
+              className="ml-2 border border-line px-2 py-0.5 font-mono text-[10px] text-fog-500 transition-colors hover:border-accent/50 hover:text-accent"
+            >
+              download
+            </a>
           </div>
         </div>
         <div ref={logRef} className="min-h-96 flex-1 overflow-y-auto bg-ink-950 p-4 font-mono text-xs leading-relaxed">

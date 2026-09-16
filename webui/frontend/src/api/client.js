@@ -204,6 +204,11 @@ export const api = {
     return `/api/artifacts/${kind}${q(project)}`
   },
 
+  /** Direct download URL for the run's captured stdout. */
+  logUrl(project) {
+    return `/api/log${q(project)}`
+  },
+
   /** Terminate the project's live run. */
   stopRun(project) {
     return send(`/api/run/stop${q(project)}`)

@@ -764,10 +764,28 @@ export default function ProjectsGallery() {
   const [wizard, setWizard] = useState(false)
   const [deleting, setDeleting] = useState(null)
   const [deleteError, setDeleteError] = useState('')
+  const [query, setQuery] = useState('')
+  const [sort, setSort] = useState('recent')
 
   useEffect(() => {
     document.title = 'gesaku · projects'
   }, [])
+
+  // A shelf accumulates smoke tests and abandoned drafts; recency alone buries
+  // the work you care about. Filter + sort are client-side over the same list.
+  const shown = useMemo(() => {
+    const needle = query.trim().toLowerCase()
+    const matches = (projects ?? []).filter((p) => !needle
+      || [p.name, p.title, p.genre].some((v) => (v ?? '').toLowerCase().includes(needle)))
+    const by = {
+      recent: (a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''),
+      name: (a, b) => a.name.localeCompare(b.name),
+      score: (a, b) => ((b.novelScore ?? b.foundationScore) ?? -1)
+        - ((a.novelScore ?? a.foundationScore) ?? -1),
+      chapters: (a, b) => (b.chaptersDone ?? 0) - (a.chaptersDone ?? 0),
+    }[sort]
+    return [...matches].sort(by)
+  }, [projects, query, sort])
 
   const doLaunch = async (form) => {
     await launchProject({
@@ -826,16 +844,49 @@ export default function ProjectsGallery() {
           </EmptyState>
         ) : (
           <>
+            <div className="mb-4 flex flex-wrap items-center gap-3 border border-line bg-ink-900 px-3 py-2">
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="filter by name, title or genre…"
+                aria-label="filter projects"
+                className="min-w-48 flex-1 border border-ink-600 bg-ink-950 px-2 py-1 font-mono text-xs text-fog-200 outline-none focus:border-accent/60"
+              />
+              <label className="flex items-center gap-1.5 font-mono text-[10px] text-fog-500">
+                <span>sort</span>
+                <select
+                  value={sort}
+                  onChange={(e) => setSort(e.target.value)}
+                  aria-label="sort projects"
+                  className="border border-ink-600 bg-ink-950 px-1.5 py-1 font-mono text-[11px] text-fog-300 outline-none focus:border-accent/60"
+                >
+                  <option value="recent">recent</option>
+                  <option value="name">name</option>
+                  <option value="score">score</option>
+                  <option value="chapters">chapters</option>
+                </select>
+              </label>
+              <span className="font-mono text-[10px] text-fog-500">
+                {shown.length}/{projects.length}
+              </span>
+            </div>
             {deleteError && (
               <p className="mb-4 border border-bad/40 bg-bad/10 px-3 py-2 font-mono text-[11px] text-bad">
                 delete failed: {deleteError}
               </p>
             )}
-            <div className="dock grid grid-cols-1 gap-px sm:grid-cols-2 xl:grid-cols-3">
-              {projects.map((p) => (
-                <ProjectCard key={p.name} p={p} onDelete={doDelete} deleting={deleting} />
-              ))}
-            </div>
+            {shown.length === 0 ? (
+              <EmptyState icon="⌕" title="no projects match"
+                cta={<Button onClick={() => setQuery('')}>clear filter</Button>}>
+                nothing on the shelf matches “{query}”. clear the filter to see all {projects.length} projects.
+              </EmptyState>
+            ) : (
+              <div className="dock grid grid-cols-1 gap-px sm:grid-cols-2 xl:grid-cols-3">
+                {shown.map((p) => (
+                  <ProjectCard key={p.name} p={p} onDelete={doDelete} deleting={deleting} />
+                ))}
+              </div>
+            )}
           </>
         )}
       </div>

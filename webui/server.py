@@ -398,6 +398,20 @@ def artifact_file(kind: str, project: str | None = Query(None)):
     return FileResponse(path, media_type=media, filename=path.name)
 
 
+@app.get("/api/log")
+def log_file(project: str | None = Query(None)):
+    """The run's captured stdout as a download.
+
+    The console tails this file over SSE; this is the escape hatch for reading
+    it whole (or grepping it) rather than scrolling a pane.
+    """
+    _, p = project_dir(project)
+    path = run_manager.log_path(p)
+    if path is None or not path.exists():
+        raise HTTPException(404, f"no log on disk for '{p.name}'")
+    return FileResponse(path, media_type="text/plain", filename=path.name)
+
+
 @app.get("/api/foundation")
 def foundation(project: str | None = Query(None)):
     _, p = project_dir(project)
