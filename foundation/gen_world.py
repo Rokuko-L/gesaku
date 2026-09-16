@@ -37,13 +37,16 @@ def main():
         print(f"ERROR: CRAFT.md not found at {craft_path}", file=sys.stderr)
         sys.exit(1)
 
-    seed = seed_path.read_text()
-    voice = voice_path.read_text()
-    craft = craft_path.read_text()
+    seed = seed_path.read_text(encoding="utf-8")
+    voice = voice_path.read_text(encoding="utf-8")
+    craft = craft_path.read_text(encoding="utf-8")
 
     voice_lines = voice.split('\n')
-    part2_start = next(i for i, l in enumerate(voice_lines) if 'Part 2' in l)
-    voice_part2 = '\n'.join(voice_lines[part2_start:])
+    try:
+        part2_start = next(i for i, l in enumerate(voice_lines) if 'Part 2' in l)
+        voice_part2 = '\n'.join(voice_lines[part2_start:])
+    except StopIteration:
+        voice_part2 = voice
 
     genre = load_genre()
     perspective_line = ""
@@ -60,6 +63,7 @@ def main():
         prompt = f"{perspective_line}\n\n{prompt}"
 
     print("Calling writer model...", file=sys.stderr)
+    result = ""
     for attempt in range(2):
         try:
             result = call_writer(prompt)
@@ -74,6 +78,8 @@ def main():
                 print(f"  WARN: {e}, retrying...", file=sys.stderr)
             else:
                 raise
+    if not result.strip():
+        raise RuntimeError("gen_world produced no output after retries (writer truncated twice)")
     paths.get_world_path().write_text(result, encoding="utf-8")
     print(result)
 

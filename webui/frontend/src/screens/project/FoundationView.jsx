@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../../api/client.js'
 import { navigate, projectRoute } from '../../router.js'
-import { EmptyState, Md, Skel } from '../../components/ui.jsx'
+import { EmptyState, Md, Skel, Unavailable } from '../../components/ui.jsx'
 import EntityGraph from '../../components/EntityGraph.jsx'
 
 const TABS = [
@@ -24,16 +24,27 @@ export default function FoundationView({ project, tab }) {
   const [arranging, setArranging] = useState(false)
   const [arrangeError, setArrangeError] = useState(null)
   const [sel, setSel] = useState(null)
+  const [loadError, setLoadError] = useState(null)
+  const [reload, setReload] = useState(0)
 
   useEffect(() => {
+    let cancelled = false
     setData(null)
     setGraph(null)
     setSel(null)
     setArrangeError(null)
+    setLoadError(null)
     document.title = `gesaku · ${project} · foundation`
-    api.getFoundation(project).then((d) => { if (d) setData(d) })
-    api.getEntityGraph(project).then((g) => { if (g) setGraph(g) })
-  }, [project])
+    api.getFoundation(project)
+      .then((d) => { if (!cancelled) setData(d ?? {}) })
+      .catch((e) => { if (!cancelled) setLoadError(e) })
+    // The graph is optional (the heuristic builder can have nothing to draw) —
+    // a failure here must not blank the whole view.
+    api.getEntityGraph(project)
+      .then((g) => { if (!cancelled && g) setGraph(g) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [project, reload])
 
   const arrange = async () => {
     setArranging(true)
@@ -61,6 +72,10 @@ export default function FoundationView({ project, tab }) {
       .filter(Boolean)
   }, [sel, nodes, edges])
 
+  if (loadError) {
+    return <Unavailable what="the foundation" error={loadError}
+      onRetry={() => setReload((n) => n + 1)} />
+  }
   if (!data) return <Skel className="h-[60vh]" />
 
   const hasFoundation = data.docs ? Object.values(data.docs).some((d) => d?.trim()) || nodes.length > 0 : false

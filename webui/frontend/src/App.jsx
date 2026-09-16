@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { api } from './api/client.js'
 import { useRoute, navigate, projectRoute } from './router.js'
 import { AppProvider, useApp } from './state.jsx'
+import { Button, EmptyState } from './components/ui.jsx'
 import ProjectHeader from './components/ProjectHeader.jsx'
 import ProjectsGallery from './screens/ProjectsGallery.jsx'
 import Settings from './screens/Settings.jsx'
@@ -72,6 +73,25 @@ function Workspace({ route }) {
   const project = route.project
   const view = route.view
   const running = runState?.running ?? false
+
+  // An unknown project name must not fall through to the sub-views: they would
+  // request a project the bridge doesn't have and render whatever the fallback
+  // yields. Say so plainly instead.
+  if (projects && !projects.some((p) => p.name === project)) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col">
+        <main className="min-w-0 flex-1 overflow-y-auto p-6">
+          <EmptyState
+            icon="✕"
+            title="no such project"
+            cta={<Button variant="accent" onClick={() => navigate('/projects')}>‹ back to the shelf</Button>}
+          >
+            there is no project named “{project}” under projects/. it may have been deleted, or this link is stale.
+          </EmptyState>
+        </main>
+      </div>
+    )
+  }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">

@@ -86,6 +86,7 @@ uv run python pipeline/gen_revision.py 5 briefs/ch05.md  # Rewrite chapter from 
 uv run python build_outline.py                  # Rebuild outline
 uv run python build_arc_summary.py              # Rebuild summaries
 python3 typeset/build_tex.py && cd typeset && tectonic novel.tex  # PDF
+uv run python typeset/build_epub.py             # EPUB (no toolchain needed)
 ```
 
 ---

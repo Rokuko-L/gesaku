@@ -331,6 +331,10 @@ Return ONLY a numbered list."""
 
     # --- Phase 3: Winner ---
     ranked = sorted(hall_of_fame.items(), key=lambda x: x[1]["avg"], reverse=True)
+    if not ranked:
+        print("ERROR: title tournament scored no candidates — the writer returned "
+              "no parseable titles across all rounds.", file=sys.stderr)
+        sys.exit(1)
     winner, winner_entry = ranked[0]
     winner_score = winner_entry["avg"]
 

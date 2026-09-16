@@ -510,6 +510,10 @@ CRITICAL RULES:
     # Save a copy as .outline_part1.md for backwards compatibility
     paths.get_outline_part1_path().write_text(full_outline_text, encoding="utf-8")
 
+    # A fresh part-1 outline invalidates any previous part-2 polish: the
+    # checkpoint must not report "part 2 done" for prose it never saw.
+    paths.get_outline_part2_path().unlink(missing_ok=True)
+
     print("Outline generation complete!", file=sys.stderr)
 
 if __name__ == "__main__":

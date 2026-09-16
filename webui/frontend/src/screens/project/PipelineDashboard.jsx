@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useApp } from '../../state.jsx'
 import { api } from '../../api/client.js'
+import { useApi } from '../../api/useApi.js'
 import { navigate, projectRoute } from '../../router.js'
-import { Button, Card, EmptyState, Hint, SectionHead, StatTile, TabBar } from '../../components/ui.jsx'
+import { Button, Card, EmptyState, Hint, SectionHead, StatTile, TabBar, Unavailable } from '../../components/ui.jsx'
 import { EvalPane, LlmFeed } from './panels.jsx'
 
 /**
@@ -224,13 +225,11 @@ function RunTab({ project }) {
 /* --------------------------------------------------------------- scores tab */
 
 function ScoresTab({ project }) {
-  const [scores, setScores] = useState(null)
+  const { data: scores, error, loading, retry } = useApi(
+    () => api.getScoreHistory(project), [project])
 
-  useEffect(() => {
-    api.getScoreHistory(project).then(setScores).catch(() => {})
-  }, [project])
-
-  if (!scores) return <div className="h-64 animate-pulse bg-ink-800" />
+  if (loading) return <div className="h-64 animate-pulse bg-ink-800" />
+  if (error) return <Unavailable what="score history" error={error} onRetry={retry} />
   if (!scores.length) {
     return (
       <EmptyState icon="⌗" title="nothing scored yet">
@@ -291,26 +290,27 @@ function fmtTokens(n) {
 }
 
 function TelemetryTab({ project }) {
-  const [stats, setStats] = useState(null)
+  const { data: stats, error, loading, retry } = useApi(
+    () => api.getStats(project), [project])
+  // Prices come from the settings page; without them there is no honest cost.
+  const { data: settings } = useApi(() => api.getSettings(), [])
 
-  useEffect(() => {
-    api.getStats(project).then(setStats).catch(() => {})
-  }, [project])
+  if (loading) return <div className="h-64 animate-pulse bg-ink-800" />
+  if (error) return <Unavailable what="telemetry" error={error} onRetry={retry} />
 
-  if (!stats) return <div className="h-64 animate-pulse bg-ink-800" />
-
-  // mock price map (USD per 1M tokens, in/out) — real prices arrive with settings
-  const PRICES = { writer: [3, 15], judge: [15, 75], review: [15, 75] }
-  const rowCost = (r) => {
-    const [pin, pout] = PRICES[r.modelKey] ?? [0, 0]
-    return (r.tokensIn / 1e6) * pin + (r.tokensOut / 1e6) * pout
-  }
+  const pin = settings?.prices?.inputPerMTok
+  const pout = settings?.prices?.outputPerMTok
+  // A dollar figure needs both a price AND a token count. Never report either
+  // as zero when the provider simply did not tell us.
+  const reported = stats.tokensReported ?? 0
+  const priced = reported > 0 && Number.isFinite(pin) && Number.isFinite(pout)
+  const rowCost = (r) => (r.tokensIn / 1e6) * pin + (r.tokensOut / 1e6) * pout
   const totalMs = stats.durationMsTotal ?? 0
 
   if (!stats.callCount) {
     return (
       <EmptyState icon="≈" title="no llm spend yet">
-        token usage and estimated cost per model role appear here once the pipeline starts calling the writer,
+        token usage per model role appears here once the pipeline starts calling the writer,
         judge, and review models.
       </EmptyState>
     )
@@ -319,11 +319,32 @@ function TelemetryTab({ project }) {
   return (
     <div className="space-y-5">
       <div className="dock grid grid-cols-2 gap-px xl:grid-cols-4">
-        <StatTile label="tokens in" value={fmtTokens(stats.tokensInTotal)} sub={`${stats.callCount} calls`} />
-        <StatTile label="tokens out" value={fmtTokens(stats.tokensOutTotal)} />
+        <StatTile
+          label="tokens in"
+          value={reported > 0 ? fmtTokens(stats.tokensInTotal) : '—'}
+          sub={reported > 0 ? `${stats.callCount} calls`
+                            : `${stats.callCount} calls · none reported`}
+        />
+        <StatTile
+          label="tokens out"
+          value={reported > 0 ? fmtTokens(stats.tokensOutTotal) : '—'}
+          sub={reported > 0 ? undefined : 'provider sent no usage'}
+        />
         <StatTile label="failed calls" value={String(stats.failedCount)} sub={stats.failedCount > 0 ? undefined : 'clean'} />
         <StatTile label="time in llm" value={`${(totalMs / 60000).toFixed(1)}m`} sub={`${Math.round(totalMs / 1000)}s total`} />
       </div>
+      {reported === 0 && (
+        <p className="font-mono text-[10px] leading-relaxed text-fog-500">
+          [ {stats.callCount} calls recorded, none reporting token usage — this gateway returns no
+          usage block, so the totals and cost are unknown rather than zero. ]
+        </p>
+      )}
+      {reported > 0 && !priced && (
+        <p className="font-mono text-[10px] leading-relaxed text-fog-500">
+          [ cost omitted — set input/output USD per 1M tokens on the settings page to estimate spend. token
+          counts above are measured, not estimated. ]
+        </p>
+      )}
       <Card className="overflow-hidden">
         <table className="w-full text-left">
           <thead>
@@ -332,7 +353,7 @@ function TelemetryTab({ project }) {
               <th className="px-4 py-3 font-medium">model</th>
               <th className="px-4 py-3 text-right font-medium">tokens in</th>
               <th className="px-4 py-3 text-right font-medium">tokens out</th>
-              <th className="px-4 py-3 text-right font-medium">cost</th>
+              <th className="px-4 py-3 text-right font-medium">est. cost</th>
               <th className="px-4 py-3 text-right font-medium">calls</th>
             </tr>
           </thead>
@@ -343,7 +364,9 @@ function TelemetryTab({ project }) {
                 <td className="px-4 py-3 text-fog-500">{r.model}</td>
                 <td className="px-4 py-3 text-right text-fog-200">{r.tokensIn.toLocaleString()}</td>
                 <td className="px-4 py-3 text-right text-fog-200">{r.tokensOut.toLocaleString()}</td>
-                <td className="px-4 py-3 text-right text-accent">${rowCost(r).toFixed(2)}</td>
+                <td className="px-4 py-3 text-right text-accent">
+                  {priced ? `$${rowCost(r).toFixed(2)}` : '—'}
+                </td>
                 <td className="px-4 py-3 text-right text-fog-400">{r.calls}</td>
               </tr>
             ))}

@@ -44,17 +44,26 @@ export function AppProvider({ children }) {
     }
     api.getRunState(project).then(setRunState).catch(() => {})
     let poll = null
+    let cancelled = false
+    const startPolling = () => {
+      poll ??= setInterval(() => {
+        api.getRunState(project).then((s) => { if (!cancelled) setRunState(s) }).catch(() => {})
+      }, 5000)
+    }
     const unsub = api.subscribeStream(project, {
       onState: (s, meta) => {
         if (meta?.streamFailed) {
+          // EventSource retries on its own, so leaving it open means the
+          // failed stream and the poll both write runState. Close it and
+          // degrade to polling only.
           setLive(false)
-          poll ??= setInterval(() => {
-            api.getRunState(project).then(setRunState).catch(() => {})
-          }, 5000)
+          unsub()
+          startPolling()
           return
         }
         if (s && s.project === project) {
           setLive(true)
+          if (poll) { clearInterval(poll); poll = null }  // stream recovered
           setRunState(s)
         }
       },
@@ -62,6 +71,7 @@ export function AppProvider({ children }) {
       onLlm: (ev) => setLlmEvents((prev) => [...prev.slice(-99), ev]),
     })
     return () => {
+      cancelled = true
       unsub()
       if (poll) clearInterval(poll)
     }

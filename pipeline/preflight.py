@@ -16,6 +16,7 @@ import httpx
 
 from core import paths
 from core.genre import load_genre
+from pipeline.pipeline_infra import timeout_for
 
 
 
@@ -61,7 +62,7 @@ def sanity_check(args):
                 headers={"content-type": "application/json"},
                 json={"model": model, "max_tokens": 1,
                       "messages": [{"role": "user", "content": "ping"}]},
-                timeout=15,
+                timeout=timeout_for("probe"),
             )
             if probe.status_code == 404:
                 print(f"FAIL: proxy reachable but model '{model}' not found (404) — "

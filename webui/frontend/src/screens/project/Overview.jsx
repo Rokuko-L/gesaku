@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useApp } from '../../state.jsx'
 import { api } from '../../api/client.js'
+import { useApi } from '../../api/useApi.js'
 import { navigate, projectRoute } from '../../router.js'
-import { Button, Card, EmptyState, Hint, SectionHead, Skel, StatTile } from '../../components/ui.jsx'
+import { Button, Card, EmptyState, Hint, SectionHead, Skel, StatTile, timeAgo } from '../../components/ui.jsx'
 
 /**
  * Project overview — the control desk. Answers "where is this novel right
@@ -51,8 +52,36 @@ function PhaseTracker({ runState }) {
         })}
       </ol>
       {done && (
-        <p className="mt-4 font-mono text-[10px] text-good">✓ novel complete — exported PDF is in the project's typeset/ folder</p>
+        <p className="mt-4 font-mono text-[10px] text-good">✓ novel complete — deliverables are linked below</p>
       )}
+    </Card>
+  )
+}
+
+/** Deliverable downloads (the typeset PDF, manuscript, outline, arc summary). */
+function Deliverables({ project }) {
+  const { data: files, error, loading } = useApi(
+    () => api.listArtifacts(project), [project])
+  if (loading || error || !files?.length) return null
+  return (
+    <Card className="p-5">
+      <SectionHead className="mb-3">deliverables</SectionHead>
+      <div className="divide-y divide-line border border-line">
+        {files.map((f) => (
+          <a
+            key={f.kind}
+            href={api.artifactUrl(project, f.kind)}
+            target="_blank"
+            rel="noreferrer"
+            className="group flex items-center justify-between p-3 transition-colors hover:bg-ink-850"
+          >
+            <span className="font-mono text-xs text-fog-200 group-hover:text-accent">{f.name}</span>
+            <span className="font-mono text-[10px] text-fog-500">
+              {(f.bytes / 1024).toFixed(0)} KB · {timeAgo(f.updatedAt)} ↓
+            </span>
+          </a>
+        ))}
+      </div>
     </Card>
   )
 }
@@ -211,6 +240,8 @@ export default function Overview({ project }) {
           </Card>
         </div>
       </div>
+
+      <Deliverables project={project} />
 
       {/* sub-view cards */}
       {!meta ? (

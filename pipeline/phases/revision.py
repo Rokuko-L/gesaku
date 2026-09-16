@@ -9,9 +9,7 @@ from pathlib import Path as _Path
 sys.path.insert(0, str(_Path(__file__).resolve().parent.parent.parent))
 
 import json
-import os
 import re
-import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -23,8 +21,8 @@ from pipeline.pipeline_infra import (
     count_words_in_chapters, cuts_tolerance, decline_streak, fmt_score,
     get_historical_best_for_chapter, git_add_commit, git_commit_staged,
     git_reset_hard, git_short_hash, log_result, max_revision_cycles,
-    min_revision_cycles, near_clean_margin, parse_score, parse_score_any,
-    plateau_delta, record_novel_score, resolve_chapters_total,
+    max_workers, min_revision_cycles, near_clean_margin, parse_score,
+    parse_score_any, plateau_delta, record_novel_score, resolve_chapters_total,
     revision_tolerance, run_tool, save_state, step, store_novel_score,
     timeout_for, uv_run,
 )
@@ -47,8 +45,12 @@ def parse_panel_consensus(panel_path: Path) -> list[dict]:
     """
     if not panel_path.exists():
         return []
-    with open(panel_path) as f:
-        data = json.load(f)
+    try:
+        with open(panel_path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        step(f"WARNING: reader_panel.json unreadable ({e}) — skipping panel consensus")
+        return []
 
     items = []
 
@@ -133,7 +135,7 @@ def run_revision(
 
         # Check if we should run adversarial editing or mechanical cuts
         run_adv = not skip_adversarial_editing
-        apply_cuts = paths.get_root_dir() / "apply_cuts.py"
+        apply_cuts = paths.get_root_dir() / "pipeline" / "apply_cuts.py"
         run_cuts = not skip_mechanical_cuts and apply_cuts.exists()
 
         if run_adv or run_cuts:
@@ -149,24 +151,20 @@ def run_revision(
                 # -- Step 1: Adversarial editing pass (parallel per chapter) --
                 step("Running adversarial editing on all chapters...")
                 total_ch = resolve_chapters_total(state)
-                # Parallelism: default 4 workers even for local proxies —
-                # build_arc_summary/build_outline already run 4-12 concurrent
-                # LLM calls against the same endpoint. Override with
-                # GESAKU_MAX_WORKERS (e.g. =1 for weak single-request models).
-                max_workers = int(os.getenv("GESAKU_MAX_WORKERS", "4"))
+                n_workers = max_workers()
                 adv_timeout = timeout_for("standard")
-                with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                with ThreadPoolExecutor(max_workers=n_workers) as pool:
                     futures = {
-                        pool.submit(uv_run, f"adversarial_edit.py {ch}", adv_timeout): ch
+                        pool.submit(uv_run, f"pipeline/adversarial_edit.py {ch}", adv_timeout): ch
                         for ch in range(1, total_ch + 1)
                     }
                     for future in as_completed(futures):
-                         ch = futures[future]
-                         try:
-                             future.result()
-                             step(f"  ch {ch}: done")
-                         except Exception:
-                             step(f"  ch {ch}: edit failed, continuing anyway")
+                        ch = futures[future]
+                        try:
+                            future.result()
+                            step(f"  ch {ch}: done")
+                        except Exception as e:
+                            step(f"  ch {ch}: edit failed, continuing anyway ({e})")
 
                 # Evaluate full novel score after Step 1
                 step("Evaluating novel score after Adversarial Edits...")
@@ -325,11 +323,10 @@ def run_revision(
                 except Exception as e:
                     return {"ch_num": ch_num, "error": str(e)}
 
-            # Parallelism: default 4 workers even for local proxies —
-            # override with GESAKU_MAX_WORKERS (e.g. =1 for weak models).
-            max_workers = int(os.getenv("GESAKU_MAX_WORKERS", "4"))
-            max_workers = max(1, min(max_workers, len(consensus_items)))
-            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            # Parallelism bound by the configured worker budget and the number
+            # of consensus items to revise.
+            n_workers = max(1, min(max_workers(), len(consensus_items)))
+            with ThreadPoolExecutor(max_workers=n_workers) as pool:
                 futures = {pool.submit(_revise_one, item): item for item in consensus_items}
                 results = []
                 for future in as_completed(futures):

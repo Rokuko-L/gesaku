@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../../api/client.js'
+import { useApi } from '../../api/useApi.js'
 import { navigate, projectRoute } from '../../router.js'
-import { EmptyState, mdInline, Skel } from '../../components/ui.jsx'
+import { EmptyState, mdInline, Skel, Unavailable } from '../../components/ui.jsx'
 
 function ScoreDonut({ score }) {
   const pct = Math.max(0, Math.min(1, (score ?? 0) / 10))
@@ -47,19 +48,20 @@ function Panel({ label, children, defaultOpen = true }) {
  * chapter's score and the judge's notes alongside.
  */
 export default function Manuscript({ project }) {
-  const [chapters, setChapters] = useState(null)
+  const { data: chapters, error, loading, retry } = useApi(
+    () => api.listChapters(project), [project])
   const [evals, setEvals] = useState({})
   const [sel, setSel] = useState(0)
 
   useEffect(() => {
     document.title = `gesaku · ${project} · manuscript`
-    setChapters(null)
-    api.listChapters(project).then((cs) => {
-      setChapters(cs)
-      const first = cs.findIndex((c) => c.status === 'kept')
-      setSel(first >= 0 ? first : 0)
-    })
   }, [project])
+
+  useEffect(() => {
+    if (!chapters) return
+    const first = chapters.findIndex((c) => c.status === 'kept')
+    setSel(first >= 0 ? first : 0)
+  }, [chapters])
 
   const ch = chapters?.[sel]
   const chId = ch?.id
@@ -71,9 +73,9 @@ export default function Manuscript({ project }) {
   useEffect(() => {
     if (!chId) return undefined
     let stale = false
-    api.getEvals(project, chId).then((a) => {
-      if (!stale) setEvals((prev) => ({ ...prev, [chId]: a }))
-    })
+    api.getEvals(project, chId)
+      .then((a) => { if (!stale) setEvals((prev) => ({ ...prev, [chId]: a })) })
+      .catch(() => { if (!stale) setEvals((prev) => ({ ...prev, [chId]: [] })) })
     return () => { stale = true }
   }, [project, chId])
 
@@ -83,8 +85,11 @@ export default function Manuscript({ project }) {
     return list?.length ? list[list.length - 1] : null
   }, [chId, evals])
 
-  if (!chapters) {
+  if (loading) {
     return <Skel className="h-[60vh]" />
+  }
+  if (error) {
+    return <Unavailable what="the manuscript" error={error} onRetry={retry} />
   }
   if (!chapters.length) {
     return (
@@ -114,9 +119,13 @@ export default function Manuscript({ project }) {
         </div>
       </header>
 
-      <div className="flex min-h-0 flex-1 flex-col xl:flex-row">
+      {/* Below xl the panes stack: let this row scroll instead of trying to
+          fit rail + prose + analysis into the viewport. With `flex-1` and an
+          unbounded rail, the prose pane was squeezed to 0 height and the
+          chapter text rendered invisibly. */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto xl:flex-row xl:overflow-visible">
         {/* chapter rail */}
-        <nav className="w-52 shrink-0 overflow-y-auto border-b border-line bg-ink-900 py-2 xl:border-b-0 xl:border-r">
+        <nav className="max-h-64 w-full shrink-0 overflow-y-auto border-b border-line bg-ink-900 py-2 xl:max-h-none xl:w-52 xl:border-b-0 xl:border-r">
           <p className="section-head px-4 pb-2">// chapters</p>
           <ul>
             {chapters.map((c, i) => (
@@ -141,7 +150,7 @@ export default function Manuscript({ project }) {
         </nav>
 
         {/* prose */}
-        <article ref={proseRef} className="min-w-0 flex-1 overflow-y-auto">
+        <article ref={proseRef} className="min-w-0 w-full xl:flex-1 xl:overflow-y-auto">
           <div className="mx-auto max-w-[720px] px-10 py-10">
             <p className="font-mono text-xs text-fog-500">
               {ch.id} <span className="opacity-50">//</span> {ch.title}
@@ -174,7 +183,7 @@ export default function Manuscript({ project }) {
         </article>
 
         {/* analysis rail */}
-        <aside className="w-72 shrink-0 overflow-y-auto border-t border-line bg-ink-900 xl:border-l xl:border-t-0">
+        <aside className="w-full shrink-0 border-t border-line bg-ink-900 xl:w-72 xl:overflow-y-auto xl:border-l xl:border-t-0">
           <Panel label="// chapter_score">
             <ScoreDonut score={ch.score} />
             {attempt && (

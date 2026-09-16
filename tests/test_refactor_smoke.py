@@ -132,12 +132,26 @@ class RefactorSmoke(unittest.TestCase):
         )
         self.assertTrue(rp._foundation_artifact_ok(outline, require_chapters=4))
         self.assertFalse(rp._foundation_artifact_ok(outline, require_chapters=5))
+        # The smoke project persists under the real projects/ dir, so clear any
+        # marker a previous run left behind before asserting on its absence.
+        paths.get_outline_part2_path().unlink(missing_ok=True)
         self.assertFalse(rp._foundation_part2_ok(outline, 4))
+        # Part-2 completion is an explicit marker, not a prose guess.
+        paths.get_outline_part2_path().write_text("done\n", encoding="utf-8")
+        self.assertTrue(rp._foundation_part2_ok(outline, 4))
+        # A regenerated part-1 outline clears the marker (gen_outline does
+        # this) — the checkpoint must not report done for unseen prose.
+        paths.get_outline_part2_path().unlink()
+        self.assertFalse(rp._foundation_part2_ok(outline, 4))
+        # Marker alone is not enough: the tail chapters must still be present.
+        paths.get_outline_part2_path().write_text("done\n", encoding="utf-8")
         outline.write_text(
-            outline.read_text(encoding="utf-8") + "\n## FORESHADOWING\n",
+            "".join(f"### Chapter {i}: Title number {i}\n" + ("body " * 40 + "\n")
+                    for i in range(1, 3)),
             encoding="utf-8",
         )
-        self.assertTrue(rp._foundation_part2_ok(outline, 4))
+        self.assertFalse(rp._foundation_part2_ok(outline, 4))
+        paths.get_outline_part2_path().unlink(missing_ok=True)
 
     # -- 4. centralized timeouts -----------------------------------------
 
@@ -268,16 +282,51 @@ class RefactorSmoke(unittest.TestCase):
                                 cwd=project, capture_output=True, text=True).stdout
         self.assertIn("chapters/ch_04.md", staged)
 
-    def test_git_reset_spares_callbacks_store(self):
-        """`git clean -fd` in git_reset_hard must not delete the untracked
-        plant store (it is not a disposable build artifact)."""
-        from pipeline import pipeline_infra as infra
-        import inspect
+    def test_git_clean_spares_every_artifact_a_later_stage_reads(self):
+        """Behavioral: run the exact `git clean` command git_reset_hard builds
+        and assert each artifact the pipeline reads back survives.
 
-        src = inspect.getsource(infra.git_reset_hard)
-        self.assertIn("open_callbacks.json", src,
-                      "git clean must exclude open_callbacks.json or an "
-                      "untracked store is deleted on reset")
+        The list of names here is deliberately independent of CLEAN_KEEP — a
+        test that iterated CLEAN_KEEP would pass even with an entry missing
+        from it, which is precisely how `.outline_part2.done` shipped
+        unprotected while the docs claimed otherwise.
+        """
+        self._real_root()
+        import subprocess
+        from pipeline import pipeline_infra as infra
+
+        must_survive = [
+            "open_callbacks.json", ".outline_roadmap.md", ".outline_part1.md",
+            ".outline_part2.done", "premise_validation.json",
+            "plant_hygiene.json", "reviews.md", "run.json",
+            "retry_feedback_ch03.txt", "repetition_check.json",
+        ]
+        dirs = ["eval_logs", "edit_logs", "briefs", "logs"]
+
+        with tempfile.TemporaryDirectory(prefix="gesaku_clean_") as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init", "-q", "."], cwd=repo, capture_output=True)
+            for name in must_survive:
+                (repo / name).write_text("x", encoding="utf-8")
+            for d in dirs:
+                (repo / d).mkdir()
+                (repo / d / "keep.txt").write_text("x", encoding="utf-8")
+            (repo / "chapters").mkdir()
+            (repo / "chapters" / "ch_01.md").write_text("x", encoding="utf-8")
+
+            excludes = " ".join(f"-e {name}" for name in infra.CLEAN_KEEP)
+            infra.run_tool(f"git clean -fd {excludes}", cwd=str(repo))
+
+            for name in must_survive:
+                self.assertTrue((repo / name).exists(),
+                                f"git_reset_hard's clean would delete {name}")
+            for d in dirs:
+                self.assertTrue((repo / d).exists(),
+                                f"git_reset_hard's clean would delete {d}/")
+            self.assertFalse(
+                (repo / "chapters").exists(),
+                "an unexcluded untracked path must still be cleaned, or the "
+                "reset stops doing its job")
 
     def test_revert_paths_do_not_stage_the_store(self):
         """A revert has no commit. Staging the store there leaves it in the

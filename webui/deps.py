@@ -20,7 +20,7 @@ for _p in (ROOT, WEBUI_DIR):
         sys.path.insert(0, str(_p))
 
 from core import paths  # noqa: E402
-from run_manager import RunManager  # noqa: E402
+from run_manager import run_manager  # noqa: E402
 
 
 def _iso(ts: float) -> str:
@@ -30,30 +30,56 @@ def _iso(ts: float) -> str:
 def default_project() -> str:
     """Most recently touched project (state.json mtime) — the active one."""
     cands = []
-    for d in (paths.get_root_dir() / "projects").iterdir():
-        sf = d / "state.json"
-        if d.is_dir() and sf.exists():
-            cands.append((sf.stat().st_mtime, d.name))
+    projects_dir = paths.get_root_dir() / "projects"
+    if projects_dir.is_dir():
+        for d in projects_dir.iterdir():
+            sf = d / "state.json"
+            if d.is_dir() and sf.exists():
+                cands.append((sf.stat().st_mtime, d.name))
     if not cands:
         raise HTTPException(404, "no projects with state.json under projects/")
     return max(cands)[1]
 
 
-def resolve_name(name: str) -> str:
-    """Validate a project name (path-isolation check); no existence requirement."""
-    with _proj_lock:
-        try:
-            paths.set_project_name(name)
-        except ValueError as e:
-            raise HTTPException(400, str(e)) from e
-    return name
+def llm_event_view(e: dict) -> dict:
+    """Map one llm_events.jsonl record (snake_case) to the API shape.
+
+    Single owner of that mapping: the history endpoint and the SSE feed must
+    expose the same camelCase keys or live rows render blank while the same
+    call looks correct after a reload.
+    """
+    return {
+        "ts": e.get("ts"),
+        "modelKey": e.get("model_key"),
+        "model": e.get("model"),
+        "ok": e.get("ok"),
+        "attempt": e.get("attempt"),
+        "tokensIn": e.get("tokens_in"),
+        "tokensOut": e.get("tokens_out"),
+        "durationMs": e.get("duration_ms"),
+        "stopReason": e.get("stop_reason"),
+        "promptChars": e.get("prompt_chars"),
+        "responseChars": e.get("response_chars"),
+        "promptHead": e.get("prompt_head"),
+        "error": e.get("error"),
+    }
 
 
 def project_dir(name: str | None, must_exist: bool = True) -> tuple[str, Path]:
-    """Validate the project name and return (name, dir)."""
+    """Validate the project name and return (name, dir).
+
+    Resolution runs entirely under the lock: `get_project_dir()` reads the same
+    module global that `set_project_name()` writes, so releasing the lock
+    between them lets a concurrent request for another project swap the global
+    and send this request into the wrong directory.
+    """
     resolved = name or default_project()
-    resolve_name(resolved)
-    p = paths.get_project_dir()
+    with _proj_lock:
+        try:
+            paths.set_project_name(resolved)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        p = paths.get_project_dir()
     if must_exist and not (p / "state.json").exists():
         raise HTTPException(404, f"unknown project: {resolved}")
     return resolved, p
@@ -80,7 +106,6 @@ def run_snapshot(p: Path) -> dict:
     }
 
 _proj_lock = threading.Lock()
-run_manager = RunManager()
 
 
 def run_state_fields(p: Path, state: dict) -> dict:

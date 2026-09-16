@@ -12,6 +12,7 @@ import json
 import os
 import sys
 import tempfile
+import unittest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -165,6 +166,40 @@ def test_registry_path_is_in_projects():
               str(reg_path).startswith(str(tmp_root / "projects")),
               str(reg_path))
     paths._root_dir = orig_root
+
+
+class PathContaminationTest(unittest.TestCase):
+    """Runs the check()-style assertions above under unittest.
+
+    Without a TestCase these checks never executed in CI: `unittest discover`
+    imports the module and finds nothing, so path-isolation went unverified.
+    """
+
+    def setUp(self):
+        _failed.clear()
+        self._tmp = tempfile.TemporaryDirectory(prefix="gesaku_cont_")
+        self.tmp_root = Path(self._tmp.name)
+        (self.tmp_root / "pyproject.toml").write_text("[tool.gesaku]", encoding="utf-8")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+        _failed.clear()
+
+    def _assert_checks(self, fn, *args):
+        fn(*args)
+        self.assertEqual([], list(_failed), f"failed checks: {list(_failed)}")
+
+    def test_no_root_contamination(self):
+        self._assert_checks(test_no_root_contamination, self.tmp_root)
+
+    def test_two_projects_no_cross_contamination(self):
+        self._assert_checks(test_two_projects_no_cross_contamination, self.tmp_root)
+
+    def test_mock_call_llm(self):
+        self._assert_checks(test_mock_call_llm)
+
+    def test_registry_path_is_in_projects(self):
+        self._assert_checks(test_registry_path_is_in_projects)
 
 
 def main():

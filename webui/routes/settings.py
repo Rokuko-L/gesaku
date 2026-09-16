@@ -73,7 +73,7 @@ def _write_env_file(updates: dict[str, str]) -> None:
         if k not in seen:
             out.append(f"{k}={v}")
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".env.tmp")
+    tmp = path.parent / (path.name + ".tmp")
     tmp.write_text("\n".join(out) + "\n", encoding="utf-8")
     os.replace(tmp, path)
     # Make subsequent os.getenv / load_dotenv-less readers see new values
@@ -88,6 +88,22 @@ class SettingsPayload(BaseModel):
     thresholds: dict[str, float] | None = None
     heuristics: dict[str, float] | None = None
     defaults: dict[str, str | int] | None = None
+    prices: dict[str, float | None] | None = None
+
+
+def _price(merged: dict, key: str) -> float | None:
+    """USD per 1M tokens, or None when the operator has not configured it.
+
+    None is meaningful: the telemetry panel must show "not configured" rather
+    than a fabricated dollar figure derived from a hard-coded price map.
+    """
+    raw = str(merged.get(key, "") or "").strip()
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
 
 
 @router.get("/api/settings")
@@ -113,6 +129,10 @@ def settings():
             "maxChapterAttempts": pipeline_infra.max_chapter_attempts(),
             "revisionCycles": pipeline_infra.min_revision_cycles(),
             "plateauDelta": pipeline_infra.plateau_delta(),
+        },
+        "prices": {
+            "inputPerMTok": _price(merged, "GESAKU_PRICE_INPUT_PER_MTOK"),
+            "outputPerMTok": _price(merged, "GESAKU_PRICE_OUTPUT_PER_MTOK"),
         },
         "defaults": {
             "genre": genre,
@@ -155,6 +175,14 @@ def settings_commit(payload: SettingsPayload):
         notes = payload.defaults.get("notes")
         if notes is not None:
             updates["GESAKU_NOTES"] = str(notes)
+    if payload.prices:
+        for field, key in (("inputPerMTok", "GESAKU_PRICE_INPUT_PER_MTOK"),
+                           ("outputPerMTok", "GESAKU_PRICE_OUTPUT_PER_MTOK")):
+            val = payload.prices.get(field)
+            # An explicit null CLEARS the price: write an empty value, which
+            # `_price` reads back as "not configured". Skipping the key instead
+            # made a configured price impossible to unset.
+            updates[key] = "" if val is None else str(float(val))
 
     if not updates:
         raise HTTPException(400, "no settings to write")

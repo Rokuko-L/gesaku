@@ -9,11 +9,11 @@ for _p in (ROOT, WEBUI_DIR):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from fastapi import APIRouter, HTTPException, Query, Request  # noqa: E402
+from fastapi import APIRouter, Query, Request  # noqa: E402
 from starlette.responses import StreamingResponse  # noqa: E402
 
 from deps import (  # noqa: E402
-    load_state, norm_phase, project_dir, run_manager, run_state_fields,
+    llm_event_view, load_state, project_dir, run_manager, run_state_fields,
 )
 
 import asyncio
@@ -83,10 +83,13 @@ async def stream(request: Request, project: str | None = Query(None)):
                     frames.append(_sse("state", run_state_fields(p, state)))
                 except (json.JSONDecodeError, OSError):
                     pass  # mid-write state.json — skip this tick
-            if log_path is None or not log_path.exists():
-                log_path = run_manager.log_path(p)
-                if log_path and log_path.exists():
-                    log_offset = log_path.stat().st_size
+            # Re-resolve every tick: a resumed run writes a NEW timestamped log
+            # while the old one still exists, so holding the first path would
+            # tail a dead file forever ("waiting for output" with a live run).
+            current_log = run_manager.log_path(p)
+            if current_log != log_path:
+                log_path = current_log
+                log_offset = log_path.stat().st_size if log_path and log_path.exists() else 0
             if log_path is not None:
                 log_offset, lines = await asyncio.to_thread(_new_lines, log_path, log_offset)
                 for line in lines:
@@ -98,7 +101,7 @@ async def stream(request: Request, project: str | None = Query(None)):
             for line in lines:
                 if line.strip():
                     try:
-                        frames.append(_sse("llm", json.loads(line)))
+                        frames.append(_sse("llm", llm_event_view(json.loads(line))))
                     except json.JSONDecodeError:
                         pass
             if frames:

@@ -31,9 +31,42 @@ from pipeline.pipeline_infra import (
 
 
 
-def run_export(state: dict) -> dict:
+def _restore_best_novel(best_commit: str) -> bool:
+    """Restore the peak commit's chapters AND plant store into the worktree.
+
+    `git checkout <c> -- chapters` only updates paths present in <c>, so
+    chapters added after the peak would ship alongside the peak text. Mirror
+    the commit exactly for chapters/, and restore open_callbacks.json so the
+    plant store still describes the prose on disk.
     """
-    Build final deliverables: outline, arc summary, manuscript, PDF.
+    project_dir = str(paths.get_project_dir())
+    res = run_tool(f"git checkout {best_commit} -- chapters", cwd=project_dir)
+    if res.returncode != 0:
+        return False
+
+    listed = run_tool(f"git ls-tree -r --name-only {best_commit} -- chapters",
+                      cwd=project_dir)
+    if listed.returncode == 0:
+        tracked = {line.strip() for line in listed.stdout.splitlines() if line.strip()}
+        for f in paths.get_chapters_dir().glob("ch_*.md"):
+            if f"chapters/{f.name}" not in tracked:
+                f.unlink(missing_ok=True)
+
+    have_store = run_tool(f"git cat-file -e {best_commit}:open_callbacks.json",
+                          cwd=project_dir)
+    store_path = paths.get_open_callbacks_path()
+    if have_store.returncode == 0:
+        run_tool(f"git checkout {best_commit} -- open_callbacks.json", cwd=project_dir)
+    else:
+        # The peak predates the plant store — drop the current one rather than
+        # ship a store describing prose that is no longer on disk.
+        store_path.unlink(missing_ok=True)
+    return True
+
+
+def run_export(state: dict, skip_epub: bool = False) -> dict:
+    """
+    Build final deliverables: outline, arc summary, manuscript, PDF, EPUB.
     """
     banner("PHASE 4: EXPORT", "=")
 
@@ -42,23 +75,22 @@ def run_export(state: dict) -> dict:
     # last cycle is not necessarily the best one. Restore the best-scoring
     # commit's chapters before building deliverables.
     best_score, best_commit = best_novel_checkpoint(state)
-    current = state.get("novel_score")
-    if best_score is not None and best_commit and current is not None:
+    if best_score is not None and best_commit:
+        current = state.get("novel_score")
         try:
-            if float(current) < float(best_score):
-                step(f"Restoring best novel {best_commit} ({best_score}) "
-                     f"over current {current}")
-                res = run_tool(f"git checkout {best_commit} -- chapters",
-                               cwd=str(paths.get_project_dir()))
-                if res.returncode == 0:
-                    git_add_commit(
-                        f"restore best novel {best_commit} (score {best_score}) for export")
-                    state["novel_score"] = best_score
-                    save_state(state)
-                else:
-                    step(f"WARNING: best-commit restore failed — exporting current {current}")
+            needs_restore = current is None or float(current) < float(best_score)
         except (TypeError, ValueError):
-            pass
+            needs_restore = False
+        if needs_restore:
+            step(f"Restoring best novel {best_commit} ({best_score}) "
+                 f"over current {current}")
+            if _restore_best_novel(best_commit):
+                git_add_commit(
+                    f"restore best novel {best_commit} (score {best_score}) for export")
+                state["novel_score"] = best_score
+                save_state(state)
+            else:
+                step(f"WARNING: best-commit restore failed — exporting current {current}")
 
     root_dir = paths.get_root_dir()
     chapters_dir = paths.get_chapters_dir()
@@ -113,6 +145,7 @@ def run_export(state: dict) -> dict:
         step("WARNING: no chapter files found for manuscript")
 
     # 4. Build LaTeX
+    compiled = False
     build_tex = root_dir / "typeset" / "build_tex.py"
     if build_tex.exists():
         step("Building LaTeX content...")
@@ -243,9 +276,29 @@ Rules:
     else:
         step("typeset/build_tex.py not found, skipping LaTeX")
 
+    # 5. EPUB. Unlike the PDF this needs no external toolchain (stdlib zipfile),
+    #    so it is attempted unconditionally and a failure is non-fatal: a book
+    #    without an e-book edition is still a book.
+    epub_built = False
+    if skip_epub:
+        step("Skipping EPUB as requested")
+    else:
+        build_epub = root_dir / "typeset" / "build_epub.py"
+        if build_epub.exists():
+            step("Building EPUB...")
+            try:
+                uv_run("typeset/build_epub.py", timeout=timeout_for("short"))
+                epub_built = (typeset_dir / "novel.epub").exists()
+            except Exception as e:
+                step(f"WARNING: EPUB build failed ({e}) — continuing without it")
+            if not epub_built:
+                step("WARNING: novel.epub was not produced")
+        else:
+            step("typeset/build_epub.py not found, skipping EPUB")
 
     # 6. Final commit
-    commit_hash = git_add_commit("export: manuscript, outline, arc summary, PDF")
+    artifacts = "manuscript, outline, arc summary, PDF" + (", EPUB" if epub_built else "")
+    commit_hash = git_add_commit(f"export: {artifacts}")
     total_words = count_words_in_chapters()
     log_result(commit_hash, "export", fmt_score(state.get("novel_score")),
                total_words, "export", "Final export")
@@ -257,5 +310,6 @@ Rules:
     state["current_focus"] = "done"
     save_state(state)
 
-    banner(f"EXPORT COMPLETE — {len(chapter_files)} chapters, {total_words} words (Phase: {state['phase']})")
+    banner(f"EXPORT COMPLETE — {len(chapter_files)} chapters, {total_words} words "
+           f"(Phase: {state['phase']}{', EPUB' if epub_built else ''})")
     return state

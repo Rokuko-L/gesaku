@@ -36,6 +36,104 @@ def api_response(status=200, body=None):
         request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"))
 
 
+def sse_body(events):
+    return "".join(
+        f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in events)
+
+
+# What a real gateway sends: placeholder zeros up front, real totals last.
+SSE_ANTHROPIC = sse_body([
+    {"type": "message_start",
+     "message": {"usage": {"input_tokens": 0, "output_tokens": 0}}},
+    {"type": "content_block_delta",
+     "delta": {"type": "text_delta", "text": "generated"}},
+    {"type": "message_delta",
+     "delta": {"stop_reason": "end_turn"},
+     "usage": {"input_tokens": 0, "output_tokens": 0}},
+    {"type": "message_delta",
+     "delta": {},
+     "usage": {"input_tokens": 2023, "output_tokens": 32}},
+])
+
+
+def sse_response(body):
+    return httpx.Response(
+        200, text=body, headers={"content-type": "text/event-stream"},
+        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"))
+
+
+class _FakeResp:
+    """Minimal stand-in so the pure extractors can be driven directly."""
+
+    def __init__(self, text, content_type="application/json"):
+        self.text = text
+        self.headers = {"content-type": content_type}
+
+
+class UsageExtractionTest(unittest.TestCase):
+    """Gateways stream even when streaming was not requested.
+
+    The usage and stop_reason then live inside the SSE frames. Reading
+    `json.loads(resp.text)` sees the stream, fails to parse, and logs the call
+    with null tokens — which is how 663 recorded calls ended up with no usage.
+    """
+
+    def test_usage_scan_takes_the_last_nonzero_block(self):
+        self.assertEqual((2023, 32), llm._usage_from_sse(SSE_ANTHROPIC))
+
+    def test_usage_scan_falls_back_to_a_zero_block(self):
+        zeros = sse_body([
+            {"type": "message_start",
+             "message": {"usage": {"input_tokens": 0, "output_tokens": 0}}},
+        ])
+        self.assertEqual((0, 0), llm._usage_from_sse(zeros))
+
+    def test_usage_scan_survives_an_empty_stream(self):
+        self.assertEqual((None, None), llm._usage_from_sse(""))
+
+    def test_usage_pair_accepts_both_dialects(self):
+        self.assertEqual((5, 7), llm._usage_pair(
+            {"prompt_tokens": 5, "completion_tokens": 7}))
+        self.assertEqual((5, 7), llm._usage_pair(
+            {"input_tokens": 5, "output_tokens": 7}))
+        self.assertEqual((None, None), llm._usage_pair(None))
+
+    def test_response_telemetry_reads_a_stream(self):
+        tin, tout, stop = llm._response_telemetry(
+            _FakeResp(SSE_ANTHROPIC, "text/event-stream"), "anthropic")
+        self.assertEqual((2023, 32, "end_turn"), (tin, tout, stop))
+
+    def test_response_telemetry_reads_a_plain_json_body(self):
+        body = json.dumps({"content": [{"type": "text", "text": "x"}],
+                           "stop_reason": "end_turn",
+                           "usage": {"prompt_tokens": 9, "completion_tokens": 11}})
+        self.assertEqual((9, 11, "end_turn"),
+                         llm._response_telemetry(_FakeResp(body), "openai"))
+
+    def test_streamed_call_records_real_usage(self):
+        """End to end through call_llm: the event carries the final totals."""
+        tmp = Path(tempfile.mkdtemp(prefix="gesaku_sse_"))
+        (tmp / "projects").mkdir()
+        orig = paths._root_dir
+        paths._root_dir = tmp
+        try:
+            paths.set_project_name("sse")
+            client = httpx.Client(
+                transport=httpx.MockTransport(lambda req: sse_response(SSE_ANTHROPIC)))
+            with mock.patch.object(llm, "get_client", return_value=client), \
+                 mock.patch("time.sleep"):
+                out = llm.call_llm("hello")
+            self.assertEqual("generated", out)
+            ev = json.loads(
+                paths.get_llm_events_path().read_text(encoding="utf-8").splitlines()[-1])
+            self.assertEqual(2023, ev["tokens_in"])
+            self.assertEqual(32, ev["tokens_out"])
+            self.assertEqual("end_turn", ev["stop_reason"])
+        finally:
+            paths._root_dir = orig
+            os.environ.pop("GESAKU_PROJECT", None)
+
+
 class LLMTelemetryTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="gesaku_telem_"))

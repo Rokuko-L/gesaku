@@ -1,64 +1,48 @@
 ---
 name: gesaku-docs
-description: Read or update the gesaku repo's documentation. Use this skill when asked about project docs, to explain a system, to update docs after code changes, or when working in D:\Tugas\LLM\autonovel.
+description: Read or update the gesaku repo's documentation. Use this skill when asked about project docs, to explain a system, or to update docs after code changes.
 ---
 
 # Gesaku Documentation Skill
 
-## CRITICAL: Two Kinds of .md Files
+Two things this skill must never do: restate the doc index, or treat `fuel/` as
+documentation. Both are owned elsewhere, so a copy here would only rot.
 
-This repo's markdown splits into two groups. Confusing them is the #1 mistake:
+## Hazard: `fuel/` is runtime data, not docs
 
-### 1. Pipeline fuel — NOT for coding agents (runtime LLM prompt material)
+`fuel/` holds prompt material fed to the novel-writing model. Never route it
+into coding context as if it were project docs, and never "clean it up" —
+editing it changes what the model produces. The current files and their
+consumers are owned by `Docs/overview.md` § Pipeline Fuel; `ls fuel/` shows
+them. Do not list them here.
 
-Lives in `fuel/` at repo root:
+## Routing: one index, not a table
 
-| File | Consumed by |
-|---|---|
-| `fuel/CRAFT.md` | `foundation/gen_world.py`, `foundation/gen_outline.py` — narrative craft rules fed to the writer model |
-| `fuel/ANTI-SLOP.md` | pattern source for the judge prompts |
-| `fuel/voice.md` | template copied into each project by `run_pipeline.py`; Part 1 guardrails + Part 2 per-novel voice |
-| `fuel/MYSTERY.md` | foundation-phase template ("author's eyes only") |
-| `fuel/notes_template.md` | user premise template |
-
-**Never** feed these into coding context as if they were project docs, and
-never "clean them up" — editing them changes what the novel-writing LLM
-produces. They are data.
-
-### 2. Agent/human docs (Docs/)
-
-| File | Contents |
-|---|---|
-| `Docs/overview.md` | entry point: module map, data flow, key rules, links to every doc |
-| `Docs/workflow.md` | step-by-step run guide |
-| `Docs/pipeline/spec.md` | full pipeline spec (phases, scoring, revision loop) |
-| `Docs/pipeline/state-and-git.md` | state.json, registry, git keep/discard plumbing |
-| `Docs/pipeline/scoring-engine.md` | how chapters get scored |
-| `Docs/core/path-resolution.md` | project isolation, path helpers, atomic writes |
-| `Docs/core/llm-client.md` | API client, retries, truncation, JSON repair |
-| `Docs/core/output-validation.md` | Pydantic schemas for LLM output |
-| `Docs/core/prompt-management.md` | prompts/ directory conventions |
-| `Docs/systems/mock-testing.md` | offline testing with MockLLM |
-| `Docs/reference/test-infra.md` | E2E test infrastructure |
-| `Docs/reference/test-suites.md` | offline suite index |
-| `Docs/reference/project-refactor.md` | completed multi-project refactor record |
-| `README.md` | install, quick start, CLI reference |
-| `AGENTS.md` | agent runbook (gitignored, local-only) |
+`Docs/overview.md` is the only doc index — module map, data flow, short
+key-rule list, and links to every other doc. Read it first; when you add a doc,
+add it to that index. Superseded docs live under `Docs/reference/archive/`.
 
 ## When to Update What
 
-After a code change, update:
-
-1. **New module / changed module responsibility** → `Docs/overview.md` module map (+ its own doc under `Docs/core/` or `Docs/pipeline/`)
-2. **Changed path helper signatures or new file layout** → `Docs/core/path-resolution.md` + `Docs/reference/test-infra.md`
-3. **Changed phase behavior, retry logic, thresholds** → `Docs/pipeline/spec.md` or `state-and-git.md`
-4. **Changed scoring/penalties** → `Docs/pipeline/scoring-engine.md`
-5. **Changed CLI flags or env vars** → `README.md` config table + `AGENTS.md`
-6. **New/changed prompt template** → the `prompts/*.md` file itself; note it in `Docs/core/prompt-management.md`
-7. **New judge JSON contract** → a Pydantic model in `core/validation.py`, documented in `Docs/core/output-validation.md`
+| Change | Update |
+|---|---|
+| New/changed module responsibility | `Docs/overview.md` module map, plus its own doc under `Docs/core/`, `Docs/pipeline/`, or `Docs/systems/` |
+| Path helper signatures, file layout | `Docs/core/path-resolution.md` |
+| Phase behavior, retry logic, thresholds | `Docs/pipeline/spec.md` (state/git plumbing → `state-and-git.md`) |
+| Scoring, penalties | `Docs/pipeline/scoring-engine.md` |
+| CLI flags, env vars | `README.md` + `AGENTS.md` |
+| Prompt template added/changed | the `prompts/*.md` file itself; conventions noted in `Docs/core/prompt-management.md` |
+| New judge JSON contract | a Pydantic model in the validation module, documented in `Docs/core/output-validation.md` |
+| Webui / console bridge | `Docs/systems/console-bridge.md` |
+| Offline suite added/changed | `Docs/reference/test-suites.md` |
 
 ## Guidelines
 
-- Docs describe the code as it is — if docs and code disagree, fix one of them now, don't leave a note.
-- Keep `AGENTS.md` current with launch/monitor quirks discovered during runs.
-- Do not move the pipeline-fuel files; `gen_*.py` scripts read them from root paths.
+- Docs describe the code as it is — if docs and code disagree, fix one of them
+  now; never leave a note saying they disagree.
+- `AGENTS.md` is for volatile run state (launch commands, monitor quirks, env
+  overrides) and is gitignored, so edits there are local-only. Durable rules
+  belong in the skills. Do not duplicate between the two.
+- Do not move the `fuel/` files; the generators read them from root paths.
+- Prefer invariants over inventories: "X is the single owner of Y" outlives
+  "there are N modules".

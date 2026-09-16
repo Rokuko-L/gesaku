@@ -113,52 +113,66 @@ export function serializeStoryNotes(form) {
   return lines.join('\n').trim() + '\n'
 }
 
-function ProjectCard({ p }) {
+function ProjectCard({ p, onDelete, deleting }) {
   const progress = p.chaptersTotal ? Math.round((p.chaptersDone / p.chaptersTotal) * 100) : 0
   return (
-    <button
-      className="group w-full p-5 text-left transition-colors hover:bg-ink-850"
-      onClick={() => {
-        api.setActiveProject(p.name)
-        navigate(projectRoute(p.name))
-      }}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="truncate font-display text-base tracking-tight text-paper group-hover:text-accent">
-            {p.title === 'Untitled' ? <span className="text-fog-400">{p.name}</span> : p.title}
-          </p>
-          <p className="mt-0.5 truncate font-mono text-[10px] text-fog-500">{p.name}</p>
-        </div>
-        <PhaseBadge phase={p.phase} running={p.running} />
-      </div>
-
-      {p.genre && <p className="mt-2 truncate font-prose text-xs italic text-fog-400">{p.genre}</p>}
-
-      <div className="mt-4 flex items-center justify-between">
-        <ScoreSig score={p.novelScore || p.foundationScore || null} label="unscored" />
-        <span className="font-mono text-xs text-fog-400">
-          {p.words ? `${(p.words / 1000).toFixed(1)}k words` : 'no prose yet'}
-        </span>
-      </div>
-
-      {p.chaptersTotal > 0 && (
-        <div className="mt-3">
-          <div className="flex justify-between font-mono text-[10px] text-fog-500">
-            <span>ch {p.chaptersDone}/{p.chaptersTotal}</span>
-            <span>{progress}%</span>
+    // The delete control is a sibling overlay, not a child of the card button:
+    // a button inside a button is invalid HTML and React warns about it.
+    <div className="group relative">
+      <button
+        className="w-full p-5 text-left transition-colors hover:bg-ink-850"
+        onClick={() => {
+          api.setActiveProject(p.name)
+          navigate(projectRoute(p.name))
+        }}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="truncate font-display text-base tracking-tight text-paper group-hover:text-accent">
+              {p.title === 'Untitled' ? <span className="text-fog-400">{p.name}</span> : p.title}
+            </p>
+            <p className="mt-0.5 truncate font-mono text-[10px] text-fog-500">{p.name}</p>
           </div>
-          <div className="mt-1 h-1 bg-ink-700">
-            <div className="h-full bg-accent/70 transition-all" style={{ width: `${progress}%` }} />
-          </div>
+          <PhaseBadge phase={p.phase} running={p.running} />
         </div>
-      )}
 
-      <p className="mt-3 flex items-center justify-between font-mono text-[10px] text-fog-500">
-        <span>upd {timeAgo(p.updatedAt)}</span>
-        <span className="text-fog-500 transition-colors group-hover:text-accent">open ›</span>
-      </p>
-    </button>
+        {p.genre && <p className="mt-2 truncate font-prose text-xs italic text-fog-400">{p.genre}</p>}
+
+        <div className="mt-4 flex items-center justify-between">
+          <ScoreSig score={p.novelScore || p.foundationScore || null} label="unscored" />
+          <span className="font-mono text-xs text-fog-400">
+            {p.words ? `${(p.words / 1000).toFixed(1)}k words` : 'no prose yet'}
+          </span>
+        </div>
+
+        {p.chaptersTotal > 0 && (
+          <div className="mt-3">
+            <div className="flex justify-between font-mono text-[10px] text-fog-500">
+              <span>ch {p.chaptersDone}/{p.chaptersTotal}</span>
+              <span>{progress}%</span>
+            </div>
+            <div className="mt-1 h-1 bg-ink-700">
+              <div className="h-full bg-accent/70 transition-all" style={{ width: `${progress}%` }} />
+            </div>
+          </div>
+        )}
+
+        <p className="mt-3 flex items-center justify-between font-mono text-[10px] text-fog-500">
+          <span>upd {timeAgo(p.updatedAt)}</span>
+          <span className="text-fog-500 transition-colors group-hover:text-accent group-hover:opacity-0">open ›</span>
+        </p>
+      </button>
+
+      <button
+        type="button"
+        title={p.running ? 'stop the run before deleting' : `delete ${p.name}`}
+        disabled={!!deleting}
+        onClick={() => onDelete(p)}
+        className="absolute bottom-3 right-5 hidden border border-line px-1.5 py-0.5 font-mono text-[10px] text-fog-400 transition-colors hover:border-bad hover:text-bad group-hover:inline-block disabled:opacity-40"
+      >
+        {deleting === p.name ? 'deleting…' : 'delete'}
+      </button>
+    </div>
   )
 }
 
@@ -735,8 +749,10 @@ function Wizard({ onClose, onLaunch }) {
 }
 
 export default function ProjectsGallery() {
-  const { projects, launchProject } = useApp()
+  const { projects, launchProject, refreshProjects } = useApp()
   const [wizard, setWizard] = useState(false)
+  const [deleting, setDeleting] = useState(null)
+  const [deleteError, setDeleteError] = useState('')
 
   useEffect(() => {
     document.title = 'gesaku · projects'
@@ -751,6 +767,20 @@ export default function ProjectsGallery() {
     })
     setWizard(false)
     navigate(projectRoute(form.name))
+  }
+
+  const doDelete = async (p) => {
+    setDeleteError('')
+    if (!window.confirm(`Delete project “${p.name}” and every file it owns? This cannot be undone.`)) return
+    setDeleting(p.name)
+    try {
+      await api.deleteProject(p.name)
+      refreshProjects()
+    } catch (e) {
+      setDeleteError(e?.message || String(e))
+    } finally {
+      setDeleting(null)
+    }
   }
 
   return (
@@ -784,9 +814,18 @@ export default function ProjectsGallery() {
             world, outline the plot, draft every chapter, and revise itself — you supervise from the console.
           </EmptyState>
         ) : (
-          <div className="dock grid grid-cols-1 gap-px sm:grid-cols-2 xl:grid-cols-3">
-            {projects.map((p) => <ProjectCard key={p.name} p={p} />)}
-          </div>
+          <>
+            {deleteError && (
+              <p className="mb-4 border border-bad/40 bg-bad/10 px-3 py-2 font-mono text-[11px] text-bad">
+                delete failed: {deleteError}
+              </p>
+            )}
+            <div className="dock grid grid-cols-1 gap-px sm:grid-cols-2 xl:grid-cols-3">
+              {projects.map((p) => (
+                <ProjectCard key={p.name} p={p} onDelete={doDelete} deleting={deleting} />
+              ))}
+            </div>
+          </>
         )}
       </div>
 

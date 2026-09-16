@@ -114,6 +114,25 @@ export function EmptyState({ icon = '·', title, children, cta }) {
   )
 }
 
+/**
+ * Load-failure state. Distinct from EmptyState on purpose: "the bridge could
+ * not answer" must never be mistaken for "there is nothing yet", and must
+ * never be papered over with another project's data.
+ */
+export function Unavailable({ what = 'this view', error, onRetry }) {
+  return (
+    <div className="empty-state">
+      <p className="font-display text-3xl text-bad">!</p>
+      <p className="mt-3 font-display text-base lowercase tracking-tight text-fog-300">{what} unavailable</p>
+      <p className="mx-auto mt-2 max-w-md font-prose text-sm leading-relaxed text-fog-500">
+        the bridge could not serve this data{error?.message ? ` (${error.message})` : ''}. nothing is shown rather
+        than another project's data — check that the console bridge is running, then retry.
+      </p>
+      {onRetry && <div className="mt-5"><Button onClick={onRetry}>retry</Button></div>}
+    </div>
+  )
+}
+
 /** Stat tile — designed as a cell of a docked panel grid (no own border). */
 export function StatTile({ label, value, sub, accent }) {
   return (

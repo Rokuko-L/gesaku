@@ -14,19 +14,17 @@ Single-user local console: project resolution goes through paths.py's global
 set_project_name under a lock, not a per-request context.
 """
 
-import asyncio
 import json
-import os
 import re
+import shutil
 import sys
-import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
-from starlette.responses import StreamingResponse
 
 ROOT = Path(__file__).resolve().parent.parent
 WEBUI_DIR = Path(__file__).resolve().parent
@@ -36,20 +34,29 @@ for _p in (ROOT, WEBUI_DIR):
 
 from core import paths  # noqa: E402
 import fixtures as gen  # noqa: E402
-from pipeline import pipeline_infra  # noqa: E402
 from run_manager import SEEDS_DIR  # noqa: E402
 
 from deps import (  # noqa: E402
-    _iso, default_project, load_state, norm_phase, project_dir,
-    resolve_name, run_manager, run_snapshot,
+    _iso, default_project, llm_event_view, load_state, project_dir,
+    run_manager, run_snapshot, run_state_fields,
 )
 from routes import graph as routes_graph  # noqa: E402
 from routes import settings as routes_settings  # noqa: E402
 from routes import stream as routes_stream  # noqa: E402
 
 app = FastAPI(title="gesaku operator console", docs_url="/api/docs")
-app.add_middleware(CORSMiddleware, allow_origins=["*"],
-                   allow_methods=["*"], allow_headers=["*"])
+# Local operator console: restrict to the loopback origins the console is
+# served from. `*` would let any page the operator visits (or a DNS-rebinding
+# host) POST /api/settings — repointing ANTHROPIC_BASE_URL at an attacker
+# endpoint — or spawn and kill runs.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://127.0.0.1:5175", "http://localhost:5175",
+        "http://127.0.0.1:8600", "http://localhost:8600",
+    ],
+    allow_methods=["*"], allow_headers=["*"],
+)
 
 app.include_router(routes_graph.router)
 app.include_router(routes_settings.router)
@@ -61,10 +68,21 @@ app.include_router(routes_stream.router)
 
 @app.get("/api/projects")
 def list_projects():
-    name, p = project_dir(None)
-    items = gen.gen_projects(load_state(p), p)
+    """The shelf. An empty shelf is a normal state, not a 404 — otherwise the
+    UI substitutes its offline sample projects for a real, empty projects/ dir.
+    """
+    projects_root = paths.get_root_dir() / "projects"
+    if not projects_root.is_dir():
+        return []
+    try:
+        # gen_projects marks `_primary` by comparing against the path it is
+        # handed, so hand it the default project (not the projects/ root).
+        primary_dir = projects_root / default_project()
+    except HTTPException:
+        primary_dir = projects_root
+    items = gen.gen_projects({}, primary_dir)
     for item in items:
-        _, ip = project_dir(item["name"])
+        _, ip = project_dir(item["name"], must_exist=False)
         sf = ip / "state.json"
         item["updatedAt"] = _iso(sf.stat().st_mtime) if sf.exists() else None
         item["running"] = run_manager.status(ip)["running"]
@@ -95,14 +113,13 @@ def create_project(req: CreateProject):
     if not name:
         raise HTTPException(400, "project name is required")
     try:
-        resolve_name(name)
+        _, p = project_dir(name, must_exist=False)
     except HTTPException:
         raise HTTPException(400, f"invalid project name: {name!r}") from None
     if not req.genre.strip():
         raise HTTPException(
             400, "genre is required for a fresh project — the pipeline's sanity check exits without it")
 
-    p = paths.get_project_dir()
     if req.fromScratch and p.exists() and any(p.iterdir()):
         raise HTTPException(
             409, f"project dir already has content: {name} — pick another name or clear it first")
@@ -150,6 +167,30 @@ def create_project(req: CreateProject):
     except RuntimeError as e:
         raise HTTPException(409, str(e)) from e
     return {"ok": True, "project": name, **run_snapshot(p), "logPath": meta.get("logPath")}
+
+
+@app.delete("/api/projects/{name}")
+def delete_project(name: str):
+    """Delete a project's workspace and its saved seed.
+
+    Refuses while the project has a live run: killing a mid-flight pipeline is
+    a separate, explicit action, not a side effect of cleanup.
+    """
+    resolved, p = project_dir(name, must_exist=False)
+    if run_manager.status(p)["running"]:
+        raise HTTPException(
+            409, f"project '{resolved}' has a running pipeline — stop it first")
+    projects_root = (paths.get_root_dir() / "projects").resolve()
+    target = p.resolve()
+    if target == projects_root or projects_root not in target.parents:
+        raise HTTPException(400, "refusing to delete outside projects/")
+    if not target.exists():
+        raise HTTPException(404, f"unknown project: {resolved}")
+    shutil.rmtree(target)
+    seed = SEEDS_DIR / f"{resolved}.txt"
+    if seed.exists():
+        seed.unlink()
+    return {"ok": True, "deleted": resolved}
 
 
 @app.post("/api/run/stop")
@@ -270,20 +311,6 @@ def run_status(project: str | None = Query(None)):
 # --------------------------------------------------------------- snapshots
 
 
-def run_state_fields(p: Path, state: dict) -> dict:
-    return {
-        "project": p.name,
-        "phase": norm_phase(state),
-        "iteration": state.get("iteration", 0),
-        "foundationScore": state.get("foundation_score", 0) or 0,
-        "loreScore": state.get("lore_score", 0) or 0,
-        "chaptersTotal": state.get("chapters_total", 0) or 0,
-        "chaptersDone": state.get("chapters_drafted", 0) or 0,
-        "revisionCycle": state.get("revision_cycle", 0) or 0,
-        **run_snapshot(p),
-    }
-
-
 @app.get("/api/run-state")
 def run_state(project: str | None = Query(None)):
     _, p = project_dir(project)
@@ -322,22 +349,53 @@ def llm_events(project: str | None = Query(None)):
         for line in f.read_text(encoding="utf-8").splitlines():
             if not line.strip():
                 continue
-            e = json.loads(line)
-            events.append({
-                "ts": e.get("ts"),
-                "modelKey": e.get("model_key"),
-                "model": e.get("model"),
-                "ok": e.get("ok"),
-                "attempt": e.get("attempt"),
-                "tokensIn": e.get("tokens_in"),
-                "tokensOut": e.get("tokens_out"),
-                "durationMs": e.get("duration_ms"),
-                "stopReason": e.get("stop_reason"),
-                "promptChars": e.get("prompt_chars"),
-                "responseChars": e.get("response_chars"),
-                "promptHead": e.get("prompt_head"),
-            })
+            events.append(llm_event_view(json.loads(line)))
     return events
+
+
+# ---------------------------------------------------------------- artifacts
+
+# kind -> (path relative to the project dir, media type)
+_ARTIFACTS = {
+    "pdf": ("typeset/novel.pdf", "application/pdf"),
+    "epub": ("typeset/novel.epub", "application/epub+zip"),
+    "manuscript": ("manuscript.md", "text/markdown"),
+    "outline": ("outline.md", "text/markdown"),
+    "arcSummary": ("arc_summary.md", "text/markdown"),
+}
+
+
+@app.get("/api/artifacts")
+def artifacts(project: str | None = Query(None)):
+    """Deliverable files present for the project, so the UI can link them."""
+    _, p = project_dir(project)
+    out = []
+    for kind, (rel, _media) in _ARTIFACTS.items():
+        path = p / rel
+        if path.exists():
+            st = path.stat()
+            out.append({
+                "kind": kind,
+                "name": path.name,
+                "bytes": st.st_size,
+                "updatedAt": _iso(st.st_mtime),
+                "url": f"/api/artifacts/{kind}?project={p.name}",
+            })
+    return out
+
+
+@app.get("/api/artifacts/{kind}")
+def artifact_file(kind: str, project: str | None = Query(None)):
+    """Download/open one deliverable. Read-only; the PDF is the usual one."""
+    _, p = project_dir(project)
+    entry = _ARTIFACTS.get(kind)
+    if not entry:
+        raise HTTPException(404, f"unknown artifact: {kind}")
+    rel, media = entry
+    path = p / rel
+    if not path.exists():
+        raise HTTPException(404, f"{kind} not produced yet for '{p.name}'")
+    return FileResponse(path, media_type=media, filename=path.name)
 
 
 @app.get("/api/foundation")

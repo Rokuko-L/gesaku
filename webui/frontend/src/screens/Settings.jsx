@@ -78,6 +78,7 @@ export default function Settings() {
         thresholds: settings.thresholds,
         heuristics: settings.heuristics,
         defaults: settings.defaults,
+        prices: settings.prices ?? { inputPerMTok: null, outputPerMTok: null },
       }
       if (apiKey.trim()) payload.apiKey = apiKey.trim()
       const next = await api.saveSettings(payload)
@@ -100,6 +101,13 @@ export default function Settings() {
 
   const input =
     'w-full border border-ink-600 bg-ink-950 px-3 py-2 font-mono text-xs text-fog-200 outline-none focus:border-accent/60'
+
+  const prices = settings.prices ?? { inputPerMTok: null, outputPerMTok: null }
+  const setPrice = (key, raw) => {
+    const t = String(raw).trim()
+    const v = t === '' ? null : Number(t)
+    setSettings({ ...settings, prices: { ...prices, [key]: Number.isFinite(v) ? v : null } })
+  }
 
   return (
     <div className="mx-auto max-w-5xl">
@@ -170,10 +178,36 @@ export default function Settings() {
               />
             </label>
             <p className="border-l-2 border-accent/60 bg-accent/5 px-3 py-2 font-mono text-[11px] leading-relaxed text-fog-300">
-              to route workloads to another provider (deepseek, openrouter, ollama), override endpoint_url
-              to its /v1/chat/completions base and update the token. roles can route independently —
-              see [02].
+              to route workloads to another provider (deepseek, openrouter, ollama), override endpoint_url to
+              its /v1/chat/completions base and update the token. that endpoint applies to every role;
+              per-role routing is not exposed here (set GESAKU_&lt;ROLE&gt;_PROVIDER in .env).
             </p>
+            <div className="border-t border-line pt-4">
+              <p className="mb-2 font-mono text-[10px] text-fog-400">cost_estimation — optional</p>
+              <div className="flex gap-3">
+                <label className="flex-1">
+                  <span className="mb-1 block font-mono text-[10px] text-fog-500">input $ / 1M tok</span>
+                  <input
+                    className={input}
+                    type="number" min="0" step="0.01" placeholder="unset"
+                    value={prices.inputPerMTok ?? ''}
+                    onChange={(e) => setPrice('inputPerMTok', e.target.value)}
+                  />
+                </label>
+                <label className="flex-1">
+                  <span className="mb-1 block font-mono text-[10px] text-fog-500">output $ / 1M tok</span>
+                  <input
+                    className={input}
+                    type="number" min="0" step="0.01" placeholder="unset"
+                    value={prices.outputPerMTok ?? ''}
+                    onChange={(e) => setPrice('outputPerMTok', e.target.value)}
+                  />
+                </label>
+              </div>
+              <p className="mt-2 font-mono text-[10px] leading-relaxed text-fog-500">
+                leave unset to omit the cost column in telemetry; token counts are always measured.
+              </p>
+            </div>
           </div>
         </Quadrant>
 

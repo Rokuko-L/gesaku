@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../../api/client.js'
+import { useApi } from '../../api/useApi.js'
+import { Unavailable } from '../../components/ui.jsx'
 import { useApp } from '../../state.jsx'
 
 /**
@@ -33,7 +35,13 @@ function EventRow({ ev }) {
         </span>
         <span className="font-mono text-sm text-fog-200">
           {ev.ok ? (
-            <>↑ {fmt(ev.tokensIn)} · ↓ {fmt(ev.tokensOut)}</>
+            // Only show the token columns when the provider actually reported
+            // usage; a row of "↑ — · ↓ —" is noise, not information.
+            (ev.tokensIn != null || ev.tokensOut != null) ? (
+              <>↑ {fmt(ev.tokensIn)} · ↓ {fmt(ev.tokensOut)}</>
+            ) : (
+              <span className="text-fog-500">ok</span>
+            )
           ) : (
             <span className="text-bad">{ev.error ?? 'failed'}</span>
           )}
@@ -65,12 +73,8 @@ function EventRow({ ev }) {
 /** LLM call feed: history from the bridge + live rows from the SSE stream. */
 export function LlmFeed({ project }) {
   const { llmEvents } = useApp()
-  const [history, setHistory] = useState(null)
-
-  useEffect(() => {
-    setHistory(null)
-    api.listLlmEvents(project).then(setHistory).catch(() => {})
-  }, [project])
+  const { data: history, error, loading, retry } = useApi(
+    () => api.listLlmEvents(project), [project])
 
   const events = useMemo(() => {
     const base = history ?? []
@@ -79,7 +83,7 @@ export function LlmFeed({ project }) {
     return [...base, ...live]
   }, [history, llmEvents])
 
-  if (!events) {
+  if (loading && !events.length) {
     return (
       <ul className="border border-line bg-ink-900">
         {[0, 1, 2, 3].map((i) => (
@@ -88,6 +92,9 @@ export function LlmFeed({ project }) {
         ))}
       </ul>
     )
+  }
+  if (error) {
+    return <Unavailable what="the llm call feed" error={error} onRetry={retry} />
   }
   if (!events.length) {
     return (
@@ -155,12 +162,8 @@ function DimRow({ name, dim }) {
 
 /** Full evaluation browser: attempt history per chapter + the report itself. */
 export function EvalPane({ project }) {
-  const [evals, setEvals] = useState(null)
-
-  useEffect(() => {
-    setEvals(null)
-    api.listEvals(project).then(setEvals).catch(() => {})
-  }, [project])
+  const { data: evals, error, loading, retry } = useApi(
+    () => api.listEvals(project), [project])
 
   const groups = useMemo(
     () => (evals
@@ -178,8 +181,11 @@ export function EvalPane({ project }) {
     setSel({ ch: first[0], i: first[1].length - 1 })
   }, [groups])
 
-  if (!evals) {
+  if (loading) {
     return <div className="h-64 animate-pulse bg-ink-800" />
+  }
+  if (error) {
+    return <Unavailable what="evaluation reports" error={error} onRetry={retry} />
   }
   if (!groups.length) {
     return (

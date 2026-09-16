@@ -46,6 +46,7 @@ Every per-project artifact has a helper — never build the path inline:
 | `get_repetition_check_path()` | `chapters/repetition_check.json` |
 | `get_outline_roadmap_path()` | `.outline_roadmap.md` (intermediate) |
 | `get_outline_part1_path()` | `.outline_part1.md` (intermediate) |
+| `get_outline_part2_path()` | `.outline_part2.done` (part-2 polish marker; written by `gen_outline_part2`, cleared by `gen_outline`) |
 | `get_open_callbacks_path()` | `open_callbacks.json` (micro-plant ledger) |
 | `get_llm_events_path()` | `llm_events.jsonl` (call telemetry) |
 

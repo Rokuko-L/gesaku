@@ -195,6 +195,16 @@ def get_outline_part1_path() -> Path:
     """First-half outline, kept so part 2 can refine rather than regenerate."""
     return get_project_dir() / ".outline_part1.md"
 
+def get_outline_part2_path() -> Path:
+    """Marker written when gen_outline_part2 finishes its polish pass.
+
+    Chapter/tail presence alone cannot distinguish 'part 2 done' from 'part 1
+    only', so the checkpoint reads this marker instead of guessing from prose.
+    gen_outline deletes it whenever it rewrites outline.md, so a regenerated
+    outline never inherits a stale done-marker.
+    """
+    return get_project_dir() / ".outline_part2.done"
+
 def get_novel_title():
     """Retrieve novel title from state.json, resolving state path dynamically."""
     state_path = get_state_path()

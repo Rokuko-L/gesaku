@@ -174,7 +174,11 @@ Each chapter outline must start with a heading: "### Chapter N: [Chapter Title]"
     
     # Save a copy as .outline_part1.md for backwards compatibility
     paths.get_outline_part1_path().write_text(full_outline_text, encoding="utf-8")
-    
+
+    # Checkpoint marker: the foundation loop skips this pass only when this
+    # file exists. Written last, so an interrupted run re-runs the polish.
+    paths.get_outline_part2_path().write_text("done\n", encoding="utf-8")
+
     print("Outline refinement complete!", file=sys.stderr)
 
 if __name__ == "__main__":

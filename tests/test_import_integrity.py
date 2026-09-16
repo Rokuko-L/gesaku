@@ -18,8 +18,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-SCAN_DIRS = ["core", "pipeline", "foundation", "typeset", "tests"]
+SCAN_DIRS = ["core", "pipeline", "foundation", "typeset", "tests", "webui"]
 SKIP_PARTS = {"projects", ".venv", "__pycache__", "landing"}
+
+WEBUI_DIR = ROOT / "webui"
 
 
 def repo_files():
@@ -29,9 +31,14 @@ def repo_files():
 
 
 def local_top_level_modules():
-    """Names importable because they exist at repo root."""
+    """Names importable because they exist at repo root (or on the webui
+    app-dir, which uvicorn puts on sys.path when serving the console)."""
     mods = {p.stem for p in ROOT.glob("*.py")}
     mods |= {d.name for d in ROOT.iterdir()
+             if d.is_dir() and (d / "__init__.py").exists()}
+    mods |= {p.stem for p in WEBUI_DIR.glob("*.py")}
+    mods |= {p.stem for p in (WEBUI_DIR / "routes").glob("*.py")}
+    mods |= {d.name for d in WEBUI_DIR.iterdir()
              if d.is_dir() and (d / "__init__.py").exists()}
     return mods
 
@@ -74,6 +81,30 @@ class ImportIntegrityTest(unittest.TestCase):
             "Imports that do not resolve (stdlib, third-party, or repo-local).\n"
             "These will crash at runtime — or worse, be silently swallowed by "
             "a broad except:\n" + "\n".join(broken))
+
+    def test_layer_direction_is_one_way(self):
+        """core <- foundation/pipeline <- orchestrator.
+
+        `foundation/` must not import `pipeline/` (the generators run before the
+        stage modules exist) and `core/` must not import either. Nothing else
+        enforces this — the scanner above only checks that imports resolve.
+        """
+        banned = {
+            "foundation": {"pipeline"},
+            "core": {"pipeline", "foundation"},
+        }
+        offenders = []
+        for layer, forbidden in banned.items():
+            for path in sorted((ROOT / layer).rglob("*.py")):
+                rel = path.relative_to(ROOT).as_posix()
+                tree = ast.parse(path.read_text(encoding="utf-8"), rel)
+                for lineno, top in imported_top_levels(tree):
+                    if top in forbidden:
+                        offenders.append(f"{rel}:{lineno} -> '{top}'")
+        self.assertEqual(
+            offenders, [],
+            "Dependency direction is one-way (core <- foundation/pipeline <- "
+            "orchestrator); these break it:\n" + "\n".join(offenders))
 
     def test_no_stale_utils_imports(self):
         """utils.py was deleted; any reference is a regression."""

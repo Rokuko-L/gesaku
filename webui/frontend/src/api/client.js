@@ -15,21 +15,33 @@ import tournament from '../fixtures/tournament.json'
  * on stream failure callers can fall back to polling getRunState.
  */
 
-async function live(path, fallback) {
+/**
+ * Live resource fetch.
+ *  - Bridge unreachable (network error) → the offline fixture, so the console
+ *    stays browsable as a demo.
+ *  - Bridge answers with an HTTP error → throw, unless the caller opts in via
+ *    `fixtureOnError`. Rendering another novel's prose/scores/telemetry for a
+ *    real project is worse than rendering nothing.
+ */
+async function live(path, fallback, { fixtureOnError = false } = {}) {
+  let res
   try {
-    const res = await fetch(path)
-    if (!res.ok) throw new Error(`${res.status} ${path}`)
-    return await res.json()
+    res = await fetch(path)
   } catch {
     return fallback
   }
+  if (!res.ok) {
+    if (fixtureOnError) return fallback
+    throw new Error(`${res.status} ${path}`)
+  }
+  return await res.json()
 }
 
-async function send(path, body) {
+async function send(path, body, method = 'POST') {
   const res = await fetch(path, {
-    method: 'POST',
+    method,
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body ?? {}),
+    ...(body == null ? {} : { body: JSON.stringify(body) }),
   })
   if (!res.ok) {
     let detail = `${res.status}`
@@ -63,7 +75,8 @@ export const api = {
   },
 
   async listProjects() {
-    return live('/api/projects', projects)
+    // Demo-shaped: the shelf falls back to sample projects when offline.
+    return live('/api/projects', projects, { fixtureOnError: true })
   },
 
   async getRunState(project) {
@@ -103,6 +116,9 @@ export const api = {
     return {
       tokensInTotal: sum('tokensIn'),
       tokensOutTotal: sum('tokensOut'),
+      // How many calls actually reported usage. Without this the totals read
+      // as a measured zero when the truth is "the provider told us nothing".
+      tokensReported: ok.filter((e) => e.tokensIn != null || e.tokensOut != null).length,
       callCount: evts.length,
       failedCount: evts.length - ok.length,
       durationMsTotal: sum('durationMs'),
@@ -119,7 +135,8 @@ export const api = {
   },
 
   async getSettings() {
-    return live('/api/settings', settings)
+    // Demo-shaped: settings renders fine from the sample when offline.
+    return live('/api/settings', settings, { fixtureOnError: true })
   },
 
   /** Persist settings to .env; returns the refreshed settings payload. */
@@ -170,6 +187,21 @@ export const api = {
   /** Launch run_pipeline.py for a new project (creation wizard). */
   createProject(payload) {
     return send('/api/projects', payload)
+  },
+
+  /** Delete a project's workspace. The bridge refuses while a run is live. */
+  deleteProject(name) {
+    return send(`/api/projects/${encodeURIComponent(name)}`, null, 'DELETE')
+  },
+
+  /** Deliverable files (pdf, epub, manuscript, outline, arcSummary) on disk. */
+  async listArtifacts(project) {
+    return live(`/api/artifacts${q(project)}`, [])
+  },
+
+  /** Direct download URL for one deliverable. */
+  artifactUrl(project, kind) {
+    return `/api/artifacts/${kind}${q(project)}`
   },
 
   /** Terminate the project's live run. */

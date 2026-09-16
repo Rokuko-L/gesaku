@@ -395,7 +395,7 @@ def main():
 
     # Save full eval log
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    mode = args.phase or (f"ch{args.chapter:02d}" if args.chapter else "full")
+    mode = args.phase or (f"ch{args.chapter:02d}" if args.chapter is not None else "full")
     eval_log_dir = paths.get_eval_logs_dir()  # also creates the directory
     log_path = eval_log_dir / f"{timestamp}_{mode}.json"
     paths.save_json_atomic(result, log_path)

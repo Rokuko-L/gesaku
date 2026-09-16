@@ -35,6 +35,11 @@ TEMPLATES (empty shells, filled per-novel on branch):
   state.json           -- {phase: "foundation", iteration: 0, debts: []}
 
 TOOLS (the pipeline machinery):
+  Stage scripts live under `foundation/` or `pipeline/`; `uv_run` executes
+  them from the repo root, so a call site must name the directory
+  (`"pipeline/apply_cuts.py"`). Naming one without its directory makes the
+  subprocess fail to start — and if the failure is swallowed, the stage
+  silently becomes a no-op that still reports success.
   Foundation:
     seed.py              -- generate 10 seed concepts
     gen_world.py         -- seed → world.md
@@ -63,6 +68,7 @@ TOOLS (the pipeline machinery):
   Export:
     typeset/novel.tex    -- LaTeX template (EB Garamond, trade paperback)
     typeset/build_tex.py -- chapters/*.md → chapters_content.tex
+    typeset/build_epub.py -- chapters/*.md → novel.epub (stdlib zipfile, no toolchain)
 
   Orchestrator:
     run_pipeline.py      -- NEW: fully automated pipeline runner
@@ -96,6 +102,7 @@ Everything below is created automatically on a branch.
   eval_logs/*.json       -- full evaluation results
   briefs/*.md            -- revision briefs (input to gen_revision.py)
   typeset/novel.pdf      -- typeset PDF
+  typeset/novel.epub     -- e-book (built unconditionally; --no-epub opts out)
 ```
 
 ---
@@ -148,17 +155,34 @@ Loop:
 Per-artifact checkpointing:
   Each step is skipped when its output already exists and passes a cheap
   validity check (`_foundation_artifact_ok`: non-trivial size, and all
-  chapter headers present for the outline; `_foundation_part2_ok`: the
-  foreshadowing section exists for the tail chapters). A crash mid-foundation
-  therefore resumes at the missing artifact instead of regenerating world,
-  characters, canon, and outline — that cost 30-60 min of LLM calls per
-  crash. `--from-scratch` wipes the files, which is the explicit
+  chapter headers present for the outline). Part 2 is gated on an explicit
+  **marker file** (`.outline_part2.done`, `paths.get_outline_part2_path()`):
+  written last by `gen_outline_part2`, deleted by `gen_outline` whenever it
+  rewrites `outline.md`. No prose heuristic can distinguish a part-1 outline
+  from a part-2-polished one, and the old "the word FORESHADOW appears
+  somewhere" test marked every iteration dirty, re-running the whole refine
+  pass each time. A crash mid-foundation therefore resumes at the missing
+  artifact instead of regenerating world, characters, canon, and outline —
+  that cost 30-60 min of LLM calls per crash. `--from-scratch` wipes the
+  files (and every sidecar: the micro-plant store, plant hygiene, premise
+  validation, outline intermediates, retry feedback), which is the explicit
   invalidation path. Deeper gates (premise beats, plant hygiene) still run
   every iteration on top of the checkpoint.
+
+  The loop's own progress must survive that checkpoint logic:
+  `run_foundation` re-asserts `state["iteration"] = i` after its
+  `state.update(load_state())` sync, or the save writes the stale on-disk
+  iteration and a crash restarts the iteration count at 1.
 
 Sealed foundation + twist stories:
   - Facts tagged `visible_from=N` (N>1) are withheld from writer and judge
     prompts for chapters < N (`core/canon.py` writer_view/judge_view).
+  - `gen_canon.normalize_foundation_bullets` defaults a *plain* bullet to
+    `visible_from=1`, but passes a bullet that merely **attempts** a tag
+    (`core/canon.TAG_ATTEMPT_RE`) through untouched. Rewriting those to
+    `visible_from=1` here would publish a sealed fact before `parse_canon`
+    ever sees it and make the fail-closed (`MALFORMED_SEAL`) path
+    unreachable; the generator instead retries with the bad line reported.
   - Pre-reveal outline beats must be action-shaped; meaning-laden language
     and sealed lexicon fail `core/plant_hygiene.py` (retry in gen_outline).
   - Characters named in sealed facts must appear as agents in pre-reveal
@@ -257,6 +281,12 @@ specific focus. Stop when scores plateau across 2 consecutive cycles.
 
 ```
 CYCLE 1: BASELINE & DIAGNOSIS
+
+  The in-loop steps are `pipeline/phases/revision.py`; the stage scripts it
+  runs live in `pipeline/`. Steps 1 and 2 are each gated on the script
+  existing at its real path — a gate that checks the wrong directory silently
+  disables the step while still paying for the two full-novel evals that
+  measure it.
 
   1. adversarial_edit.py all
      → edit_logs/chNN_cuts.json for all chapters
@@ -449,6 +479,11 @@ PHASE 3b: OPUS REVIEW LOOP (deep, prose-level refinement)
      edits that pass tolerance (a 0.8 regression on an LLM rewrite), so the
      last cycle is not necessarily the best one — one production run
      exported 6.86 when 7.65 already existed.
+     The restore is exact, not additive (`_restore_best_novel`): chapters
+     present now but absent from the peak commit are deleted (plain
+     `git checkout <c> -- chapters` leaves them), and `open_callbacks.json`
+     is restored alongside so the plant store still describes the prose on
+     disk — or dropped when the peak predates the store.
   1. Normalize chapter titles (all # level, consistent format)
   2. typeset/build_tex.py → chapters_content.tex
   3. Edit typeset/novel.tex:
@@ -456,7 +491,14 @@ PHASE 3b: OPUS REVIEW LOOP (deep, prose-level refinement)
      - Choose epigraph (from novel text, NOT a spoiler)
      - Set end-page text
   4. tectonic novel.tex → novel.pdf
-  5. Git commit: "Export: [title] — [word count] words"
+  5. typeset/build_epub.py → novel.epub
+     EPUB 3, structured as mimetype (first, STORED) + container.xml +
+     content.opf + nav.xhtml + toc.ncx + one XHTML per chapter. Pure stdlib,
+     so it needs no toolchain and is attempted unconditionally; a failure
+     warns and continues (a book without an e-book edition is still a book).
+     Skip with `--no-epub`. The identifier is a UUIDv5 of project+title, so
+     re-exporting does not mint a new book identity.
+  6. Git commit: "export: manuscript, outline, arc summary, PDF[, EPUB]"
 ```
 
 ---

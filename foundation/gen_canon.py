@@ -37,7 +37,13 @@ def _total_chapters() -> int:
 
 
 def normalize_foundation_bullets(result: str) -> str:
-    """Ensure every bullet has a visible_from tag (default 1)."""
+    """Ensure every bullet has a visible_from tag (default 1).
+
+    A bullet that *attempts* a reveal tag but does not parse (typo, roman
+    numeral, stray prose) is passed through untouched so parse_canon seals it
+    to MALFORMED_SEAL and the caller retries. Rewriting it to visible_from=1
+    here would silently publish a sealed fact before parse_canon ever sees it.
+    """
     out_lines = []
     for line in result.splitlines():
         stripped = line.strip()
@@ -48,7 +54,7 @@ def normalize_foundation_bullets(result: str) -> str:
             if not stripped:
                 out_lines.append("")
             continue
-        if canon_mod.VISIBLE_FROM_RE.match(line):
+        if canon_mod.VISIBLE_FROM_RE.match(line) or canon_mod.TAG_ATTEMPT_RE.match(line):
             out_lines.append(stripped)
         else:
             text = canon_mod.BARE_BULLET_RE.match(stripped)
@@ -104,6 +110,10 @@ def main():
                 print(f"  WARN: {e}, retrying...", file=sys.stderr)
             else:
                 raise
+
+    if not result.strip():
+        raise RuntimeError(
+            "gen_canon produced no output after retries (writer truncated twice)")
 
     result = "## Foundation (background truth, not yet revealed to readers)\n\n" + result
     parsed = canon_mod.parse_canon(result)

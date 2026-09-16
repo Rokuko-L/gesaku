@@ -12,6 +12,7 @@ Usage:
 """
 
 import argparse
+import atexit
 import os
 import subprocess
 import sys
@@ -43,6 +44,20 @@ from pipeline.preflight import sanity_check
 # Main orchestrator
 # ---------------------------------------------------------------------------
 
+# Artifacts removed by --from-scratch: everything the pipeline writes into the
+# project root that belongs to one novel's run. A stale micro-plant store,
+# outline marker, or cached validation sidecar would leak the previous novel
+# into the new one. (Directories are listed separately at the call site.)
+FROM_SCRATCH_STALE_FILES = (
+    "world.md", "characters.md", "outline.md", "canon.md",
+    "manuscript.md", "arc_summary.md", "reviews.md",
+    "results.tsv", "state.json", "active_genre.json", "seed.txt",
+    "open_callbacks.json", "plant_hygiene.json",
+    "premise_validation.json", "retrofit_report.json",
+    ".outline_roadmap.md", ".outline_part1.md", ".outline_part2.done",
+)
+
+
 def run_pipeline(args):
     """Run the full pipeline or a specific phase."""
 
@@ -58,6 +73,9 @@ def run_pipeline(args):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
     log_path = paths.get_logs_dir() / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_pipeline.log"
     log_fh = open(log_path, "w", encoding="utf-8", buffering=1)
+    # Close the log on EVERY exit path (sanity_check's sys.exit, an unknown
+    # phase, an uncaught exception), not just the success return below.
+    atexit.register(log_fh.close)
     sys.stdout = Tee(log_fh, sys.stdout)
     sys.stderr = Tee(log_fh, sys.stderr)
     step(f"Pipeline log: {log_path}")
@@ -84,13 +102,21 @@ def run_pipeline(args):
                         shutil.rmtree(p)
                     except Exception as e:
                         print(f"WARN: Failed to clean directory {name}: {e}", file=sys.stderr)
-            for name in ["world.md", "characters.md", "outline.md", "canon.md", "manuscript.md", "arc_summary.md", "results.tsv", "state.json", "active_genre.json", "seed.txt"]:
+            # Every per-run artifact, not just the deliverables: a stale
+            # micro-plant store or outline marker would leak the previous
+            # novel's objects into this one.
+            for name in FROM_SCRATCH_STALE_FILES:
                 p = project_dir / name
                 if p.is_file():
                     try:
                         p.unlink()
                     except Exception as e:
                         print(f"WARN: Failed to remove file {name}: {e}", file=sys.stderr)
+            for p in project_dir.glob("retry_feedback_ch*.txt"):
+                try:
+                    p.unlink()
+                except Exception as e:
+                    print(f"WARN: Failed to remove file {p.name}: {e}", file=sys.stderr)
 
         # Initialize project-specific seed
         seed_dest = paths.get_seed_path()
@@ -256,7 +282,7 @@ def run_pipeline(args):
                     skip_opus_review=args.skip_opus_review
                 )
             elif phase == "export":
-                state = run_export(state)
+                state = run_export(state, skip_epub=args.no_epub)
             else:
                 print(f"Unknown phase: {phase}")
                 sys.exit(1)
@@ -347,6 +373,9 @@ Examples:
     parser.add_argument(
         "--skip-opus-review", action="store_true",
         help="Skip Opus review loop phase")
+    parser.add_argument(
+        "--no-epub", dest="no_epub", action="store_true",
+        help="Skip EPUB generation at export (the PDF is unaffected)")
     parser.add_argument(
         "--perspective", default=os.environ.get("GESAKU_PERSPECTIVE", ""),
         choices=["", "first_person", "third_person"],

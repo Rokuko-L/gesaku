@@ -149,7 +149,10 @@ def main():
     chapter_num = int(sys.argv[1])
     retry_feedback = ""
     for i, arg in enumerate(sys.argv[2:]):
-        if arg == "--retry-feedback" and i + 2 < len(sys.argv):
+        if arg == "--retry-feedback":
+            if i + 3 >= len(sys.argv):
+                print("ERROR: --retry-feedback requires a value", file=sys.stderr)
+                sys.exit(2)
             fb_arg = sys.argv[i + 3]
             fb_path = Path(fb_arg)
             if fb_path.exists():

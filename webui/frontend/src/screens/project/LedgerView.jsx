@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../../api/client.js'
-import { EmptyState, Skel } from '../../components/ui.jsx'
+import { useApi } from '../../api/useApi.js'
+import { EmptyState, Skel, Unavailable } from '../../components/ui.jsx'
 
 /**
  * Beats & Harvests (inspection tool): premise beats, chapter beat sheets,
@@ -8,15 +9,15 @@ import { EmptyState, Skel } from '../../components/ui.jsx'
  * callbacks — nothing planted goes unpaid.
  */
 export default function LedgerView({ project }) {
-  const [data, setData] = useState(null)
+  const { data, error, loading, retry } = useApi(() => api.getLedger(project), [project])
   const [showMicro, setShowMicro] = useState(false)
 
   useEffect(() => {
     document.title = `gesaku · ${project} · ledger`
-    api.getLedger(project).then(setData).catch(() => {})
   }, [project])
 
-  if (!data) return <Skel className="h-[60vh]" />
+  if (loading) return <Skel className="h-[60vh]" />
+  if (error) return <Unavailable what="the ledger" error={error} onRetry={retry} />
   const planned = data.plannedThreads ?? []
   const threads = data.threads ?? []
   const callbacks = data.callbacks ?? []

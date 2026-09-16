@@ -75,24 +75,58 @@ def main():
         print("No chapter files found!")
         return
 
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    
-    futures = []
-    with ThreadPoolExecutor(max_workers=4) as executor:
+    from concurrent.futures import ThreadPoolExecutor
 
-        for path in chapter_files:
-            m = re.search(r"ch_(\d+)\.md", path.name)
-            if not m:
-                continue
-            ch = int(m.group(1))
-            futures.append(executor.submit(process_chapter_arc_summary, path, ch))
-            
+    pairs = []
+    for path in chapter_files:
+        m = re.search(r"ch_(\d+)\.md", path.name)
+        if not m:
+            continue
+        pairs.append((int(m.group(1)), path))
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = [(ch, executor.submit(process_chapter_arc_summary, path, ch))
+                   for ch, path in pairs]
+
     results = []
-    for future in as_completed(futures):
+    failed = []
+    for ch, future in futures:
         try:
             results.append(future.result())
         except Exception as e:
-            print(f"Error summarizing chapter: {e}")
+            print(f"Error summarizing chapter {ch}: {e}", file=sys.stderr)
+            failed.append(ch)
+
+    # Retry the stragglers serially: these are transient LLM failures, and a
+    # chapter absent from the arc means the reader panel judges a truncated
+    # novel and targets rewrites from incomplete data.
+    #
+    # Retry, but do NOT abort: this stage is advisory input to the panel, and it
+    # also runs during export (pipeline/phases/export.py) — killing a finished
+    # novel because one summary failed would be far worse than an incomplete
+    # arc, and the caller runs it under check=True.
+    still_failed = []
+    for ch in failed:
+        entry = next((path for c, path in pairs if c == ch), None)
+        recovered = None
+        for attempt in range(2):
+            if entry is None:
+                break
+            try:
+                recovered = process_chapter_arc_summary(entry, ch)
+                break
+            except Exception as e:
+                print(f"  chapter {ch} retry {attempt + 1} failed: {e}",
+                      file=sys.stderr)
+        if recovered is None:
+            still_failed.append(ch)
+        else:
+            results.append(recovered)
+
+    if still_failed:
+        print(f"WARNING: arc summary incomplete — chapter(s) {still_failed} "
+              f"could not be summarized after retries; the reader panel will "
+              f"judge a novel missing those chapters.", file=sys.stderr)
             
     # Sort results by chapter number
     results.sort(key=lambda x: x[0])

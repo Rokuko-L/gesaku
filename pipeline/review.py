@@ -98,12 +98,21 @@ def parse_review(review_text):
     critic_text = sections[0] if sections else review_text
     professor_text = sections[1] if len(sections) > 1 else ""
     
-    # Extract star rating
-    star_match = re.search(r'★+½?|(\d+\.?\d*)\s*/?\s*(?:out of\s*)?(?:five|5)', critic_text)
+    # Extract star rating. Two accepted forms: literal stars (★★★★½) or a
+    # numeric score ("4.5/5", "4 out of 5"). Without the numeric branch the
+    # star-only regex matched the *digits* but then counted ★ characters,
+    # yielding 0.0 — which should_stop read as a successful parse at zero
+    # stars, silently disabling the >=4.5 / >=4 stop conditions.
+    star_match = re.search(
+        r'(★+½?)|(\d+(?:\.\d+)?)\s*(?:/|out of)\s*(?:5|five)\b',
+        critic_text, re.IGNORECASE)
     stars = None
     if star_match:
-        star_str = star_match.group(0)
-        stars = star_str.count('★') + (0.5 if '½' in star_str else 0)
+        if star_match.group(1):
+            star_str = star_match.group(1)
+            stars = star_str.count('★') + (0.5 if '½' in star_str else 0)
+        else:
+            stars = float(star_match.group(2))
     
     # Extract professor's numbered items
     # Look for patterns like "1. Title" or "1. **Title**" or "Problem:" or "Suggestion:"

@@ -88,7 +88,20 @@
  * @property {{writer: string, judge: string, review: string}} models
  * @property {{foundation: number, chapter: number}} thresholds  // 0-10 gates
  * @property {{maxChapterAttempts: number, revisionCycles: number, plateauDelta: number}} heuristics
+ * @property {{inputPerMTok: number|null, outputPerMTok: number|null}} prices
+ *   // USD per 1M tokens (GESAKU_PRICE_*); null = not configured, so telemetry
+ *   // omits cost instead of inventing one
  * @property {{genre: string, chapterCount: number, notes: string}} defaults
+ */
+
+/**
+ * One deliverable present on disk (GET /api/artifacts).
+ * @typedef {Object} Artifact
+ * @property {"pdf"|"epub"|"manuscript"|"outline"|"arcSummary"} kind
+ * @property {string} name
+ * @property {number} bytes
+ * @property {string} updatedAt         // ISO
+ * @property {string} url               // GET /api/artifacts/{kind}?project=…
  */
 
 /**

@@ -160,7 +160,7 @@ def run_opus_review_loop(skip: bool = False) -> None:
             # Step 5: Mechanical fixes from review
             # Run slop pass on any mentioned patterns
             step("Running mechanical cleanup pass...")
-            apply_cuts_py = paths.get_root_dir() / "apply_cuts.py"
+            apply_cuts_py = paths.get_root_dir() / "pipeline" / "apply_cuts.py"
             if apply_cuts_py.exists():
                 # Evaluate score before cuts
                 pre_cuts_eval = uv_run("pipeline/evaluate.py --full", timeout=timeout_for("long"))

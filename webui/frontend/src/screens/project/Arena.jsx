@@ -1,23 +1,25 @@
 import { useEffect, useState } from 'react'
 import { api } from '../../api/client.js'
-import { EmptyState, mdInline, Skel } from '../../components/ui.jsx'
+import { useApi } from '../../api/useApi.js'
+import { EmptyState, mdInline, Skel, Unavailable } from '../../components/ui.jsx'
 
 /**
  * Chapter Arena (inspection tool): side-by-side A/B of a discarded draft vs
  * the kept one — the reader plays judge.
  */
 export default function Arena({ project }) {
-  const [matches, setMatches] = useState(null)
+  const { data: matches, error, loading, retry } = useApi(
+    () => api.listMatches(project), [project])
   const [idx, setIdx] = useState(0)
   const [pick, setPick] = useState(null) // 'a' | 'tie' | 'b'
   const [history, setHistory] = useState([])
 
   useEffect(() => {
     document.title = `gesaku · ${project} · arena`
-    api.listMatches(project).then(setMatches).catch(() => {})
   }, [project])
 
-  if (!matches) return <Skel className="h-[60vh]" />
+  if (loading) return <Skel className="h-[60vh]" />
+  if (error) return <Unavailable what="the chapter arena" error={error} onRetry={retry} />
   if (!matches.length) {
     return (
       <EmptyState icon="⚔" title="no arena matches">

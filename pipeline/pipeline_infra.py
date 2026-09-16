@@ -115,6 +115,19 @@ CHAPTERS_TOTAL = 24  # default; overridden by genre config at runtime
 
 PHASE_ORDER = ["foundation", "drafting", "revision", "export"]
 
+# Untracked project artifacts that git_reset_hard's `git clean -fd` must never
+# sweep: each is written by one stage and read back by a later stage (or by the
+# webui bridge), so deleting an uncommitted copy corrupts the run. Single owner
+# of that policy — see git_reset_hard.
+CLEAN_KEEP = (
+    "eval_logs", "edit_logs", "briefs", "logs",
+    "repetition_check.json", "open_callbacks.json",
+    "premise_validation.json", "plant_hygiene.json",
+    "reviews.md", "run.json",
+    ".outline_roadmap.md", ".outline_part1.md", ".outline_part2.done",
+    "retry_feedback_ch*.txt",
+)
+
 
 # ---------------------------------------------------------------------------
 # Timeout policy (single owner for every subprocess + LLM budget)
@@ -123,6 +136,7 @@ PHASE_ORDER = ["foundation", "drafting", "revision", "export"]
 # Subprocess caps for pipeline stages. Env-tunable; call sites ask for a
 # named budget instead of inventing literals. LLM per-call timeouts live in
 # core.llm.llm_timeout() under the same naming scheme.
+TIMEOUT_PROBE = 15       # preflight reachability probe — short so a dead proxy fails fast
 TIMEOUT_SHORT = 300      # quick mechanical steps (sanitize, cuts, tex)
 TIMEOUT_STANDARD = 900   # single generation passes (draft, revision)
 TIMEOUT_LONG = 1800      # full-novel evals, chapter evals on slow proxies
@@ -138,8 +152,9 @@ def _env_timeout(name: str, default: int) -> int:
 
 
 def timeout_for(stage: str) -> int:
-    """Named subprocess budget: short | standard | long | xlong."""
+    """Named subprocess budget: probe | short | standard | long | xlong."""
     table = {
+        "probe": _env_timeout("GESAKU_TIMEOUT_PROBE", TIMEOUT_PROBE),
         "short": _env_timeout("GESAKU_TIMEOUT_SHORT", TIMEOUT_SHORT),
         "standard": _env_timeout("GESAKU_TIMEOUT_STANDARD", TIMEOUT_STANDARD),
         "long": _env_timeout("GESAKU_TIMEOUT_LONG", TIMEOUT_LONG),
@@ -261,6 +276,19 @@ def decline_streak() -> int:
     """Consecutive declining revision cycles that stop the loop early."""
     return _env_int("GESAKU_DECLINE_STREAK", DECLINE_STREAK)
 
+
+MAX_WORKERS = 4
+
+
+def max_workers() -> int:
+    """Parallel LLM worker count for per-chapter fan-out (GESAKU_MAX_WORKERS).
+
+    Default 4 even for local proxies — build_arc_summary/build_outline already
+    run 4-12 concurrent calls against the same endpoint. Set =1 for weak
+    single-request models. Never returns below 1.
+    """
+    return max(1, _env_int("GESAKU_MAX_WORKERS", MAX_WORKERS))
+
 def ensure_gitignore_projects():
     """Ensure root .gitignore contains a rule for projects/ to prevent nested-repo commits."""
     root = paths.get_root_dir()
@@ -280,6 +308,7 @@ def ensure_project_git(project_dir: Path):
     """Initialize a git repo inside the project folder if not already present (idempotent)."""
     git_dir = project_dir / ".git"
     if git_dir.exists():
+        _ensure_git_identity(project_dir)
         return  # already initialized
     result = subprocess.run(
         ["git", "init", str(project_dir)],
@@ -289,10 +318,33 @@ def ensure_project_git(project_dir: Path):
         print(f"[git] Initialized project repo at {project_dir}")
     else:
         print(f"[git] WARNING: git init failed: {result.stderr.strip()}")
+    _ensure_git_identity(project_dir)
     # Write a project-level .gitignore template
     proj_gi = project_dir / ".gitignore"
     if not proj_gi.exists():
         proj_gi.write_text("*.aux\n*.log\n*.toc\n*.out\n*.synctex.gz\n", encoding="utf-8")
+
+
+def _ensure_git_identity(project_dir: Path) -> None:
+    """Guarantee the project repo can commit without a global git identity.
+
+    Without this, `git commit` fails on a machine with no global user.name/
+    user.email: git_add_commit returns "" and the next git_reset_hard's
+    `git clean -fd` deletes the "kept" chapters. Only a repo-local fallback is
+    set when no identity resolves, so a globally configured author name still
+    flows through to novel_tex.
+    """
+    fallbacks = {"user.name": "gesaku", "user.email": "gesaku@localhost"}
+    for key, fallback in fallbacks.items():
+        probe = subprocess.run(
+            ["git", "-C", str(project_dir), "config", "--get", key],
+            capture_output=True, text=True, encoding="utf-8",
+        )
+        if probe.returncode != 0 or not probe.stdout.strip():
+            subprocess.run(
+                ["git", "-C", str(project_dir), "config", key, fallback],
+                capture_output=True, text=True, encoding="utf-8",
+            )
 
 def load_registry() -> dict:
     """Load the project registry JSON. Returns empty dict if not found."""
@@ -452,12 +504,12 @@ def git_reset_hard(ref: str = "HEAD~1"):
 
     run_tool(f"git reset --hard {ref}", cwd=str(project_dir))
     # Clean untracked files/directories to prevent cross-iteration contamination,
-    # but never delete the timestamped artifact logs the pipeline depends on.
-    run_tool(
-        "git clean -fd -e eval_logs -e edit_logs -e briefs -e logs "
-        "-e repetition_check.json -e open_callbacks.json",
-        cwd=str(project_dir),
-    )
+    # but never delete an uncommitted project artifact: these are written by one
+    # stage and read back by a later one (or by the webui bridge), so sweeping
+    # them breaks outline part 2, premise validation, liveness, and the review
+    # loop. Any path not listed here and not yet committed is destroyed.
+    excludes = " ".join(f"-e {name}" for name in CLEAN_KEEP)
+    run_tool(f"git clean -fd {excludes}", cwd=str(project_dir))
 
 def git_commit_staged(message: str) -> str:
     """Commit already-staged changes. Returns short hash or empty string."""

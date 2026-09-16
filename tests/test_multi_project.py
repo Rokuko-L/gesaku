@@ -14,6 +14,7 @@ import json
 import shutil
 import sys
 import tempfile
+import unittest
 from pathlib import Path
 
 # Add project root to path
@@ -21,6 +22,9 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from core import paths
+import run_pipeline  # noqa: E402  — imported at module level: its imports
+# read prompts/ from the real repo root, which a test that patches
+# paths._root_dir would otherwise break.
 
 PASS = "[PASS]"
 FAIL = "[FAIL]"
@@ -197,8 +201,12 @@ def test_from_scratch_cleanup(tmp_root: Path):
         state = paths.get_state_path()
         state.write_text("{}", encoding="utf-8")
 
-        # Simulate the exact cleanup logic from run_pipeline.py
-        import shutil
+        # A stale micro-plant store from a previous novel must also go.
+        store = paths.get_open_callbacks_path()
+        store.write_text("{}", encoding="utf-8")
+
+        # Drive the loop from the production list so the test cannot drift from
+        # the policy it claims to exercise.
         for name in ["chapters", "briefs", "edit_logs", "eval_logs", "typeset"]:
             p = project_dir / name
             if p.is_dir():
@@ -206,13 +214,15 @@ def test_from_scratch_cleanup(tmp_root: Path):
                     shutil.rmtree(p)
                 except Exception:
                     pass
-        for name in ["world.md", "characters.md", "outline.md", "canon.md", "manuscript.md", "arc_summary.md", "results.tsv", "state.json", "active_genre.json", "seed.txt"]:
+        for name in run_pipeline.FROM_SCRATCH_STALE_FILES:
             p = project_dir / name
             if p.is_file():
                 try:
                     p.unlink()
                 except Exception:
                     pass
+        for p in project_dir.glob("retry_feedback_ch*.txt"):
+            p.unlink(missing_ok=True)
 
         # Re-create empty folders like run_pipeline.py does
         paths.get_chapters_dir()
@@ -220,11 +230,58 @@ def test_from_scratch_cleanup(tmp_root: Path):
         check("stale ch_02.md deleted", not ch2.exists())
         check("stale log deleted", not log.exists())
         check("stale state.json deleted", not state.exists())
+        check("stale micro-plant store deleted", not store.exists())
         check("chapters directory empty", len(list(chapters_dir.glob("*"))) == 0)
+        # The policy must cover what a previous novel would leak into this one.
+        for name in ("open_callbacks.json", ".outline_part2.done",
+                     "premise_validation.json", "plant_hygiene.json"):
+            check(f"from-scratch policy clears {name}",
+                  name in run_pipeline.FROM_SCRATCH_STALE_FILES)
 
     finally:
         paths._root_dir = orig_root
         paths._project_name = None
+
+
+class MultiProjectIsolationTest(unittest.TestCase):
+    """Runs the check()-style assertions above under unittest.
+
+    Without a TestCase these checks never executed in CI: `unittest discover`
+    imports the module and finds nothing, so the path-isolation guarantees
+    went unverified.
+    """
+
+    def setUp(self):
+        _failed.clear()
+        self._tmp = tempfile.TemporaryDirectory(prefix="gesaku_test_")
+        self.tmp_root = Path(self._tmp.name)
+        (self.tmp_root / "pyproject.toml").write_text("[tool.gesaku]", encoding="utf-8")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+        _failed.clear()
+
+    def _assert_checks(self, fn, *args):
+        fn(*args)
+        self.assertEqual([], list(_failed), f"failed checks: {list(_failed)}")
+
+    def test_project_dir_isolation(self):
+        self._assert_checks(test_project_dir_isolation, self.tmp_root)
+
+    def test_registry_atomic_write(self):
+        self._assert_checks(test_registry_atomic_write, self.tmp_root)
+
+    def test_path_isolation_violation(self):
+        self._assert_checks(test_path_isolation_violation)
+
+    def test_get_root_dir(self):
+        self._assert_checks(test_get_root_dir_raises)
+
+    def test_state_isolation(self):
+        self._assert_checks(test_state_isolation, self.tmp_root)
+
+    def test_from_scratch_cleanup(self):
+        self._assert_checks(test_from_scratch_cleanup, self.tmp_root)
 
 
 def main():

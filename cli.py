@@ -98,7 +98,22 @@ sys.path[:0] = [str(root), str(root / "webui")]
 from fastapi.staticfiles import StaticFiles
 from server import app
 dist = root / "webui" / "frontend" / "dist"
-app.mount("/", StaticFiles(directory=str(dist), html=True), name="spa")
+
+
+class SpaStaticFiles(StaticFiles):
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        # index.html references content-hashed assets. Starlette sends no
+        # Cache-Control, so browsers apply heuristic freshness and keep loading
+        # the OLD bundle after a rebuild — the console silently runs stale
+        # code until a hard reload. Revalidate the shell every time; the hashed
+        # assets themselves stay normally cacheable.
+        if str(resp.headers.get("content-type", "")).startswith("text/html"):
+            resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
+app.mount("/", SpaStaticFiles(directory=str(dist), html=True), name="spa")
 import uvicorn
 uvicorn.run(app, host={host!r}, port={port}, log_level="warning")
 """

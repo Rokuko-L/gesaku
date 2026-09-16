@@ -114,6 +114,12 @@ uv run gesaku --no-open
 First time in `--dev`: `cd webui/frontend && npm install`.  
 Static mode uses `webui/frontend/dist` (build with `npm run build` if you changed the frontend).
 
+The console watches runs live (SSE log + LLM-call feed), reads the manuscript with
+per-chapter scores, browses foundation/revision artifacts, downloads the exported
+deliverables (PDF, manuscript, outline, arc summary), and deletes a project from
+the shelf. Cost is shown only if you set `GESAKU_PRICE_*`; token counts are
+always measured.
+
 ### From the terminal
 
 ```bash
@@ -138,7 +144,24 @@ uv run python run_pipeline.py --phase drafting
 uv run python run_pipeline.py --phase revision --revision-cycles 5
 uv run python run_pipeline.py --phase export
 uv run python run_pipeline.py --project mynovel --from-scratch
+uv run python run_pipeline.py --phase export --no-epub   # PDF only
 ```
+
+## Deliverables
+
+Export writes into `projects/<name>/`:
+
+| File | Notes |
+|---|---|
+| `manuscript.md` | Whole novel as markdown |
+| `outline.md` · `arc_summary.md` | Rebuilt from the chapters |
+| `typeset/novel.pdf` | Trade-paperback PDF via tectonic (needs the toolchain) |
+| `typeset/novel.epub` | EPUB 3 e-book — pure stdlib, always attempted |
+
+The EPUB is built on every export because it has no external dependency; pass
+`--no-epub` to skip it. Neither format blocks the other: if tectonic is missing
+the run still finishes (`phase: complete_no_pdf`) and still produces the EPUB.
+All of these are downloadable from the console's project overview.
 
 ### For agents
 
@@ -191,6 +214,8 @@ Copy `.env.example` → `.env`.
 | `GESAKU_MAX_REVISION_CYCLES` | `6` | Revision cap |
 | `GESAKU_PLATEAU_DELTA` | `0.3` | Score delta that counts as stalled |
 | `GESAKU_DECLINE_STREAK` | `2` | Consecutive dropping cycles → stop revision early |
+| `GESAKU_MAX_WORKERS` | `4` | Per-chapter fan-out width (adversarial edits, targeted revisions); set `1` for weak single-request models |
+| `GESAKU_TIMEOUT_PROBE` | `15` | Preflight reachability probe (short so a dead proxy fails fast) |
 | `GESAKU_TIMEOUT_SHORT` | `300` | Subprocess cap: mechanical steps (sanitize, cuts, tex) |
 | `GESAKU_TIMEOUT_STANDARD` | `900` | Subprocess cap: single generation passes (draft, revision) |
 | `GESAKU_TIMEOUT_LONG` | `1800` | Subprocess cap: full-novel / chapter evals |
@@ -199,6 +224,8 @@ Copy `.env.example` → `.env`.
 | `GESAKU_LLM_TIMEOUT_STANDARD` | `300` | LLM call budget: drafting, revision |
 | `GESAKU_LLM_TIMEOUT_LONG` | `900` | LLM call budget: long reviews |
 | `GESAKU_LLM_TIMEOUT_XLONG` | `1800` | LLM call budget: foundation bibles, full evals |
+| `GESAKU_PRICE_INPUT_PER_MTOK` | — | USD per 1M input tokens; unset = console omits cost (token counts are always measured) |
+| `GESAKU_PRICE_OUTPUT_PER_MTOK` | — | USD per 1M output tokens |
 
 ### Examples
 
@@ -284,6 +311,8 @@ Operator console API: [Docs/systems/console-bridge.md](Docs/systems/console-brid
 | `pipeline/adversarial_edit.py` · `apply_cuts.py` · `reader_panel.py` · `gen_brief.py` · `gen_revision.py` · `review.py` | Revision | Edit, cut, panel, brief, rewrite, review |
 | `pipeline/compare_chapters.py` | Revision | Head-to-head tournament |
 | `pipeline/gen_novel_tex.py` | Export | LaTeX template via LLM |
+| `typeset/build_tex.py` | Export | Chapters → LaTeX (`chapters_content.tex`) |
+| `typeset/build_epub.py` | Export | Chapters → EPUB 3 e-book (stdlib only, no toolchain) |
 | `run_pipeline.py` | Orchestration | Phase controller |
 | `cli.py` | CLI | `gesaku` console + run commands |
 

@@ -123,3 +123,20 @@ Every `call_anthropic` attempt appends one JSON line to the active project's
 stop_reason, prompt_chars, response_chars, prompt_head` — failures add
 `error`. This feeds the webui's token stats and LLM inspector; telemetry
 failures are swallowed by design and never break generation.
+
+`_response_telemetry(resp, dialect)` is the single owner of token/stop-reason
+extraction, and it must read an **SSE stream** as well as a JSON body: gateways
+routinely answer with `text/event-stream` even when streaming was not
+requested, and the numbers then live inside the frames. Two traps there:
+
+- Take the **last non-zero** usage block, not the first. An Anthropic-shaped
+  stream opens with placeholder zeros on `message_start` and reports the real
+  totals on the final `message_delta`; recording the first block logs every
+  call as 0 tokens (this happened — 663 events, none with usage).
+- Accept both key spellings (`input_tokens`/`output_tokens` and
+  `prompt_tokens`/`completion_tokens`); gateways mix them.
+
+`prompt_chars` counts the user prompt **plus** the system prompt, since the
+latter is prepended and usually dwarfs it. A provider that reports nothing is
+recorded as `null` (rendered `—`), never as `0` — see the console's telemetry
+tab, which distinguishes "none reported" from a measured zero.

@@ -83,18 +83,24 @@ def _foundation_artifact_ok(path, min_chars: int = 500,
 
 
 def _foundation_part2_ok(outline_path, total_ch: int) -> bool:
-    """Part-2 polish marker: later chapters carry a foreshadowing section."""
+    """Part-2 polish checkpoint: done-marker present and tail chapters outlined.
+
+    The marker (written by gen_outline_part2, cleared by gen_outline) is the
+    only reliable signal — no prose heuristic can tell a part-1 outline from a
+    part-2-polished one, so the old "FORESHADOW appears somewhere" test marked
+    every iteration dirty and re-ran the whole refine pass.
+    """
     try:
         text = outline_path.read_text(encoding="utf-8")
     except OSError:
+        return False
+    if not paths.get_outline_part2_path().exists():
         return False
     tail_start = max(1, total_ch - 3)
     heads = set(int(m) for m in re.findall(
         r'###\s*\*?\*?\s*Ch(?:apter)?\b\s*\*?\*?\s*(\d+)',
         text, re.IGNORECASE))
-    if any(ch not in heads for ch in range(tail_start, total_ch + 1)):
-        return False
-    return "FORESHADOW" in text.upper()
+    return all(ch in heads for ch in range(tail_start, total_ch + 1))
 
 
 def run_foundation(state: dict) -> dict:
@@ -242,6 +248,10 @@ def run_foundation(state: dict) -> dict:
             step(f"Plant hygiene check skipped: {e}")
 
         state.update(load_state())
+        # load_state() can carry a stale value on disk (subprocess writes only
+        # touch their own keys); re-assert the iteration we are actually on so
+        # a crash resumes at i+1 instead of re-running from 1.
+        state["iteration"] = i
         debts = extract_outline_debts(outline_text)
         state["debts"] = debts
         save_state(state)
@@ -253,8 +263,16 @@ def run_foundation(state: dict) -> dict:
         # 2. Evaluate
         step("Evaluating foundation...")
         eval_result = uv_run("pipeline/evaluate.py --phase=foundation", timeout=timeout_for("standard"))
-        score = parse_score(eval_result.stdout, "overall_score")
-        lore = parse_lore_score(eval_result.stdout)
+        try:
+            score = parse_score(eval_result.stdout, "overall_score")
+            lore = parse_lore_score(eval_result.stdout)
+        except ValueError as e:
+            # A judge that omits a key is not fatal: count the iteration as
+            # non-improving (score 0) so the plateau exit fires instead of
+            # aborting the phase after an expensive iteration.
+            step(f"WARNING: foundation judge output unparseable ({e}) — "
+                 f"counting as a non-improving iteration")
+            score, lore = 0.0, 0.0
 
         step(f"Foundation score: {score}  (lore: {lore}, prev best: {best_score})")
 

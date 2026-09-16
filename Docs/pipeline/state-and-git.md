@@ -18,7 +18,9 @@ Score parsing and chapter counting live in `pipeline/scores.py`.
 | `MAX_FOUNDATION_ITERS / MAX_CHAPTER_ATTEMPTS / MAX_OUTLINE_ATTEMPTS` | Retry budgets |
 | `MIN/MAX_REVISION_CYCLES`, `PLATEAU_DELTA` | Revision loop bounds + plateau sensitivity |
 | `DECLINE_STREAK = 2` | Consecutive dropping cycles → stop revision early |
-| `TIMEOUT_SHORT/STANDARD/LONG/XLONG` | Subprocess caps (see Timeouts below) |
+| `TIMEOUT_PROBE/SHORT/STANDARD/LONG/XLONG` | Subprocess caps (see Timeouts below) |
+| `MAX_WORKERS = 4` | Per-chapter fan-out width (see `max_workers()` below) |
+| `CLEAN_KEEP` | Untracked artifacts `git_reset_hard`'s `git clean -fd` must never delete |
 | `REVISION_TOLERANCE`, `CUTS_TOLERANCE`, `NEAR_CLEAN_MARGIN`, `FORCE_KEEP_MARGIN` | Keep/discard tolerances (see Tolerances below) |
 | `PHASE_ORDER` | `["foundation", "drafting", "revision", "export"]` |
 
@@ -31,7 +33,8 @@ Gate overrides are read at call time via helpers (defaults above; env wins):
 | `max_chapter_attempts()` | `GESAKU_MAX_CHAPTER_ATTEMPTS` |
 | `min_revision_cycles()` / `max_revision_cycles()` | `GESAKU_MIN_REVISION_CYCLES` / `GESAKU_MAX_REVISION_CYCLES` |
 | `plateau_delta()` | `GESAKU_PLATEAU_DELTA` |
-| `timeout_for("short"\|"standard"\|"long"\|"xlong")` | `GESAKU_TIMEOUT_{SHORT,STANDARD,LONG,XLONG}` |
+| `timeout_for("probe"\|"short"\|"standard"\|"long"\|"xlong")` | `GESAKU_TIMEOUT_{PROBE,SHORT,STANDARD,LONG,XLONG}` |
+| `max_workers()` | `GESAKU_MAX_WORKERS` (per-chapter fan-out; floor 1) |
 | `revision_tolerance()` / `cuts_tolerance()` | `GESAKU_REVISION_TOLERANCE` / `GESAKU_CUTS_TOLERANCE` |
 | `near_clean_margin()` / `force_keep_margin()` | `GESAKU_NEAR_CLEAN_MARGIN` / `GESAKU_FORCE_KEEP_MARGIN` |
 | `decline_streak()` | `GESAKU_DECLINE_STREAK` |
@@ -45,6 +48,7 @@ env vars instead of a code change per stage.
 
 | Budget | Subprocess default | Typical steps |
 |---|---|---|
+| `probe` | 15 s | preflight reachability probe (`preflight.py`) — short so a dead proxy fails fast |
 | `short` | 300 s | sanitize titles, cuts, latex, briefs |
 | `standard` | 900 s | drafting, revision, single judge passes |
 | `long` | 1800 s | full-novel evals, chapter evals, reader panel |
@@ -127,14 +131,25 @@ The pipeline treats git as an undo system:
   matching commit gets swept into the next `git_commit_staged` under the
   wrong message. This is why `stage_chapter_with_callbacks` is keep-path only.
 - `git_reset_hard(ref)` → revert a rejected attempt. Its `git clean -fd`
-  spares the timestamped artifact logs **and** `open_callbacks.json`: the
-  plant store is chapter-scoped state whose last write may not be committed
-  yet, and `git clean` only removes untracked paths — so without the
-  exclusion a reset between extraction and the next commit deletes it.
-  That exclusion is a first-run guard; once the file is tracked, `git clean`
-  skips it anyway and the keep-path staging rule is what keeps it consistent.
+  spares everything in `CLEAN_KEEP` — the timestamped artifact logs, the
+  micro-plant store, `premise_validation.json`, `plant_hygiene.json`,
+  `reviews.md`, `run.json` (the webui liveness contract) and the outline
+  intermediates (`.outline_roadmap.md`, `.outline_part1.md`,
+  `.outline_part2.done`). Each is written by one stage and read back by a
+  later one; `git clean` only removes untracked paths, so without an exclusion
+  a reset between write and commit destroys it. Concretely: losing
+  `.outline_roadmap.md` makes the next `gen_outline_part2` rewrite `outline.md`
+  with the roadmap section deleted, and losing `run.json` makes the console
+  report a live run as ended. Add the name to `CLEAN_KEEP` — never re-inline
+  the list at the call site.
 - `ensure_gitignore_projects()` / `ensure_project_git(dir)` → root repo
-  ignores `projects/`; each project gets its own `.git`
+  ignores `projects/`; each project gets its own `.git`. `ensure_project_git`
+  also calls `_ensure_git_identity`, which sets a repo-local
+  `user.name`/`user.email` **only when no identity resolves**. Without it,
+  `git commit` fails on a machine with no global identity: `git_add_commit`
+  returns `""`, and the next `git_reset_hard`'s `git clean -fd` deletes the
+  "kept" chapters. A globally configured author name is left alone so it still
+  flows through to `novel_tex`.
 
 ## Score Parsing
 
@@ -149,8 +164,11 @@ The pipeline treats git as an undo system:
 ## Subprocess Helpers
 
 - `run_tool(cmd, timeout, cwd)` — capture-output runner returning
-  `CompletedProcess`.
-- `uv_run(script, timeout)` — `run_tool("uv run python <script>")`.
+  `CompletedProcess`; `cwd` defaults to the **repo root**, so stage scripts
+  must be named with their directory (`"pipeline/foo.py"`, not `"foo.py"`).
+- `uv_run(script, timeout)` — `run_tool('"<sys.executable>" <script>')`: the
+  current interpreter, from the repo root, `check=True` (a non-zero exit
+  raises). Called `uv_run` for history; it does not shell out to `uv`.
 - `Tee` — duplicates stdout/stderr into per-run log files under
   `projects/<name>/logs/`.
 

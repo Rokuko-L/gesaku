@@ -124,6 +124,25 @@ def _parse_response_json(text: str) -> dict:
         _warn_unused_trailing(text, end)
         return obj
 
+def _iter_sse_objects(raw: str):
+    """Yield the decoded JSON payloads of an SSE body.
+
+    Skips event/id/comment lines, the `[DONE]` sentinel, and anything that does
+    not parse — a stream with one damaged chunk should still yield the rest.
+    """
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        payload = line[5:].strip()
+        if not payload or payload == "[DONE]":
+            continue
+        try:
+            yield json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+
+
 def _extract_sse_text_and_stop_reason(raw: str, dialect: str):
     """Parse an SSE stream body into (text, stop_reason) for either dialect.
 
@@ -132,17 +151,7 @@ def _extract_sse_text_and_stop_reason(raw: str, dialect: str):
     """
     text_content = ""
     stop_reason = None
-    for line in raw.splitlines():
-        line = line.strip()
-        if not line.startswith("data:"):
-            continue
-        data_str = line[5:].strip()
-        if data_str == "[DONE]":
-            continue
-        try:
-            item = json.loads(data_str)
-        except json.JSONDecodeError:
-            continue
+    for item in _iter_sse_objects(raw):
         if dialect == "openai":
             for choice in item.get("choices", []):
                 delta = choice.get("delta", {}) or {}
@@ -164,6 +173,71 @@ def _extract_sse_text_and_stop_reason(raw: str, dialect: str):
                 if item.get("delta", {}).get("stop_reason"):
                     stop_reason = item["delta"]["stop_reason"]
     return text_content, stop_reason
+
+
+def _usage_pair(usage) -> tuple:
+    """(input_tokens, output_tokens) from a usage object in either dialect.
+
+    Anthropic names the fields input_tokens/output_tokens; OpenAI names them
+    prompt_tokens/completion_tokens. Gateways mix the two freely, so accept
+    whichever is present.
+    """
+    if not isinstance(usage, dict):
+        return None, None
+    tin = usage.get("input_tokens")
+    if tin is None:
+        tin = usage.get("prompt_tokens")
+    tout = usage.get("output_tokens")
+    if tout is None:
+        tout = usage.get("completion_tokens")
+    return tin, tout
+
+
+def _usage_from_sse(raw: str) -> tuple:
+    """Token usage from an SSE body.
+
+    Take the LAST non-zero block, not the first: an Anthropic-shaped stream
+    opens with placeholder zeros on `message_start` and only reports the real
+    totals on the final `message_delta`. Recording the first block seen is how
+    every call ended up logged with no usage at all.
+    """
+    last_seen = (None, None)
+    last_nonzero = None
+    for item in _iter_sse_objects(raw):
+        usage = item.get("usage")
+        if usage is None and isinstance(item.get("message"), dict):
+            usage = item["message"].get("usage")
+        tin, tout = _usage_pair(usage)
+        if tin is None and tout is None:
+            continue
+        last_seen = (tin, tout)
+        if (tin or 0) + (tout or 0) > 0:
+            last_nonzero = (tin, tout)
+    return last_nonzero or last_seen
+
+
+def _response_telemetry(resp, dialect: str):
+    """(tokens_in, tokens_out, stop_reason) for one response.
+
+    Gateways routinely answer with `text/event-stream` even when streaming was
+    never requested. The usage and stop_reason then live *inside* the stream,
+    so parsing `resp.text` as one JSON object yields an empty dict and the call
+    is recorded with null tokens and a null stop_reason.
+    """
+    raw = resp.text
+    if _is_sse_body(resp):
+        _text, stop_reason = _extract_sse_text_and_stop_reason(raw, dialect)
+        tin, tout = _usage_from_sse(raw)
+        return tin, tout, stop_reason
+    try:
+        data = _parse_response_json(raw)
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        return None, None, None
+    tin, tout = _usage_pair(data.get("usage"))
+    return tin, tout, data.get("stop_reason")
+
 
 def _is_sse_body(resp) -> bool:
     raw = resp.text.strip()
@@ -415,12 +489,7 @@ def call_llm(
                 timeout=timeout,
             )
             resp.raise_for_status()
-            try:
-                data = _parse_response_json(resp.text)
-            except Exception:
-                data = {}
-            usage = data.get("usage") or {}
-            stop_reason = data.get("stop_reason")
+            tokens_in, tokens_out, stop_reason = _response_telemetry(resp, provider)
             _emit_llm_event({
                 "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
                       + f".{int(time.perf_counter() * 1000) % 1000:03d}Z",
@@ -428,11 +497,13 @@ def call_llm(
                 "model": model,
                 "ok": True,
                 "attempt": attempt,
-                "tokens_in": usage.get("input_tokens"),
-                "tokens_out": usage.get("output_tokens"),
+                "tokens_in": tokens_in,
+                "tokens_out": tokens_out,
                 "duration_ms": round((time.perf_counter() - t0) * 1000),
                 "stop_reason": stop_reason,
-                "prompt_chars": len(str(prompt)),
+                # What was actually sent: the user prompt plus the system
+                # prompt, which is prepended and can dwarf it.
+                "prompt_chars": len(str(prompt)) + (len(system) if system else 0),
                 "response_chars": len(resp.text),
                 "prompt_head": str(prompt)[:300],
             })
