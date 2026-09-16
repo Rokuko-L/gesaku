@@ -72,8 +72,9 @@ export default function ProjectHeader({ project, projects, runState }) {
           {running && <span className="font-mono text-[10px] text-accent">live</span>}
         </span>
         <label className="flex items-center gap-1.5 font-mono text-[10px] text-fog-500">
-          <span className="hidden sm:inline">switch</span>
+          <span className="sr-only">switch project</span>
           <select
+            aria-label="switch project"
             value={project}
             onChange={(e) => switchTo(e.target.value)}
             className="max-w-44 truncate border border-ink-600 bg-ink-950 px-1.5 py-1 font-mono text-[11px] text-fog-300 outline-none focus:border-accent/60"

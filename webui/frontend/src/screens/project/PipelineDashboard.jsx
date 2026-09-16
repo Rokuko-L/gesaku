@@ -54,7 +54,7 @@ function PipelineStatus({ runState, scores }) {
           const active = !complete && i === activeIdx
           return (
             <li key={p.id} className={`relative ${active || done ? '' : 'opacity-50'}`}>
-              <span className={`absolute -left-[26px] top-0.5 flex h-4 w-4 items-center justify-center text-[9px] ${
+              <span className={`absolute -left-[26px] top-0.5 flex h-4 w-4 items-center justify-center text-[10px] ${
                 done ? 'bg-good/20 text-good' : active ? 'bg-accent/20' : 'bg-ink-700'
               }`}>
                 {done ? '✓' : active && <span className="h-2 w-2 animate-pulse bg-accent" />}
@@ -92,7 +92,7 @@ function RunTab({ project }) {
   const hasProgress = (runState?.chaptersDone ?? 0) > 0
     || (runState?.foundationScore ?? 0) > 0
     || (runState?.phase && runState.phase !== 'foundation' && runState.phase !== 'idle')
-  const startLabel = hasProgress ? '[ resume run ]' : '[ start run ]'
+  const startLabel = hasProgress ? 'resume run' : 'start run'
 
   useEffect(() => {
     api.getScoreHistory(project).then(setScores).catch(() => {})
@@ -169,7 +169,7 @@ function RunTab({ project }) {
               disabled={!running || stopping}
               onClick={async () => { setStopping(true); await stopRun(); setStopping(false) }}
             >
-              {stopping ? 'terminating…' : '[ terminate run ]'}
+              {stopping ? 'terminating…' : 'terminate run'}
             </Button>
           </div>
           {startError && (

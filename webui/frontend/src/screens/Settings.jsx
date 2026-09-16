@@ -131,14 +131,14 @@ export default function Settings() {
               disabled={!changedCount || saving}
               className="border border-ink-600 px-3 py-1 font-mono text-xs text-fog-400 transition-colors hover:text-fog-200 disabled:opacity-40"
             >
-              [ discard ]
+              discard
             </button>
             <button
               onClick={commit}
               disabled={(!changedCount && !apiKey.trim()) || saving}
               className="border border-accent bg-accent/10 px-3 py-1 font-mono text-xs text-accent transition-colors hover:bg-accent hover:text-ink-950 disabled:opacity-40"
             >
-              {saving ? '[ saving… ]' : '[ commit_changes ]'}
+              {saving ? 'saving…' : 'commit changes'}
             </button>
           </div>
         </div>

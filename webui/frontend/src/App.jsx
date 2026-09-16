@@ -115,7 +115,7 @@ function Workspace({ route }) {
               {view === id ? '>' : ''}[{String(i + 1).padStart(2, '0')}] {label}
             </button>
           ))}
-          <p className="mt-3 hidden px-3 pb-1 font-mono text-[9px] uppercase tracking-widest text-fog-500 lg:block">
+          <p className="mt-3 hidden px-3 pb-1 font-mono text-[10px] uppercase tracking-widest text-fog-500 lg:block">
             inspection tools
           </p>
           {PROJECT_TOOLS.map(({ id, label }, i) => (

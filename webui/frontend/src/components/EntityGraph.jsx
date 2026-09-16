@@ -178,7 +178,7 @@ export default function EntityGraph({ nodes, edges, arranged = false, onSelect, 
     <div className="relative h-full w-full overflow-hidden border border-line bg-ink-950">
       <div ref={ref} className={`${className} w-full`} />
       {arranged && (
-        <div className="pointer-events-none absolute bottom-3 left-4 flex flex-wrap gap-x-4 gap-y-1 font-mono text-[9px] text-fog-500">
+        <div className="pointer-events-none absolute bottom-3 left-4 flex flex-wrap gap-x-4 gap-y-1 font-mono text-[10px] text-fog-500">
           {Object.entries(EDGE_STYLE).slice(0, 6).map(([kind, s]) => (
             <span key={kind} className="flex items-center gap-1">
               <span

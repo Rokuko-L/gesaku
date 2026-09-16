@@ -111,13 +111,13 @@ export default function FoundationView({ project, tab }) {
                 {graph?.stale && (
                   <button onClick={arrange} disabled={arranging} title="canon/world changed since this arrangement"
                     className="border border-accent/60 px-2 py-0.5 text-[10px] text-accent transition-colors hover:bg-accent hover:text-ink-950 disabled:opacity-40">
-                    {arranging ? 'arranging…' : '[ canon changed — re-arrange ]'}
+                    {arranging ? 'arranging…' : 'canon changed — re-arrange'}
                   </button>
                 )}
                 {!graph?.llm && (
                   <button onClick={arrange} disabled={arranging}
                     className="border border-accent/60 px-2 py-0.5 text-[10px] text-accent transition-colors hover:bg-accent hover:text-ink-950 disabled:opacity-40">
-                    {arranging ? 'arranging…' : '[ arrange with llm ]'}
+                    {arranging ? 'arranging…' : 'arrange with llm'}
                   </button>
                 )}
               </div>

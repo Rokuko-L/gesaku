@@ -166,16 +166,20 @@ function ProjectCard({ p, onDelete, deleting }) {
 
         <p className="mt-3 flex items-center justify-between font-mono text-[10px] text-fog-500">
           <span>upd {timeAgo(p.updatedAt)}</span>
-          <span className="text-fog-500 transition-colors group-hover:text-accent group-hover:opacity-0">open ›</span>
+          <span className="transition-colors group-hover:text-accent">open ›</span>
         </p>
       </button>
 
+      {/* Sibling of the card button — a button inside a button is invalid HTML.
+          Always rendered, not hover-only: a hover affordance is undiscoverable
+          and unreachable on touch or by keyboard. Offset left of "open ›" so
+          the two never overlap. */}
       <button
         type="button"
         title={p.running ? 'stop the run before deleting' : `delete ${p.name}`}
         disabled={!!deleting}
         onClick={() => onDelete(p)}
-        className="absolute bottom-3 right-5 hidden border border-line px-1.5 py-0.5 font-mono text-[10px] text-fog-400 transition-colors hover:border-bad hover:text-bad group-hover:inline-block disabled:opacity-40"
+        className="absolute bottom-3 right-20 border border-transparent px-1.5 py-0.5 font-mono text-[10px] text-fog-600 transition-colors hover:border-bad hover:text-bad disabled:opacity-40"
       >
         {deleting === p.name ? 'deleting…' : 'delete'}
       </button>

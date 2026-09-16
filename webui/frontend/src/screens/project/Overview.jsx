@@ -36,7 +36,7 @@ function PhaseTracker({ runState }) {
           const active = i === activeIdx
           return (
             <li key={p.id} className={`relative ${active || isDone ? '' : 'opacity-50'}`}>
-              <span className={`absolute -left-[26px] top-0.5 flex h-4 w-4 items-center justify-center text-[9px] ${
+              <span className={`absolute -left-[26px] top-0.5 flex h-4 w-4 items-center justify-center text-[10px] ${
                 isDone ? 'bg-good/20 text-good' : active ? 'bg-accent/20' : 'bg-ink-700'
               }`}>
                 {isDone ? '✓' : active && <span className="h-2 w-2 animate-pulse bg-accent" />}
