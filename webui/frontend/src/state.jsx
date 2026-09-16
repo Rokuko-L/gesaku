@@ -83,10 +83,10 @@ export function AppProvider({ children }) {
     return res
   }, [refreshProjects])
 
-  const resumeRun = useCallback(async (project) => {
+  const resumeRun = useCallback(async (project, opts = {}) => {
     const name = project ?? projectRef.current
     if (!name) throw new Error('no project selected')
-    const res = await api.startRun(name)
+    const res = await api.startRun(name, opts)
     refreshProjects()
     api.getRunState(name).then(setRunState).catch(() => {})
     return res

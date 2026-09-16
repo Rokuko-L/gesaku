@@ -90,10 +90,13 @@ function RunTab({ project }) {
   const [startError, setStartError] = useState('')
   const logRef = useRef(null)
   const running = runState?.running ?? false
+  const finished = runState?.finished ?? false
   const hasProgress = (runState?.chaptersDone ?? 0) > 0
     || (runState?.foundationScore ?? 0) > 0
     || (runState?.phase && runState.phase !== 'foundation' && runState.phase !== 'idle')
-  const startLabel = hasProgress ? 'resume run' : 'start run'
+  // Finished: nothing to resume (a no-phase launch just exits), so re-export.
+  const startLabel = finished ? 're-export' : hasProgress ? 'resume run' : 'start run'
+  const startOpts = finished ? { phase: 'export' } : {}
 
   useEffect(() => {
     api.getScoreHistory(project).then(setScores).catch(() => {})
@@ -156,7 +159,7 @@ function RunTab({ project }) {
                   setStarting(true)
                   setStartError('')
                   try {
-                    await resumeRun(project)
+                    await resumeRun(project, startOpts)
                   } catch (e) {
                     setStartError(e?.message || String(e))
                   } finally {

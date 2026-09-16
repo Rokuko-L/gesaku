@@ -144,7 +144,11 @@ export default function Overview({ project }) {
     || (runState?.chaptersDone ?? 0) > 0
     || (runState?.foundationScore ?? 0) > 0
     || (runState?.phase && runState.phase !== 'foundation' && runState.phase !== 'idle')
-  const startLabel = hasProgress ? 'resume run' : 'start run'
+  // A finished novel has nothing to resume: launching it with no --phase just
+  // prints "Pipeline already complete" and exits. Re-export is the action that
+  // actually does something (it also retries a failed PDF/EPUB), so offer that.
+  const startLabel = finished ? 're-export' : hasProgress ? 'resume run' : 'start run'
+  const startOpts = finished ? { phase: 'export' } : {}
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
@@ -177,9 +181,11 @@ export default function Overview({ project }) {
               )}
             </p>
             <p className="mt-1 font-prose text-[11px] leading-relaxed text-fog-500">
-              {hasProgress
-                ? 'Resume continues from the current phase in state.json — it does not wipe the project.'
-                : 'Start launches the pipeline from foundation. Genre and notes come from this project\'s files.'}
+              {finished
+                ? 'This novel is complete. Re-export rebuilds the manuscript, PDF and EPUB from the final chapters — a full re-run needs --from-scratch.'
+                : hasProgress
+                  ? 'Resume continues from the current phase in state.json — it does not wipe the project.'
+                  : 'Start launches the pipeline from foundation. Genre and notes come from this project\'s files.'}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -191,7 +197,7 @@ export default function Overview({ project }) {
                 setStarting(true)
                 setStartError('')
                 try {
-                  await resumeRun(project)
+                  await resumeRun(project, startOpts)
                 } catch (e) {
                   setStartError(e?.message || String(e))
                 } finally {

@@ -208,6 +208,12 @@ class StartRun(BaseModel):
     wordsPerChapter: int | None = Field(default=None, ge=500, le=8000)
     perspective: str | None = None
     proseMode: str | None = None
+    # A single phase to run. Needed because a *completed* project with no
+    # --phase prints "Pipeline already complete" and exits, so "resume" on a
+    # finished novel is a no-op; --phase export is what actually rebuilds the
+    # deliverables.
+    phase: str | None = Field(
+        default=None, pattern="^(foundation|drafting|revision|export)$")
 
 
 def _load_launch(p: Path) -> dict:
@@ -253,6 +259,8 @@ def run_start(req: StartRun | None = None):
 
     launch = _load_launch(p)
     cli = ["--project", name]
+    if req and req.phase:
+        cli += ["--phase", req.phase]
     cycles = (req.revisionCycles if req else None)
     if cycles is not None:
         cli += ["--revision-cycles", str(cycles)]

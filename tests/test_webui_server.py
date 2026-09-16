@@ -160,5 +160,26 @@ class LogStreamHelpersTest(unittest.TestCase):
         self.assertEqual(0, _tail_seed(SERVER_PATH.parent / "does-not-exist.log"))
 
 
+class StartRunContractTest(unittest.TestCase):
+    """POST /api/run/start must be able to name a single phase.
+
+    Without it the console could only launch a plain resume, and on a
+    *completed* project that prints "Pipeline already complete" and exits — so
+    the button appeared to work and did nothing.
+    """
+
+    def test_phase_is_accepted_and_forwarded_verbatim(self):
+        req = webui_server.StartRun(project="p", phase="export")
+        self.assertEqual("export", req.phase)
+
+    def test_phase_is_optional(self):
+        self.assertIsNone(webui_server.StartRun(project="p").phase)
+
+    def test_unknown_phase_is_rejected(self):
+        from pydantic import ValidationError
+        with self.assertRaises(ValidationError):
+            webui_server.StartRun(project="p", phase="not-a-phase")
+
+
 if __name__ == "__main__":
     unittest.main()
