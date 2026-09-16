@@ -112,7 +112,13 @@ def run_state_fields(p: Path, state: dict) -> dict:
     return {
         "project": p.name,
         "phase": norm_phase(state),
+        # `phase` is "idle" both for a project that never ran and for one that
+        # finished — the stepper needs that collapse, but the UI must not
+        # present a completed novel as "idle". This is the disambiguator.
+        "finished": state.get("current_focus") == "done",
         "iteration": state.get("iteration", 0),
+        "novelScore": state.get("novel_score"),
+        "bestNovelScore": state.get("best_novel_score"),
         "foundationScore": state.get("foundation_score", 0) or 0,
         "loreScore": state.get("lore_score", 0) or 0,
         "chaptersTotal": state.get("chapters_total", 0) or 0,

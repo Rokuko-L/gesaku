@@ -11,6 +11,7 @@ export default function ProjectHeader({ project, projects, runState }) {
   const meta = projects?.find((p) => p.name === project)
   const phase = runState?.phase ?? meta?.phase ?? '…'
   const running = runState?.running ?? meta?.running ?? false
+  const finished = runState?.finished ?? meta?.finished ?? false
   const score = meta?.novelScore || meta?.foundationScore || null
 
   // Always keep the open project selectable, even if the shelf list is
@@ -60,15 +61,16 @@ export default function ProjectHeader({ project, projects, runState }) {
 
       <span className="hidden md:inline-flex"><ScoreSig score={score} label="no score yet" /></span>
 
-      <span className="flex items-center gap-2">
-        <PhaseBadge phase={phase} running={running} />
-        {running && <span className="font-mono text-[10px] text-accent">live</span>}
-      </span>
-
       <div className="ml-auto flex items-center gap-3">
         {meta?.updatedAt && (
           <span className="hidden font-mono text-[10px] text-fog-500 xl:inline">upd {timeAgo(meta.updatedAt)}</span>
         )}
+        {/* Status sits with the switcher so the two wrap together on a narrow
+            header instead of the badge stranding on its own row. */}
+        <span className="flex items-center gap-2">
+          <PhaseBadge phase={phase} running={running} finished={finished} />
+          {running && <span className="font-mono text-[10px] text-accent">live</span>}
+        </span>
         <label className="flex items-center gap-1.5 font-mono text-[10px] text-fog-500">
           <span className="hidden sm:inline">switch</span>
           <select

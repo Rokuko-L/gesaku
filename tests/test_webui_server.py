@@ -91,5 +91,74 @@ class LlmEventViewTest(unittest.TestCase):
                       "/api/llm-events must map through llm_event_view")
 
 
+class LogStreamHelpersTest(unittest.TestCase):
+    """Log tailing: line levels and the backfill offset.
+
+    Both exist because of observed console bugs: everything was tagged `[llm]`
+    (mis-labelling stdout as model calls), and the pane was empty for a
+    *finished* run because the stream started reading at EOF.
+    """
+
+    def test_line_level_classifies_pipeline_output(self):
+        from routes.stream import _line_level
+        self.assertEqual("banner", _line_level("=" * 60))
+        self.assertEqual("banner", _line_level("  ------------------  "))
+        self.assertEqual("step", _line_level("  [12:34:56] Generating world bible..."))
+        self.assertEqual("warn", _line_level("  WARNING: outline plant hygiene failed"))
+        self.assertEqual("warn", _line_level("Traceback (most recent call last):"))
+        self.assertEqual("warn", _line_level("  FATAL ERROR in revision: boom"))
+        self.assertEqual("raw", _line_level("just some model output"))
+        # Not an LLM call, and must not be labelled as one.
+        self.assertNotEqual("raw", _line_level("=" * 10))
+
+    def test_banner_title_after_a_separator(self):
+        """banner() prints sep / title / sep, so the line after a separator is
+        a banner title — otherwise phase headers read as raw output."""
+        from routes.stream import _line_level
+        self.assertEqual("banner", _line_level("PHASE 3: REVISION", prev_was_separator=True))
+        self.assertEqual("raw", _line_level("PHASE 3: REVISION"))
+        # Structured output sitting under a closing rule is not a title.
+        self.assertEqual("raw", _line_level(
+            "State: phase=revision, foundation_score=7.0", prev_was_separator=True))
+        # A step line right after a separator stays a step.
+        self.assertEqual("step", _line_level("  [12:34:56] step", prev_was_separator=True))
+        # And a separator is still a separator.
+        self.assertEqual("banner", _line_level("=" * 60, prev_was_separator=True))
+
+    def test_tail_seed_starts_at_a_line_boundary(self):
+        import tempfile
+        from pathlib import Path as _P
+        from routes.stream import _tail_seed
+
+        with tempfile.TemporaryDirectory() as tmp:
+            f = _P(tmp) / "run.log"
+            # write_bytes: write_text would translate \n to \r\n on Windows and
+            # make the boundary assertion platform-dependent.
+            f.write_bytes("".join(f"line {i:04d}\n" for i in range(1000)).encode())
+            size = f.stat().st_size
+            offset = _tail_seed(f, max_bytes=200)
+            self.assertGreater(offset, 0)
+            self.assertLess(offset, size)
+            with open(f, "rb") as fh:
+                fh.seek(offset)
+                first = fh.readline().decode()
+            # We must land exactly on a line start, never mid-line.
+            self.assertRegex(first, r"^line \d{4}\n$")
+
+    def test_tail_seed_returns_zero_for_a_short_log(self):
+        import tempfile
+        from pathlib import Path as _P
+        from routes.stream import _tail_seed
+
+        with tempfile.TemporaryDirectory() as tmp:
+            f = _P(tmp) / "small.log"
+            f.write_text("one\ntwo\n", encoding="utf-8")
+            self.assertEqual(0, _tail_seed(f, max_bytes=65536))
+
+    def test_tail_seed_survives_a_missing_file(self):
+        from routes.stream import _tail_seed
+        self.assertEqual(0, _tail_seed(SERVER_PATH.parent / "does-not-exist.log"))
+
+
 if __name__ == "__main__":
     unittest.main()

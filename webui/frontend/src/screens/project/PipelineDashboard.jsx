@@ -28,8 +28,16 @@ const PHASES = [
   { id: 'export', meta: () => `fmt: pdf` },
 ]
 
-const TAG_FOR = { banner: 'sys', step: 'run', warn: 'err', raw: 'llm' }
-const TAG_STYLE = { sys: 'text-paper', run: 'text-fog-200', llm: 'text-fog-400', err: 'text-bad' }
+// Log-line tags. The bridge classifies each stdout line (see
+// routes/stream.py `_line_level`); "raw" is unclassified output, NOT an LLM
+// call — tagging it "[llm]" mislabelled every line of run output.
+const TAG_FOR = { banner: 'sys', step: 'run', warn: 'err', raw: 'out' }
+const TAG_STYLE = {
+  sys: 'text-paper',
+  run: 'text-fog-200',
+  out: 'text-fog-400',
+  err: 'text-bad',
+}
 
 /* ------------------------------------------------------------------ run tab */
 
@@ -64,7 +72,8 @@ function PipelineStatus({ runState, scores }) {
       </ol>
       {lastKept && (
         <p className="mt-4 font-mono text-[10px] text-fog-500">
-          last kept score: <span className="text-good">{lastKept.score.toFixed(2)}</span>
+          last kept attempt: <span className="text-good">{lastKept.score.toFixed(2)}</span>
+          <span className="text-fog-500"> ({lastKept.phase})</span>
         </p>
       )}
     </Card>

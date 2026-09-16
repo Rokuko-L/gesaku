@@ -133,13 +133,20 @@ function ProjectCard({ p, onDelete, deleting }) {
             </p>
             <p className="mt-0.5 truncate font-mono text-[10px] text-fog-500">{p.name}</p>
           </div>
-          <PhaseBadge phase={p.phase} running={p.running} />
+          <PhaseBadge phase={p.phase} running={p.running} finished={p.finished} />
         </div>
 
         {p.genre && <p className="mt-2 truncate font-prose text-xs italic text-fog-400">{p.genre}</p>}
 
         <div className="mt-4 flex items-center justify-between">
-          <ScoreSig score={p.novelScore || p.foundationScore || null} label="unscored" />
+          {/* Label which score this is: the novel-level judge score, or the
+              foundation gate score when no novel score exists yet. */}
+          <span className="flex items-center gap-2">
+            <span className="font-mono text-[10px] text-fog-500">
+              {p.novelScore != null ? 'novel' : 'foundation'}
+            </span>
+            <ScoreSig score={p.novelScore ?? p.foundationScore ?? null} label="unscored" />
+          </span>
           <span className="font-mono text-xs text-fog-400">
             {p.words ? `${(p.words / 1000).toFixed(1)}k words` : 'no prose yet'}
           </span>

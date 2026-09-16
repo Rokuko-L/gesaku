@@ -430,8 +430,12 @@ def gen_projects(state: dict, p: Path) -> list:
             "title": s.get("title", "Untitled"),
             "genre": genre,
             "phase": "idle" if s.get("current_focus") == "done" else phase,
+            # `phase` collapses "finished" and "never ran" into idle; this keeps
+            # the distinction available to the shelf and the header.
+            "finished": s.get("current_focus") == "done",
             "foundationScore": s.get("foundation_score", 0) or 0,
             "novelScore": s.get("novel_score"),
+            "bestNovelScore": s.get("best_novel_score"),
             "revisionCycle": s.get("revision_cycle", 0),
             "chaptersTotal": s.get("chapters_total", 0) or 0,
             "chaptersDone": s.get("chapters_drafted", 0) or 0,

@@ -38,6 +38,9 @@ function TopNav({ route }) {
   const { projects, runState } = useApp()
   const active = route.name === 'project' ? route.project : null
   const meta = active ? projects?.find((p) => p.name === active) : null
+  // Only show the project nav item once we know the project exists. While the
+  // shelf is still loading (projects === null) we cannot tell, so show it then.
+  const known = !active || !projects || !!meta
   const running = runState?.running ?? false
 
   const item = (num, label, target, isActive) => (
@@ -59,7 +62,7 @@ function TopNav({ route }) {
         </span>
       </button>
       {item('01', 'projects', '/projects', route.name === 'projects')}
-      {active && item('02', meta?.title && meta.title !== 'Untitled' ? meta.title : active,
+      {active && known && item('02', meta?.title && meta.title !== 'Untitled' ? meta.title : active,
         projectRoute(active), route.name === 'project')}
       <div className="ml-auto pb-2">
         {item('03', 'settings', '/settings', route.name === 'settings')}

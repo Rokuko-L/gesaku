@@ -21,7 +21,10 @@ const PHASES = [
 
 function PhaseTracker({ runState }) {
   const activeIdx = PHASES.findIndex((p) => p.id === runState?.phase)
-  const done = runState?.phase === 'idle' || activeIdx === PHASES.length - 1 && runState?.phase === 'export'
+  // `finished` comes from state.current_focus == "done"; `phase` alone cannot
+  // tell a completed novel from one that never ran (both are "idle").
+  const allDone = runState?.finished || runState?.phase === 'idle'
+  const done = allDone || activeIdx === PHASES.length - 1 && runState?.phase === 'export'
   return (
     <Card className="p-5">
       <SectionHead className="mb-4 flex items-center gap-2">
@@ -29,7 +32,7 @@ function PhaseTracker({ runState }) {
       </SectionHead>
       <ol className="relative space-y-5 border-l border-ink-600 pl-5">
         {PHASES.map((p, i) => {
-          const isDone = runState?.phase === 'idle' || i < activeIdx
+          const isDone = allDone || i < activeIdx
           const active = i === activeIdx
           return (
             <li key={p.id} className={`relative ${active || isDone ? '' : 'opacity-50'}`}>
@@ -131,8 +134,14 @@ export default function Overview({ project }) {
   }, [project])
 
   const running = runState?.running ?? false
+  const finished = runState?.finished ?? meta?.finished ?? false
+  // The novel-level judge score (state.novel_score) and its peak. The score
+  // history below is a different thing: per-attempt rows across every phase.
+  const novelScore = runState?.novelScore ?? meta?.novelScore ?? null
+  const bestNovel = runState?.bestNovelScore ?? meta?.bestNovelScore ?? null
   const lastKept = [...scores].reverse().find((s) => s.kept)
-  const hasProgress = (runState?.chaptersDone ?? 0) > 0
+  const hasProgress = finished
+    || (runState?.chaptersDone ?? 0) > 0
     || (runState?.foundationScore ?? 0) > 0
     || (runState?.phase && runState.phase !== 'foundation' && runState.phase !== 'idle')
   const startLabel = hasProgress ? 'resume run' : 'start run'
@@ -200,12 +209,13 @@ export default function Overview({ project }) {
       <div className="dock grid grid-cols-2 gap-px xl:grid-cols-4">
         <StatTile label="words" value={meta?.words ? `${(meta.words / 1000).toFixed(1)}k` : '—'}
           sub={meta?.chaptersTotal ? `${meta.chaptersDone ?? 0}/${meta.chaptersTotal} chapters drafted` : 'drafting not started'} />
-        <StatTile label="latest kept score" value={lastKept ? lastKept.score.toFixed(2) : '—'}
-          sub={scores.length ? `${scores.length} judged attempts` : 'no attempts yet'} />
+        <StatTile label="novel score" value={novelScore != null ? Number(novelScore).toFixed(2) : '—'}
+          sub={bestNovel != null ? `peak ${Number(bestNovel).toFixed(2)}`
+            : scores.length ? `${scores.length} judged attempts` : 'not scored yet'} />
         <StatTile label="foundation" value={runState?.foundationScore ? runState.foundationScore.toFixed(1) : (meta?.foundationScore || '—')}
           sub={runState?.loreScore ? `lore ${Number(runState.loreScore).toFixed(1)}` : 'world + canon gate'} />
-        <StatTile label="phase" value={runState?.phase ?? meta?.phase ?? '…'}
-          sub={running ? 'run active' : 'idle'} accent={running} />
+        <StatTile label="phase" value={finished ? 'complete' : (runState?.phase ?? meta?.phase ?? '…')}
+          sub={finished ? 'all phases done' : running ? 'run active' : 'not started'} accent={running} />
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1.2fr_1fr]">
@@ -217,7 +227,10 @@ export default function Overview({ project }) {
             {scores.length ? (
               <>
                 <MiniScores scores={scores} />
-                <p className="mt-2 font-mono text-[10px] text-fog-500">last {Math.min(24, scores.length)} attempts · gate at 6.5</p>
+                <p className="mt-2 font-mono text-[10px] text-fog-500">
+                  last {Math.min(24, scores.length)} attempts · gate at 6.5
+                  {lastKept ? ` · latest keep ${lastKept.score.toFixed(2)} (${lastKept.phase})` : ''}
+                </p>
               </>
             ) : (
               <p className="font-prose text-sm text-fog-500">

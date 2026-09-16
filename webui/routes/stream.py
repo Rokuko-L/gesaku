@@ -18,6 +18,7 @@ from deps import (  # noqa: E402
 
 import asyncio
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -59,6 +60,58 @@ def _sse(event: str, data) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
+# The pipeline's own line shapes (core/pipeline `step()` and `banner()`), used
+# to give each log line a real level. The bridge used to tag everything "raw",
+# which the UI rendered as "[llm]" — so run output, banners and tracebacks were
+# all labelled as model calls.
+_SEPARATOR_RE = re.compile(r"^\s*[=\-]{5,}\s*$")
+_STEP_RE = re.compile(r"^\s*\[\d{2}:\d{2}:\d{2}\]")
+
+
+def _line_level(text: str, prev_was_separator: bool = False) -> str:
+    """Classify one pipeline stdout line: banner | step | warn | raw.
+
+    `banner()` prints a separator, the title, then a separator again, so a line
+    that directly follows a separator is a banner title.
+    """
+    stripped = text.strip()
+    if _SEPARATOR_RE.match(stripped):
+        return "banner"
+    lowered = stripped.lower()
+    if any(tok in lowered for tok in
+           ("error", "fatal", "traceback", "warning", "warn:", "failed",
+            "exception")):
+        return "warn"
+    if _STEP_RE.match(stripped):
+        return "step"
+    # banner() prints sep / title / sep, so the line after a separator is a
+    # title — unless it is structured output ("k=v") that merely happens to sit
+    # under a closing rule.
+    if prev_was_separator and stripped and "=" not in stripped:
+        return "banner"
+    return "raw"
+
+
+def _tail_seed(path: Path, max_bytes: int = 65536) -> int:
+    """Byte offset ~max_bytes before EOF, snapped forward to a line boundary.
+
+    Used when a stream opens on an existing log. Starting at EOF leaves the pane
+    empty for a *finished* run — nothing more will ever be written — which is
+    exactly the run an operator wants to read afterwards. Backfill a tail
+    instead; for a live run this also gives immediate context.
+    """
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return 0
+    if size <= max_bytes:
+        return 0
+    with open(path, "rb") as fh:
+        fh.seek(size - max_bytes)
+        fh.readline()  # discard the partial line we landed inside
+        return fh.tell()
+
+
 @router.get("/api/stream")
 async def stream(request: Request, project: str | None = Query(None)):
     """SSE feed for one project: `state` snapshots (~2s), `log` tail lines,
@@ -68,9 +121,11 @@ async def stream(request: Request, project: str | None = Query(None)):
 
     async def event_gen():
         log_path = run_manager.log_path(p)
-        log_offset = log_path.stat().st_size if log_path and log_path.exists() else 0
+        # Backfill the tail rather than starting at EOF — see _tail_seed.
+        log_offset = _tail_seed(log_path) if log_path and log_path.exists() else 0
         llm_path = p / "llm_events.jsonl"
         llm_offset = llm_path.stat().st_size if llm_path.exists() else 0
+        prev_sep = False  # track banner structure across lines
         tick = 0
         while True:
             if await request.is_disconnected():
@@ -89,14 +144,15 @@ async def stream(request: Request, project: str | None = Query(None)):
             current_log = run_manager.log_path(p)
             if current_log != log_path:
                 log_path = current_log
-                log_offset = log_path.stat().st_size if log_path and log_path.exists() else 0
+                log_offset = _tail_seed(log_path) if log_path and log_path.exists() else 0
             if log_path is not None:
                 log_offset, lines = await asyncio.to_thread(_new_lines, log_path, log_offset)
                 for line in lines:
                     frames.append(_sse("log", {
                         "ts": datetime.now(timezone.utc).isoformat(),
-                        "level": "raw", "text": line,
+                        "level": _line_level(line, prev_sep), "text": line,
                     }))
+                    prev_sep = bool(_SEPARATOR_RE.match(line.strip()))
             llm_offset, lines = await asyncio.to_thread(_new_lines, llm_path, llm_offset)
             for line in lines:
                 if line.strip():

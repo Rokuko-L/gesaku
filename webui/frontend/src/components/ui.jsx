@@ -32,14 +32,21 @@ const PHASE_COLOR = {
   drafting: 'text-accent border-accent/40',
   revision: 'text-good border-good/40',
   export: 'text-fog-300 border-ink-600',
+  complete: 'text-good border-good/40',
   idle: 'text-fog-500 border-line',
 }
 
-export function PhaseBadge({ phase, running }) {
+/**
+ * `phase` alone cannot distinguish "finished" from "never started" — both are
+ * "idle" (the stepper depends on that collapse). `finished` overrides the
+ * label so a completed novel never reads as idle.
+ */
+export function PhaseBadge({ phase, running, finished }) {
+  const shown = finished ? 'complete' : phase
   return (
-    <span className={`inline-flex items-center gap-1.5 border px-1.5 py-0.5 font-mono text-[10px] lowercase ${PHASE_COLOR[phase] ?? PHASE_COLOR.idle}`}>
+    <span className={`inline-flex items-center gap-1.5 border px-1.5 py-0.5 font-mono text-[10px] lowercase ${PHASE_COLOR[shown] ?? PHASE_COLOR.idle}`}>
       {running && <span className="h-1.5 w-1.5 animate-pulse bg-accent" />}
-      {phase}
+      {shown}
     </span>
   )
 }
