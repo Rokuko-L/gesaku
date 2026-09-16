@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../../api/client.js'
 import { useApi } from '../../api/useApi.js'
+import { fmtStamp } from '../../format.js'
 import { EmptyState, Md, Skel, Unavailable } from '../../components/ui.jsx'
 
 function Stars({ n }) {
@@ -120,7 +121,7 @@ export default function RevisionView({ project }) {
             {rev.reviews.map((r, i) => (
               <li key={i} className="border border-line bg-ink-850 p-2.5">
                 <div className="flex items-center justify-between font-mono text-[10px] text-fog-500">
-                  <span>{r.ts.slice(0, 8)}</span>
+                  <span>{fmtStamp(r.ts)}</span>
                   <Stars n={r.stars} />
                 </div>
                 <p className="mt-1 line-clamp-3 font-prose text-xs italic leading-relaxed text-fog-300">

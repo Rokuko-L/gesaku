@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useApp } from '../../state.jsx'
 import { api } from '../../api/client.js'
 import { useApi } from '../../api/useApi.js'
+import { fmtChapter } from '../../format.js'
 import { navigate, projectRoute } from '../../router.js'
 import { Button, Card, EmptyState, Hint, SectionHead, StatTile, TabBar, Unavailable } from '../../components/ui.jsx'
 import { EvalPane, LlmFeed } from './panels.jsx'
@@ -284,7 +285,7 @@ function ScoresTab({ project }) {
             {[...scores].reverse().map((s) => (
               <tr key={s.iteration} className="border-b border-ink-800 last:border-b-0">
                 <td className="px-4 py-2 text-fog-500">{String(s.iteration).padStart(3, '0')}</td>
-                <td className="px-4 py-2 text-fog-300">{s.phase}</td>
+                <td className="px-4 py-2 text-fog-300">{fmtChapter(s.phase)}</td>
                 <td className={`px-4 py-2 text-right ${s.score >= 6.5 ? 'text-fog-200' : 'text-fog-400'}`}>{s.score.toFixed(2)}</td>
                 <td className="px-4 py-2 text-right">
                   <span className={`border px-1 text-[10px] ${s.kept ? 'border-good/40 text-good' : 'border-bad/40 text-bad'}`}>

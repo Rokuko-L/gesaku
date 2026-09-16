@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../../api/client.js'
 import { useApi } from '../../api/useApi.js'
+import { fmtChapter, fmtStamp } from '../../format.js'
 import { Unavailable } from '../../components/ui.jsx'
 import { useApp } from '../../state.jsx'
 
@@ -208,7 +209,7 @@ export function EvalPane({ project }) {
             <li key={ch} className="border-t border-line first:border-t-0">
               <div className="flex w-full items-center justify-between px-3 py-2">
                 <span className={`font-mono text-xs ${openCh === ch ? 'text-accent' : 'text-fog-300'}`}>
-                  [{ch}]
+                  [{fmtChapter(ch)}]
                 </span>
                 <span className="text-[10px] text-fog-500">{atts.length} tries</span>
               </div>
@@ -223,7 +224,7 @@ export function EvalPane({ project }) {
                           active ? 'bg-ink-800 text-paper' : 'text-fog-400 hover:text-fog-200'
                         }`}
                       >
-                        <span>{active ? '> ' : '  '}{a.ts}</span>
+                        <span>{active ? '> ' : '  '}{fmtStamp(a.ts)}</span>
                         <span className="flex items-center gap-2">
                           <span>{a.overall?.toFixed(2)}</span>
                           <span className={`border px-1 text-[10px] ${

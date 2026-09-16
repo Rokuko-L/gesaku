@@ -51,20 +51,22 @@ export function PhaseBadge({ phase, running, finished }) {
   )
 }
 
-/** Compact score readout: number + 5-segment quality meter. */
+/** Compact score readout: number + a 10-segment quality meter (0-10 scale). */
 export function ScoreSig({ score, label }) {
   if (score == null) {
     return <span className="font-mono text-xs text-fog-500">{label ?? '—'}</span>
   }
-  const filled = Math.round((score / 10) * 5)
+  // One segment per point: a 5-segment meter over a 0-10 score hides the
+  // difference between, say, 6.4 and 7.4.
+  const filled = Math.round(score)
   return (
     <span className="inline-flex items-center gap-2">
       <span className={`font-mono text-xs ${score >= 6.5 ? 'text-good' : 'text-fog-200'}`}>
         {score.toFixed(1)}
       </span>
-      <span className="flex gap-0.5">
-        {[0, 1, 2, 3, 4].map((i) => (
-          <span key={i} className={`h-3 w-1.5 ${i < filled ? 'bg-accent' : 'bg-ink-600'}`} />
+      <span className="flex gap-px">
+        {Array.from({ length: 10 }, (_, i) => (
+          <span key={i} className={`h-3 w-1 ${i < filled ? 'bg-accent' : 'bg-ink-600'}`} />
         ))}
       </span>
     </span>
