@@ -7,6 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core import paths
+from core import prose
 
 from core import _utf8
 import re
@@ -154,6 +155,13 @@ for path in chapter_files:
     
     with open(path, encoding="utf-8") as f:
         text = f.read()
+    # The PDF is a deliverable too: strip non-prose here as well, or a chapter
+    # like v4's ch_20 ships its reasoning dump into the typeset book even
+    # though manuscript.md was cleaned.
+    text = prose.strip_non_prose(text)
+    if prose.looks_like_non_prose(text):
+        print(f"WARNING: {path.name} has only {prose.prose_words(text)} words of "
+              f"prose — it needs a redraft, not a typeset")
     if not text.strip():
         print(f"WARNING: {path.name} is empty — skipped")
         continue

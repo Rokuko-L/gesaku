@@ -231,7 +231,7 @@ export default function LedgerView({ project }) {
           <div className="mt-3 flex flex-wrap items-center gap-4 font-mono text-[10px] text-fog-500">
             <span>● plant</span>
             <span><span className="mr-1 inline-block h-2 w-2 rotate-45 border border-good bg-good align-middle" />harvested</span>
-            <span><span className="mr-1 inline-block h-2 w-2 rotate-45 border border-warn align-middle" />orphan — payoff, no setup</span>
+            <span><span className="mr-1 inline-block h-2 w-2 rotate-45 border border-bad align-middle" />orphan — payoff, no setup</span>
             <span><span className="mr-1 inline-block h-1 w-4 bg-accent-dim/70 align-middle" />open — payoff pending</span>
             <span className="ml-auto">{TOTAL} chapters</span>
           </div>

@@ -6,6 +6,7 @@ and forbade hyphens in slugs. A tag one caller accepted could be invisible to
 another.
 """
 
+import re
 import unittest
 from pathlib import Path
 
@@ -50,17 +51,17 @@ class TagParsingTest(unittest.TestCase):
 
     def test_sections_split_on_every_heading_dress(self):
         text = "### Chapter 1: A\nx\n### Ch 2: B\ny\n### CHAPTER 3: C\nz\n"
-        self.assertEqual([0, 1, 2, 3], sorted(outline_mod.chapter_sections(text)))
+        self.assertEqual([1, 2, 3], sorted(outline_mod.chapter_sections(text)))
 
-    def test_preamble_tags_are_not_dropped(self):
-        """The global thread ledger sits before Chapter 1 and used to vanish."""
-        text = ('# Outline\n\n- [Plant: global_thread - "declared up front"]\n\n'
-                "### Chapter 1: A\n- [Harvest: global_thread - \"paid off\"]\n")
-        plants, harvests = outline_mod.parse_plant_tags(text)
-        self.assertEqual(["global_thread"], [p["slug"] for p in plants])
-        self.assertEqual(0, plants[0]["chapter"])
-        ok, err = outline_mod.validate_plants_harvests(text)
-        self.assertTrue(ok, err)
+    def test_a_wrapping_quote_pair_is_removed_but_apostrophes_survive(self):
+        text = ("### Chapter 1: A\n"
+                "- [Plant: poss - \"the generals' plan\"]\n"
+                "- [Plant: own - \"'Tis the season\"]\n"
+                "- [Plant: bare - the plain form]\n")
+        descs = {p["slug"]: p["desc"] for p in outline_mod.parse_plant_tags(text)[0]}
+        self.assertEqual("the generals' plan", descs["poss"])
+        self.assertEqual("'tis the season", descs["own"])
+        self.assertEqual("the plain form", descs["bare"])
 
     def test_no_tags_is_not_an_error(self):
         self.assertEqual(([], []), outline_mod.parse_plant_tags("### Chapter 1: A\nprose\n"))
@@ -92,6 +93,50 @@ class CallersAgreeTest(unittest.TestCase):
         self.assertIn("Order error", err)
 
 
+class DebtDeliveryTest(unittest.TestCase):
+    """A debt must be able to reach the drafter.
+
+    The old consumer matched a chapter's *harvest* slugs against the debt
+    strings. A debt is by construction a plant with no harvest anywhere, so the
+    two can never be equal — the guardrail had never fired.
+    """
+
+    DEBTS = ['Ch 1 Setup: fear_legitimacy - "Baal II loses long-term trust"',
+             'Ch 7 Setup: morra_infiltration - "Morra gets inside the keep"',
+             'Ch 20 Setup: late_plant - "declared after where we are"',
+             "not a debt at all"]
+
+    def test_only_setups_from_earlier_chapters_are_offered(self):
+        got = outline_mod.open_debts_for_chapter(self.DEBTS, 12)
+        self.assertEqual(["fear_legitimacy", "morra_infiltration"],
+                         [d["slug"] for d in got])
+
+    def test_a_debt_can_reach_a_chapter_that_has_no_harvest_of_it(self):
+        """The whole point: an unscheduled setup is still visible."""
+        got = outline_mod.open_debts_for_chapter(self.DEBTS, 12)
+        self.assertTrue(got)
+        self.assertNotIn("late_plant", [d["slug"] for d in got])
+
+    def test_unparseable_entries_are_skipped(self):
+        got = outline_mod.open_debts_for_chapter(self.DEBTS + ["", "garbage"], 12)
+        self.assertTrue(all(d["slug"] for d in got))
+
+    def test_oldest_first_and_capped(self):
+        debts = [f'Ch {n} Setup: s{n} - "d{n}"' for n in (9, 3, 6, 1, 8)]
+        got = outline_mod.open_debts_for_chapter(debts, 12, limit=3)
+        self.assertEqual([1, 3, 6], [d["chapter"] for d in got])
+
+    def test_no_debts_is_empty_not_an_error(self):
+        self.assertEqual([], outline_mod.open_debts_for_chapter([], 5))
+        self.assertEqual([], outline_mod.open_debts_for_chapter(None, 5))
+
+    def test_parse_debt_round_trips(self):
+        d = outline_mod.parse_debt('Ch 3 Setup: a_slug - "some description"')
+        self.assertEqual({"chapter": 3, "slug": "a_slug",
+                          "desc": "some description"}, d)
+        self.assertIsNone(outline_mod.parse_debt("Ch 3 Setup: nope"))
+
+
 @unittest.skipUnless(V4_PART1.is_file(), "v4 outline not present")
 class RealOutlineTest(unittest.TestCase):
     def test_the_real_outline_parses_both_sides(self):
@@ -101,6 +146,16 @@ class RealOutlineTest(unittest.TestCase):
         self.assertGreater(len(harvests), 20)
         # Every plant is attributed to a real chapter.
         self.assertTrue(all(p["chapter"] >= 1 for p in plants))
+
+    def test_tags_with_apostrophes_are_the_majority_of_what_was_lost(self):
+        """The old `[^'\\"\\]]+` class dropped any description with a possessive."""
+        text = V4_PART1.read_text(encoding="utf-8")
+        plants, harvests = outline_mod.parse_plant_tags(text)
+        raw_plants = len(re.findall(r"\[Plant:", text))
+        raw_harvests = len(re.findall(r"\[Harvest:", text))
+        self.assertEqual(raw_plants, len(plants))
+        self.assertEqual(raw_harvests, len(harvests))
+        self.assertGreater(len(plants), 30)
 
     def test_the_validator_fires_on_the_real_outline(self):
         """It reports real problems that are currently only warned about."""

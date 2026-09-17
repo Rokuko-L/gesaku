@@ -213,7 +213,10 @@ def mark_harvested(data: dict, chapter: int, harvested_ids: Iterable[str]) -> di
         if c.get("status") not in ("open", "expired"):
             continue
         planted = c.get("source_chapter") or 0
-        if chapter <= planted:
+        # Strictly *before*: a setup and its payoff inside one chapter is
+        # legitimate (the ledger allows it too), but a payoff dated earlier than
+        # its own setup is the error v4's store contains (a0e954db23).
+        if chapter < planted:
             continue
         c["status"] = "harvested"
         c["harvested_chapter"] = chapter
@@ -255,7 +258,9 @@ def match_plant_harvest_threads(
         return []
 
     parent = list(range(len(nodes)))
-    declared_roots: set[int] = set()
+    # (plant node, harvest node, plant chapter, harvest chapter) for links that
+    # were *declared* rather than inferred.
+    declared_pairs: set[tuple[int, int, int, int]] = set()
 
     def find(i: int) -> int:
         while parent[i] != i:
@@ -282,8 +287,10 @@ def match_plant_harvest_threads(
                     # The payoff named this chapter. No token test needed — but
                     # ordering still holds: a payoff cannot resolve a plant that
                     # has not happened yet.
+                    plant_idx, harvest_idx = (i, j) if a["kind"] == "plant" else (j, i)
                     union(i, j)
-                    declared_roots.add(find(i))
+                    declared_pairs.add((plant_idx, harvest_idx,
+                                        plant["chapter"], harvest["chapter"]))
                 elif (plant["chapter"] <= harvest["chapter"]
                         and _should_link_plant_harvest(plant["tokens"], harvest["tokens"])):
                     union(i, j)
@@ -308,6 +315,18 @@ def match_plant_harvest_threads(
         )
         if len(label) > 120:
             label = label[:117].rsplit(" ", 1)[0] + "…"
+
+        # Identity wins for display: when a payoff in this cluster *named* its
+        # plant, report that pair rather than the min/min of everything the
+        # cluster absorbed. Otherwise a near-duplicate plant from an earlier
+        # chapter would make a known ch19->ch22 link read as a ch2->ch22 arc
+        # while still being labelled "declared".
+        known = sorted((pc, hc) for (pi, _hi, pc, hc) in declared_pairs
+                       if find(pi) == root)
+        if known:
+            planted = [min(pc for pc, _ in known)]
+            harvested = [max(hc for _, hc in known)]
+
         threads.append({
             "thread": label,
             "planted": planted[0] if planted else None,
@@ -316,8 +335,7 @@ def match_plant_harvest_threads(
             "harvested_all": harvested,
             # "declared" means a payoff named its plant; "inferred" means we
             # guessed from wording. The ledger must not confuse the two.
-            "match": ("declared" if any(find(r) == root for r in declared_roots)
-                      else "inferred"),
+            "match": ("declared" if known else "inferred"),
             "status": (
                 "paid off" if planted and harvested
                 else "recalled" if harvested

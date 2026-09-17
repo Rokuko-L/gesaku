@@ -54,6 +54,7 @@ class DerailDetectionTest(unittest.TestCase):
 
     def test_derail_leaves_a_fragment_and_must_be_redrafted(self):
         self.assertTrue(prose.looks_like_non_prose(CH20_DERAIL))
+        self.assertTrue(prose.needs_redraft(CH20_DERAIL))
         self.assertLess(prose.prose_words(CH20_DERAIL), prose.MIN_CHAPTER_WORDS)
 
     def test_first_person_interiority_is_not_flagged(self):
@@ -94,17 +95,30 @@ class NotesTrailerTest(unittest.TestCase):
 
 
 class CleanTextTest(unittest.TestCase):
-    def test_clean_chapter_is_untouched(self):
+    def test_a_bare_notes_line_is_not_a_trailer(self):
+        """A chapter may legitimately contain '## Notes' — only a *revision*
+        label means the model started explaining itself."""
+        body = ("# Chapter 9: A\n\n" + "Real prose sentence here. " * 60
+                + "\n\n## Notes\n\nShe kept her own notes in the margins.\n"
+                + "More prose after the heading. " * 20)
+        self.assertIsNone(prose.cut_reason(body))
+        self.assertEqual(body.strip(), prose.strip_non_prose(body))
+
+    def test_a_short_clean_chapter_is_not_sent_to_redraft(self):
+        """Length alone is the drafting loop's business, not the guard's."""
+        interlude = "# Chapter 9: Interlude\n\nHe walked. She followed. They argued.\n"
+        self.assertIsNone(prose.cut_reason(interlude))
+        self.assertTrue(prose.looks_like_non_prose(interlude))   # short, so worth flagging
+        self.assertFalse(prose.needs_redraft(interlude))          # but not a derail
+
+    def test_a_derailed_fragment_does_need_a_redraft(self):
+        self.assertTrue(prose.needs_redraft(CH20_DERAIL))
+
+    def test_a_clean_chapter_is_untouched(self):
         body = "# Chapter 7: Names\n\n" + "A perfectly ordinary paragraph of prose. " * 30
         self.assertIsNone(prose.find_non_prose_start(body))
         self.assertIsNone(prose.cut_reason(body))
         self.assertEqual(body.strip(), prose.strip_non_prose(body))
-
-    def test_short_but_clean_text_is_not_flagged_as_non_prose(self):
-        """Length alone is not a non-prose signal; the flag is about surviving prose."""
-        body = "# Chapter 1: A\n\nHe walked. She followed. They argued.\n"
-        self.assertIsNone(prose.cut_reason(body))
-        self.assertTrue(prose.looks_like_non_prose(body))  # too short to be a chapter
 
     def test_empty_text_is_clean_and_empty(self):
         self.assertEqual("", prose.strip_non_prose(""))

@@ -130,6 +130,7 @@ Rules:
 JSON only, no other text."""
 
     out = [None] * len(harvests)
+    valid_chapters = {p["chapter"] for p in prior_plants}
     for attempt in range(1, attempts + 1):
         try:
             parsed = parse_validated(
@@ -143,8 +144,11 @@ JSON only, no other text."""
         for a in parsed.attributions:
             i = a.index - 1
             pc = a.planted_chapter
-            # A payoff cannot resolve its own or a later chapter's plant.
-            if 0 <= i < len(harvests) and pc is not None and 1 <= int(pc) < ch:
+            # Only a chapter we actually showed the model. A payoff cannot
+            # resolve its own or a later chapter, and a hallucinated number must
+            # not be written into the outline as a declared source.
+            if (0 <= i < len(harvests) and pc is not None
+                    and int(pc) in valid_chapters and int(pc) < ch):
                 out[i] = int(pc)
         return out
     return out

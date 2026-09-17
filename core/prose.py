@@ -32,9 +32,15 @@ MIN_CHAPTER_WORDS = 300
 # The heading turns up in every markdown dress the model fancies:
 # "**Revision Notes**", "**REVISION NOTES:**", "### Revision Notes",
 # "## Revision Notes", usually preceded by a "---" rule.
+#
+# The qualifier is REQUIRED. Making it optional also matched a bare "Notes"
+# line — and a chapter may legitimately contain one (`## Notes` as an in-world
+# heading, a scene-break rule followed by "Notes"), which silently truncated
+# everything after it. Only a *revision*/*editorial*/*change*/*edit* label
+# means "the model started explaining itself".
 _NOTES_HEADING = re.compile(
     r"^[ \t]*(?:[-*_]{3,}[ \t]*\n+[ \t]*)?(?:#{1,6}[ \t]*)?\**[ \t]*"
-    r"(?:revision|editor(?:ial)?|change|edit)?[ \t]*notes\b"
+    r"(?:revision|editor(?:ial)?|change|edit)[ \t]*notes\b"
     r"[ \t]*:?[ \t]*\**[ \t]*$",
     re.IGNORECASE | re.MULTILINE,
 )
@@ -158,6 +164,21 @@ def looks_like_non_prose(text: str, min_words: int = MIN_CHAPTER_WORDS) -> bool:
     """True when too little prose survives to be a chapter.
 
     Signals either a wholly non-prose body or a derail so early that the
-    remainder is a fragment. Callers should redraft rather than keep it.
+    remainder is a fragment. Suitable for *reporting* (export warns with it).
+
+    Not suitable as a hard gate on a fresh draft: a deliberate interlude is
+    legitimately short, and `pipeline/phases/drafting.py` already has an
+    undershoot path that retries with concrete expansion numbers. Use
+    `needs_redraft` for the reject decision.
     """
     return prose_words(text) < min_words
+
+
+def needs_redraft(text: str, min_words: int = MIN_CHAPTER_WORDS) -> bool:
+    """True when a chapter was *interrupted*, not merely written short.
+
+    A derail means the model stopped writing the story and started talking
+    about the task; if almost nothing survives the cut, there is no chapter to
+    keep. Nothing else is rejected on length.
+    """
+    return cut_reason(text) == "derail" and prose_words(text) < min_words

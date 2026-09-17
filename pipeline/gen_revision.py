@@ -132,9 +132,15 @@ Write the FULL revised chapter now."""
     
     out_path = chapters_dir / f"ch_{ch_num:02d}.md"
     body = outline.normalize_chapter_heading(result, ch_num)
+    if prose.needs_redraft(body):
+        # Never replace a good chapter on disk with a derailed fragment.
+        print(f"NON_PROSE_FRAGMENT: revision of ch{ch_num} derailed after "
+              f"{prose.prose_words(body)} words; keeping the chapter on disk",
+              file=sys.stderr)
+        sys.exit(3)
     if prose.cut_reason(body) == "derail":
         print("NON_PROSE_DERAIL: revision interrupted by model output", file=sys.stderr)
-    body = prose.strip_non_prose(body)
+    body = prose.strip_non_prose(body).rstrip() + "\n"
     out_path.write_text(body, encoding="utf-8")
     print(f"Saved to {out_path}", file=sys.stderr)
     print(f"Word count: {len(body.split())}", file=sys.stderr)

@@ -8,7 +8,8 @@ from pathlib import Path as _Path
 sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
 
 from core.llm import TruncationError, call_llm
-from core.outline import parse_premise_beats, normalize_chapter_heading
+from core.outline import (normalize_chapter_heading, open_debts_for_chapter,
+                          parse_premise_beats)
 from core.paths import get_novel_title
 from core.textstats import check_structural_repetition
 from core import canon as canon_mod
@@ -176,30 +177,30 @@ def main():
     chapter_outline = extract_chapter_outline(outline, chapter_num)
     next_chapter = extract_next_chapter_outline(outline, chapter_num)
     
-    # Check for active narrative debts to resolve in this chapter
-    chapter_harvests = re.findall(r'\[Harvest:\s*([a-zA-Z0-9_-]+)', chapter_outline, re.IGNORECASE)
-    active_debts_to_resolve = []
-    if chapter_harvests:
-        try:
-            state_path = paths.get_project_dir() / "state.json"
-            state = json.loads(state_path.read_text(encoding="utf-8"))
-            debts = state.get("debts", [])
-            for h_slug in chapter_harvests:
-                h_slug_clean = h_slug.strip().lower()
-                for d in debts:
-                    if h_slug_clean in d.lower():
-                        active_debts_to_resolve.append(d)
-        except Exception:
-            pass
+    # Setups the outline opened and never scheduled a payoff for. These are
+    # offered to the chapter as material — an invitation, not a demand, in
+    # keeping with the "prefer nothing over a forced reference" rule the
+    # callback injection uses. (The old code matched this chapter's *harvest*
+    # slugs against the debt strings, which can never match: a debt is by
+    # construction a plant with no harvest anywhere.)
+    open_debts = []
+    try:
+        state_path = paths.get_project_dir() / "state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        open_debts = open_debts_for_chapter(state.get("debts", []), chapter_num)
+    except Exception:
+        pass
 
     debt_guardrail = ""
-    if active_debts_to_resolve:
-        debt_lines = "\n".join(f"- {d}" for d in active_debts_to_resolve)
+    if open_debts:
+        debt_lines = "\n".join(
+            f"- (set up in ch{d['chapter']}) {d['desc']}" for d in open_debts
+        )
         debt_guardrail = f"""
-NARRATIVE DEBTS RESOLUTION WARNING:
-This chapter is scheduled to pay off the following narrative setup(s):
+UNPAID SETUPS (opened earlier, never paid off):
 {debt_lines}
-You MUST write prose in this chapter that resolves these setups naturally.
+If one of these can be paid off naturally in this chapter, pay it off —
+changed meaning, not a name-drop. Leave it alone if it would be forced.
 """
     
     # Previous chapter (if exists) — full ~600-word tail starting at a sentence boundary
@@ -427,15 +428,17 @@ Write the chapter now. Full text, beginning to end.
     # derail into prompt echo/reasoning) before it can enter the project.
     out_path = chapters_dir / f"ch_{chapter_num:02d}.md"
     body = normalize_chapter_heading(result, chapter_num)
+    if prose.needs_redraft(body):
+        # The model stopped writing the story and started talking about the
+        # task, and almost nothing survives. Fail the attempt so the drafting
+        # loop retries instead of keeping a fragment. A merely *short* chapter
+        # is not rejected here — drafting.py has its own expansion path for it.
+        print(f"NON_PROSE_FRAGMENT: derailed after only {prose.prose_words(body)} "
+              f"words of prose; refusing to save", file=sys.stderr)
+        sys.exit(3)
     if prose.cut_reason(body) == "derail":
         print("NON_PROSE_DERAIL: draft interrupted by model output", file=sys.stderr)
-    if prose.looks_like_non_prose(body):
-        # Too little prose survives to be a chapter — fail the attempt so the
-        # drafting loop retries instead of keeping a fragment.
-        print(f"NON_PROSE_FRAGMENT: only {prose.prose_words(body)} words of prose "
-              f"survive; refusing to save", file=sys.stderr)
-        sys.exit(3)
-    body = prose.strip_non_prose(body)
+    body = prose.strip_non_prose(body).rstrip() + "\n"
     out_path.write_text(body, encoding="utf-8")
     print(f"Saved to {out_path}", file=sys.stderr)
     print(f"Word count: {len(body.split())}", file=sys.stderr)

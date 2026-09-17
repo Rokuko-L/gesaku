@@ -177,5 +177,62 @@ class ExtractSoftFailTest(unittest.TestCase):
         self.assertTrue(hasattr(mod, "main"))
 
 
+class StoreLifecycleTest(unittest.TestCase):
+    """The store's transitions. These had no coverage before."""
+
+    def _store(self, **kw):
+        item = {"id": "a1", "text": "a brass key", "kind": "object",
+                "source_chapter": 5, "status": "open", "window": 12}
+        item.update(kw)
+        return {"callbacks": [item], "updated_chapter": 5}
+
+    def test_a_payoff_before_its_own_plant_is_refused(self):
+        """v4's store contains exactly this error (planted ch23, harvested ch19)."""
+        data = mark_harvested(self._store(source_chapter=23), 19, ["a1"])
+        self.assertEqual("open", data["callbacks"][0]["status"])
+        self.assertNotIn("harvested_chapter", data["callbacks"][0])
+
+    def test_a_same_chapter_payoff_is_allowed(self):
+        """A setup and its payoff can live in one chapter."""
+        data = mark_harvested(self._store(source_chapter=5), 5, ["a1"])
+        self.assertEqual("harvested", data["callbacks"][0]["status"])
+        self.assertEqual(5, data["callbacks"][0]["harvested_chapter"])
+
+    def test_an_expired_plant_can_still_be_paid_off(self):
+        """Expiry stops the revision nudge, not the record."""
+        data = mark_harvested(
+            self._store(status="expired", expired_chapter=19), 20, ["a1"])
+        self.assertEqual("harvested", data["callbacks"][0]["status"])
+        self.assertEqual(20, data["callbacks"][0]["harvested_chapter"])
+
+    def test_marking_twice_is_idempotent(self):
+        data = self._store()
+        mark_harvested(data, 9, ["a1"])
+        mark_harvested(data, 14, ["a1"])
+        self.assertEqual(9, data["callbacks"][0]["harvested_chapter"])
+
+    def test_an_unknown_id_changes_nothing(self):
+        data = self._store()
+        mark_harvested(data, 9, ["nope"])
+        self.assertEqual("open", data["callbacks"][0]["status"])
+
+    def test_expire_stale_honours_the_stored_window(self):
+        """The per-item window used to be written and never read."""
+        data = {"callbacks": [{"id": "a1", "status": "open", "source_chapter": 5,
+                               "window": 3}], "updated_chapter": 5}
+        expire_stale(data, 10)          # 10 - 5 = 5 > 3
+        self.assertEqual("expired", data["callbacks"][0]["status"])
+
+        data2 = {"callbacks": [{"id": "b1", "status": "open", "source_chapter": 5,
+                                "window": 30}], "updated_chapter": 5}
+        expire_stale(data2, 10)         # 5 > 30 is false
+        self.assertEqual("open", data2["callbacks"][0]["status"])
+
+    def test_expired_plants_stay_out_of_the_revision_nudge(self):
+        data = self._store(status="expired", expired_chapter=19)
+        self.assertEqual([], open_items(data))
+        self.assertEqual("", soft_inject_block(data, 20))
+
+
 if __name__ == "__main__":
     unittest.main()

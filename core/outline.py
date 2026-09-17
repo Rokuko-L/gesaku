@@ -341,26 +341,47 @@ _PLANT_TAG_RE = re.compile(
 )
 
 
+_QUOTE_PAIRS = {'"': '"', "'": "'", "\u201c": "\u201d", "\u2018": "\u2019"}
+
+
+def _unquote(text: str) -> str:
+    """Remove one matched wrapping quote pair, if present.
+
+    Only a *pair* is removed. Stripping a quote character set would eat a
+    legitimate trailing apostrophe ("the generals'" -> "the generals").
+    """
+    d = text.strip()
+    for opener, closer in _QUOTE_PAIRS.items():
+        if len(d) >= 2 and d.startswith(opener) and d.endswith(closer):
+            return d[1:-1].strip()
+    return d
+
+
 def chapter_sections(outline_text: str) -> dict:
     """Split an outline into {chapter number: section text}.
 
-    Text before the first chapter heading is kept under key 0. The foundation
-    outline declares its global threads up there, so dropping it — as this used
-    to — hid 23 of v4's 42 plant tags from the validator and the debt extractor,
-    and made harvests of preamble plants look dangling.
+    Only text after the first chapter heading is returned. (Keeping the preamble
+    under a chapter 0 was tried and reverted: it recovered nothing for the real
+    project, and the HIGH-LEVEL ROADMAP reuses the same `### Chapter N` headings,
+    so a roadmap entry would be overwritten by its DETAILED namesake. The tags
+    that were invisible were lost to the quote-hostile description regex, not to
+    this split — see `_PLANT_TAG_RE`.)
     """
     sections = {}
-    current_ch = 0
+    current_ch = None
     current_lines = []
     for line in outline_text.splitlines():
         cleaned = line.strip().replace('*', '').replace('_', '')
         m = re.match(r'^###\s*(?:Chapter|Ch\.?)\s*(\d+)\b', cleaned, re.IGNORECASE)
         if m:
-            sections[current_ch] = "\n".join(current_lines)
+            if current_ch is not None:
+                sections[current_ch] = "\n".join(current_lines)
             current_ch = int(m.group(1))
             current_lines = []
-        current_lines.append(line)
-    sections[current_ch] = "\n".join(current_lines)
+        if current_ch is not None:
+            current_lines.append(line)
+    if current_ch is not None:
+        sections[current_ch] = "\n".join(current_lines)
     return sections
 
 
@@ -380,8 +401,8 @@ def parse_plant_tags(outline_text: str) -> tuple[list[dict], list[dict]]:
             entry = {
                 "chapter": chapter,
                 "slug": slug.strip().lower(),
-                # Descriptions are usually quoted; the quotes are not content.
-                "desc": desc.strip().strip("\"'\u201c\u201d").strip().lower(),
+                # Descriptions are usually quoted; only a matched pair is removed.
+                "desc": _unquote(desc).lower(),
             }
             (plants if kind.lower() == "plant" else harvests).append(entry)
     return plants, harvests
@@ -432,6 +453,36 @@ def validate_plants_harvests(outline_text: str) -> tuple[bool, str]:
     if errors:
         return False, "\n".join(errors)
     return True, ""
+
+_DEBT_RE = re.compile(r'^Ch\s*(\d+)\s*Setup:\s*([A-Za-z0-9_\-]+)\s*-\s*"(.*)"\s*$')
+
+
+def parse_debt(entry: str) -> dict | None:
+    """Debts are stored as `Ch 3 Setup: slug - "desc"` strings."""
+    m = _DEBT_RE.match((entry or "").strip())
+    if not m:
+        return None
+    return {"chapter": int(m.group(1)), "slug": m.group(2).lower(),
+            "desc": m.group(3).strip()}
+
+
+def open_debts_for_chapter(debts, chapter: int, limit: int = 3) -> list:
+    """Unpaid setups declared before `chapter`, oldest first.
+
+    A debt is by construction a plant that appears in no harvest. The consumer
+    used to match a chapter's *harvest* slugs against these debt strings, which
+    can never be equal — so the "narrative debts" guardrail had never once
+    fired, and nothing in the pipeline could cause an unpaid plant to be paid
+    off. Surfacing them here is what makes that possible.
+    """
+    out = []
+    for entry in debts or []:
+        parsed = parse_debt(entry)
+        if parsed and parsed["chapter"] < chapter:
+            out.append(parsed)
+    out.sort(key=lambda d: (d["chapter"], d["slug"]))
+    return out[:limit]
+
 
 def extract_outline_debts(outline_text: str) -> list[str]:
     """Plant slugs that have no harvest anywhere in the outline."""

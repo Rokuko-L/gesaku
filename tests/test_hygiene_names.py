@@ -86,6 +86,17 @@ class NameDerivationTest(unittest.TestCase):
             "- visible_from=8: Baal inherits the title from his father Baal I.\n")
         self.assertIn("Baal", canon_mod.action_plant_characters(parsed, REGISTRY))
 
+    def test_a_word_merely_ending_in_the_does_not_make_a_term(self):
+        """`endswith("the")` also matched scythe / breathe / lithe."""
+        parsed = _canon_with(
+            "- visible_from=6: She hefts the scythe Mira forged.\n")
+        self.assertIn("Mira", canon_mod.action_plant_characters(parsed, REGISTRY))
+
+    def test_a_real_article_still_marks_a_term(self):
+        parsed = _canon_with(
+            "- visible_from=6: The Veil Protocol blocks every attempt.\n")
+        self.assertNotIn("Veil", canon_mod.action_plant_characters(parsed, REGISTRY))
+
 
 @unittest.skipUnless((V4 / "canon.md").is_file(), "v4 not present")
 class RealProjectTest(unittest.TestCase):

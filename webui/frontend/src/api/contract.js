@@ -195,7 +195,7 @@
  * @property {number|null} planted
  * @property {number|null} harvest
  * @property {"matched"|"plant-only"|"harvest-only"} status
- * @property {"declared"|"slug"|"inferred"} matchMethod
+ * @property {"declared"|"slug"|"inferred"|null} matchMethod  // null when nothing is paired
  * @property {number|null} span
  *
  * @typedef {Object} Ledger

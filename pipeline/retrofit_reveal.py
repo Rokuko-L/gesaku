@@ -185,10 +185,12 @@ def retrofit_chapter(
             file=sys.stderr,
         )
         return False
-    ch_path.write_text(
-        prose.strip_non_prose(outline_mod.normalize_chapter_heading(result, chapter_num)),
-        encoding="utf-8",
-    )
+    body = outline_mod.normalize_chapter_heading(result, chapter_num)
+    if prose.needs_redraft(body):
+        print(f"  WARN: ch{chapter_num} retrofit derailed into non-prose; keeping original",
+              file=sys.stderr)
+        return False
+    ch_path.write_text(prose.strip_non_prose(body).rstrip() + "\n", encoding="utf-8")
     print(f"  Saved ch{chapter_num} ({wc}w -> {new_wc}w)", file=sys.stderr)
     return True
 

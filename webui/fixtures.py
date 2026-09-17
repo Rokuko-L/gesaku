@@ -302,7 +302,10 @@ def _thread_row(thread: str, planted, harvest, planted_all=None, harvested_all=N
         span = max(h_all) - min(p_all)
 
     if match_method is None:
-        match_method = "slug" if _SLUGLIKE.match(thread.strip()) else "inferred"
+        # Only a matched row has a pairing to characterise. Calling an orphan
+        # "inferred" would inflate the count of pairings inferred from wording.
+        match_method = ("slug" if _SLUGLIKE.match(thread.strip()) else "inferred"
+                        if status == "matched" else None)
 
     return {
         "thread": thread,

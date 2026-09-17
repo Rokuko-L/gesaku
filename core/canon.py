@@ -291,7 +291,9 @@ def _used_as_term(facts: list[str], name: str) -> bool:
             mentions += 1
             before = fact[:m.start()].rstrip()
             after = fact[m.end():].lstrip()
-            article_led = before.lower().endswith("the")
+            # A real word boundary, not endswith("the"): "hefts the scythe"
+            # ends with those three letters without being an article.
+            article_led = bool(re.search(r"(?:^|[^A-Za-z])the$", before.lower()))
             enumerated = bool(re.match(r"^(?:[IVXL]+|\d+)\b", after))
             if not (article_led or enumerated):
                 return False
