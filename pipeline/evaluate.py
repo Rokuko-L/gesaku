@@ -20,6 +20,7 @@ sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
 from core.llm import TruncationError, call_llm, extract_text_from_response, get_max_tokens_with_thinking, parse_json_response
 from core import paths
 from core import textstats
+from core.outline import open_debts_for_chapter
 from core import canon as canon_mod
 import argparse
 import json
@@ -206,21 +207,20 @@ def evaluate_chapter(chapter_num):
     # Reader-knowledge view: public foundation + core + prior As-of. Sealed facts withheld.
     canon_view = canon_mod.judge_view_md(canon_mod.parse_canon(layers["canon"]), chapter_num)
 
-    # Check for active narrative debts to resolve in this chapter
-    chapter_harvests = re.findall(r'\[Harvest:\s*([a-zA-Z0-9_-]+)', chapter_outline, re.IGNORECASE)
+    # Setups the outline opened and never scheduled a payoff for. Same source as
+    # the drafter's, so the judge is told what the drafter was asked to do. The
+    # old code matched this chapter's *harvest* slugs against the debt strings,
+    # which can never be equal — a debt has no harvest anywhere.
     active_debts_to_resolve = []
-    if chapter_harvests:
-        try:
-            state_path = paths.get_project_dir() / "state.json"
-            state = json.loads(state_path.read_text(encoding="utf-8"))
-            debts = state.get("debts", [])
-            for h_slug in chapter_harvests:
-                h_slug_clean = h_slug.strip().lower()
-                for d in debts:
-                    if h_slug_clean in d.lower():
-                        active_debts_to_resolve.append(d)
-        except Exception:
-            pass
+    try:
+        state_path = paths.get_project_dir() / "state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        active_debts_to_resolve = [
+            f"(set up in ch{d['chapter']}) {d['desc']}"
+            for d in open_debts_for_chapter(state.get("debts", []), chapter_num)
+        ]
+    except (OSError, ValueError) as e:
+        print(f"WARN: could not read narrative debts: {e}", file=sys.stderr)
 
     prompt = build_chapter_prompt(
         voice=layers["voice"],

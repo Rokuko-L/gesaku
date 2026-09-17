@@ -9,18 +9,24 @@ uv run python -m unittest discover -s tests -p "test_*.py"
 `tests/` is the offline suite. A test that needs a real LLM belongs in the
 E2E layer, not here.
 
-## `unittest` modules (186 tests)
+## `unittest` modules (275 tests)
 
 | Suite | Tests | Covers |
 |---|---|---|
 | `tests/test_refactor_smoke.py` | 21 | pipeline invariants: genre owns chapter count, best-novel peak tracking, foundation checkpoint skip, named timeout budgets, tolerance policy, LLM-output schemas, prompt loading, `run_tool` timeout semantics, callback/chapter coupling |
 | `tests/test_canon_scoping.py` | 20 | sealed foundation views, As-of chapter filter, denylist terms, fail-closed malformed tags |
-| `tests/test_micro_plants.py` | 16 | micro-plant store: add/harvest/expire, near-dup + plant↔harvest clustering |
+| `tests/test_micro_plants.py` | 22 | micro-plant store: add/harvest/expire, near-dup + plant↔harvest clustering, and the lifecycle guards (a payoff before its own plant is refused, an expired plant can still be harvested, `expire_stale` honours the stored `window`, idempotent marking) |
+| `tests/test_plant_tags.py` | 18 | the single owner of the `[Plant:]`/`[Harvest:]` tag format: every tag shape, wrapping quotes vs possessives, the preamble/roadmap split, parser↔validator↔debt agreement, and debt delivery to the drafter |
+| `tests/test_hygiene_names.py` | 14 | required-character derivation: the pronoun "I" and power-tier tokens excluded, word-boundary registry matching, canon terminology ("the Law", "Law III") excluded, single-letter names kept, and the floor-at-1 decision on real data |
+| `tests/test_prose_integrity.py` | 12 | the prose guard: the real ch_20 derail cut to a fragment, notes trailers in all four heading dresses, the bare-"Notes" false positive, and first-person deliberation left alone |
+| `tests/test_ledger_payload.py` | 11 | ledger rows: no row called `matched` without both ends, orphans not reported as paid, span from earliest plant to latest payoff, `settled` from the finish state |
+| `tests/test_attribution.py` | 11 | the attribution pass with a stubbed judge: prompt contents, ordering/invented chapters refused, unusable output degrading to no attribution, short answers padded |
 | `tests/test_provider_llm.py` | 14 | wire format per dialect over `httpx.MockTransport` (URL, auth, payload, truncation parity) |
 | `tests/test_scoring_guards.py` | 13 | keep/discard guards through the real foundation loop |
 | `tests/test_utils.py` | 12 | path helpers, project state, atomic registry writes |
 | `tests/test_llm_telemetry.py` | 11 | `llm_events.jsonl` emission + usage/stop-reason extraction from SSE streams and both dialects' key names |
 | `tests/test_plant_coverage.py` | 10 | pre-reveal outline leak regex + action-plant coverage floor |
+| `tests/test_declared_plants.py` | 8 | a declared payoff↔plant link beats token inference, survives unrelated wording, still obeys ordering, and reads back off the outline bullet |
 | `tests/test_mock_llm.py` | 8 | mock harness + validation-retry integration |
 | `tests/test_epub_export.py` | 7 | EPUB build + structural validation (zip layout, OPF/spine/nav/NCX targets, escaping, stable identifier) and the export/CLI wiring |
 | `tests/test_multi_project.py` | 6 | project-dir/state isolation, registry atomicity, path-traversal guard, from-scratch cleanup |

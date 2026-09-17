@@ -29,6 +29,7 @@ explanation designed to be pasted into a self-correction retry prompt.
 | `CompareOutput` | `winner: "A"\|"B"\|<chapter#>` | Head-to-head verdicts; normalizes case, accepts chapter numbers. |
 | `TonalDriftVerdict` | `has_drift: bool` | Outline tonal-drift gate (`gen_outline.verify_tonal_drift`). `has_drift` is **required** — a judge that omits it must fail validation, not silently default to "no drift" (that is exactly how the gatekeeper went quietly dead once before). Accepts string booleans; coerces a lone `violations` string into a list. |
 | `MicroPlantExtract` | none (both lists default) | Post-keep micro-plant extraction; caps `new_plants` at 4. |
+| `HarvestAttributions` | none (`attributions` defaults) | The ledger's attribution pass (`build_outline.attribute_harvests`): each payoff names the earlier chapter whose plant it resolves, or `null`. Every accepted chapter must be one that was actually shown to the model — a hallucinated number must not be written into the outline as a declared source. |
 
 ## Where It's Wired
 

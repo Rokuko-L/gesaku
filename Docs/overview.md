@@ -24,9 +24,16 @@ core/             Shared library — no pipeline-specific logic
 ├── plant_hygiene.py Outline plant hygiene: pre-reveal leak regex + action-plant
 │                   coverage floor
 ├── micro_plants.py  Prose-emergent micro-plant store (open_callbacks.json) +
-│                   plant↔harvest clustering for the rebuilt ledger
-├── outline.py      Outline text ops: chapter headings, premise beats,
-│                   plants/harvests validation, debt extraction
+│                   plant↔harvest clustering. A harvest may *declare* the
+│                   chapter that set it up; declared beats inferred, and the
+│                   cluster reports which it used
+├── outline.py      Outline text ops: chapter headings, premise beats, and the
+│                   single owner of the `[Plant: slug - "desc"]` tag format
+│                   (parse_plant_tags). Plants/harvests validation, debt
+│                   extraction, and open_debts_for_chapter
+├── prose.py        Prose guard: cuts an appended notes block or a derail into
+│                   prompt echo, and reports what survives. One module, all
+│                   write sites
 ├── textstats.py    Context windows (tail/head), repetition detection
 ├── novel_tex.py    Default LaTeX novel.tex template generation
 ├── genre.py        Genre config loader + validator (active_genre.json);
@@ -99,6 +106,7 @@ git keep/discard per attempt, results.tsv score log)
 | [core/path-resolution.md](core/path-resolution.md) | Project isolation, path helpers, atomic writes |
 | [core/llm-client.md](core/llm-client.md) | API client, retries, truncation, JSON repair |
 | [core/output-validation.md](core/output-validation.md) | Pydantic schemas for LLM output, self-correction retries |
+| [core/prose-guard.md](core/prose-guard.md) | Cutting non-prose model output (notes blocks, mid-chapter derails) |
 | [core/prompt-management.md](core/prompt-management.md) | prompts/ directory and loader conventions |
 | [systems/mock-testing.md](systems/mock-testing.md) | Testing pipeline code offline with MockLLM |
 | [systems/console-bridge.md](systems/console-bridge.md) | webui FastAPI bridge: endpoints, run instructions, deferred scope |
@@ -134,3 +142,9 @@ Never treat these as agent docs, never "clean them up":
    owns timeouts and tolerances. Mirror, never re-derive.
 8. Config knobs live in one named table (`timeout_for`, `*_threshold`,
    `*_tolerance`) — no per-call-site magic numbers.
+9. `core.outline.parse_plant_tags` is the single owner of the
+   `[Plant: slug - "desc"]` tag format. Anything that reads or writes plant or
+   harvest tags goes through it — a second regex means two answers.
+10. Non-prose model output is cut at the write site (`core/prose.py`), never
+    patched up afterwards. A derail is rejected; an appended notes block is
+    dropped and the chapter kept.

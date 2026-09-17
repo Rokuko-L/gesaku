@@ -188,8 +188,10 @@ def main():
         state_path = paths.get_project_dir() / "state.json"
         state = json.loads(state_path.read_text(encoding="utf-8"))
         open_debts = open_debts_for_chapter(state.get("debts", []), chapter_num)
-    except Exception:
-        pass
+    except (OSError, ValueError) as e:
+        # Not fatal — the chapter is still writable without this context — but
+        # say so rather than swallowing it.
+        print(f"WARN: could not read narrative debts: {e}", file=sys.stderr)
 
     debt_guardrail = ""
     if open_debts:

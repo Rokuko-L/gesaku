@@ -143,7 +143,10 @@ Loop:
   3. gen_canon.py        → canon.md (hard facts tagged visible_from=N;
                            sealed facts stay out of drafting until chapter N)
   4. gen_outline.py      → outline.md part 1 (beats; plant-hygiene gated)
-  5. gen_outline_part2.py → outline.md part 2 (foreshadowing ledger)
+  5. gen_outline_part2.py → outline.md part 2 (adds per-chapter
+                           `[Plant:]`/`[Harvest:]` tags; it does NOT write a
+                           ledger — the ledger is rebuilt at export, see
+                           "Plants & harvests" below)
   6. Voice discovery: write 5 trial passages in different registers,
      select best, fill voice.md Part 2 with exemplars + anti-exemplars
   7. Define MYSTERY.md (the central secret the reader discovers)
@@ -510,8 +513,10 @@ PHASE 3b: OPUS REVIEW LOOP (deep, prose-level refinement)
     central question. Build the magic system AS the theme.
   - Voice consistency (9) holds if you never break POV and keep the
     craft vocabulary native.
-  - Foreshadowing (9) requires a ledger maintained from foundation
-    through drafting. Every plant needs a payoff.
+  - Foreshadowing (9) rewards a ledger kept from foundation through drafting.
+    Every plant needs a payoff — but the pipeline only *measures* that at
+    export, and a plant with no payoff is surfaced, not enforced. See
+    "Plants & harvests (outline tags)".
 
 ### What the evaluator penalizes
   - Pacing (7) is structurally stubborn. Investigation chapters
@@ -695,19 +700,86 @@ Separate from outline-tag debts (`state["debts"]` / `[Plant: slug]`).
   with changed meaning.
 - Store: `projects/<name>/open_callbacks.json` via `core/micro_plants.py`
   (atomic writes; max 8 open; expire after 12 chapters; near-dup filter).
+- **The extractor sees the whole chapter.** It used to send only the first 400
+  and last 800 words of anything over 1200, so a payoff landing mid-chapter was
+  invisible and the plant stayed open forever.
+- **`expired` is a nudge state, not a verdict.** Expiry stops the revision
+  suggestion; `mark_harvested` still records a payoff for an expired plant
+  because a late payoff is a fact. A payoff dated *before* its own plant is
+  refused (v4's store contains exactly that error), while a same-chapter one is
+  allowed. `expire_stale` honours the per-item `window` it stores.
 - **Drafting does not inject callbacks.** Soft optional list appears only in
   `pipeline/gen_revision.py` (`soft_inject_block`) with
   “prefer nothing over a forced reference.”
 - Targeted revision keeps re-extract with `--reextract` (drops plants whose
   `source_chapter` matches the revised chapter).
 
-Export `pipeline/build_outline.py` clusters free-text plants/harvests by token
-Jaccard + union-find (near-duplicates collapse; plant only links to a later or
-same-chapter harvest). Statuses: `paid off` (plant+harvest), `open` (plant
-only), `recalled` (harvest only). The webui ledger surfaces planned major
-threads, the clustered emergent ledger, and open callbacks.
+Export `pipeline/build_outline.py` clusters plants/harvests with union-find
+(near-duplicates collapse; a plant links only to a later or same-chapter
+harvest). Statuses: `paid off` (plant+harvest), `open` (plant only),
+`recalled` (harvest only); each thread also reports `match`: **`declared`** when
+a payoff named the chapter that set it up, **`inferred`** when the link is only
+token overlap. The webui ledger surfaces planned major threads, the clustered
+emergent ledger, and open callbacks.
 
-Offline tests: `tests/test_micro_plants.py`.
+Offline tests: `tests/test_micro_plants.py`, `tests/test_declared_plants.py`.
+
+---
+
+## Plants & harvests (outline tags)
+
+Separate from the micro-plant store above, and the pair is easy to confuse.
+
+**One owner for the tag format.** `core.outline.parse_plant_tags` is the only
+parser of `[Plant: slug - "desc"]` / `[Harvest: slug - "desc"]`. The validator,
+`extract_outline_debts` and gen_outline's carry-forward each had their own regex
+and they disagreed about quotes, hyphens and separators — so whether a tag
+existed depended on which caller you asked. The description runs to the closing
+bracket and may contain apostrophes; a class that excluded them silently dropped
+every tag with a possessive (`"Baal II's soul"`), which is how 42 real tags
+became 19 visible ones.
+
+**The ledger is rebuilt at export, and it says how it knows.**
+`pipeline/build_outline.py` summarizes each chapter and then runs a second,
+small **attribution pass**: each chapter's payoffs are shown the plants declared
+in *earlier* chapters and asked which one they resolve. A declared link is
+honoured by the clusterer with no similarity test, and the thread records
+`match: declared`. Everything else is token overlap and records `inferred`.
+Ordering holds in both cases — a payoff cannot resolve its own, a later, or an
+invented chapter — and the declared source rides in the outline bullet as
+`[payoff of chN] text` so consumers read identity off the file.
+
+**Why the attribution pass exists.** The chapter summarizer runs in isolation,
+so it can only describe a payoff in that chapter's own vocabulary. Measurement
+on v4: 97% of harvests shared a content token with an earlier plant and only 3
+shared none, yet the matcher left 101 of 111 plantless — the published rule
+("≥2 shared tokens **and** overlap ≥0.40") binds at ~40% of the *shorter*
+description, i.e. roughly 5 shared words, so the token floor was dead code. The
+pairing was the problem, not the prose.
+
+**Debts are delivered to the drafter and the judge.** A debt is by construction
+a plant that appears in no harvest, so the old consumer — matching a chapter's
+*harvest* slugs against the debt strings — could never fire, and nothing in the
+pipeline could cause an unpaid plant to be paid off.
+`core.outline.open_debts_for_chapter` surfaces the setups declared before the
+chapter being written; `pipeline/draft_chapter.py` offers them as material with
+the same "prefer nothing over a forced reference" framing as the callback list,
+and `pipeline/evaluate.py` passes the same list to the judge.
+
+**Hygiene.** `core/plant_hygiene.py` reports pre-reveal leaks and action-plant
+coverage. The required-character list is derived from sealed facts and tested
+against the registry with a **word boundary** — a substring test admitted "I"
+and "Arc" — and canon terminology is excluded (article-led or enumerated: "the
+Law", "Law III"). The coverage floor stays at **1**: the data does not support
+raising it, and floor 1 already catches a character absent from every pre-reveal
+chapter. `plant_hygiene.json` is a snapshot from foundation time; it goes stale
+when canon.md is edited.
+
+**Non-prose output never reaches a chapter.** See
+[core/prose-guard.md](../core/prose-guard.md).
+
+Offline tests: `tests/test_plant_tags.py`, `tests/test_attribution.py`,
+`tests/test_hygiene_names.py`.
 
 ---
 

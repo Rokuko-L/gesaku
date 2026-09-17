@@ -96,7 +96,7 @@ an attacker endpoint — or spawn and kill runs.
 | `GET /api/score-history?project=` | keep/discard points from `results.tsv` |
 | `GET /api/llm-events?project=` | `llm_events.jsonl` in contract camelCase (incl. `error`) |
 | `GET /api/foundation?project=` | entity graph nodes/edges + world/characters/canon/voice docs |
-| `GET /api/ledger?project=` | premise beats, roadmap, foreshadowing threads, `chaptersTotal` |
+| `GET /api/ledger?project=` | premise beats, roadmap, planned threads, foreshadowing threads, callbacks, `chaptersTotal`, `settled`. Each thread row carries `status` (`matched` / `plant-only` / `harvest-only`), `matchMethod` (`declared` / `slug` / `inferred`, or `null` when nothing is paired), and `span` (arc length, `null` unless both ends are known). A payoff with no setup is an **orphan**, drawn as a lone marker — not a closed loop |
 | `GET /api/entity-graph?project=` | LLM-arranged graph if cached, else heuristic co-mention graph |
 | `POST /api/entity-graph?project=` | ask the writer model to arrange the graph (registry + world bible + canon excerpt); cached to `.entity_graph.json` with an inputs fingerprint — `stale: true` when the source docs change |
 | `GET /api/chapters?project=` | chapters + per-attempt history + full prose |
@@ -124,6 +124,10 @@ an attacker endpoint — or spawn and kill runs.
   demo-shaped endpoints (`/api/projects`, `/api/settings`) pass
   `fixtureOnError: true` and also fall back on HTTP error — a fabricated shelf
   is acceptable there, a fabricated manuscript is not.
+- A view that throws on unexpected data is caught by `components/ErrorBoundary.jsx`
+  (keyed per view+project), which reports the error in place and leaves the rest
+  of the console usable. Without it a single bad payload — a ledger of `null` —
+  unmounted the whole app to a blank page.
 - Screens under `src/screens/project/` — the pipeline dashboard merges the
   former Monitor/Inspector/Costs screens into tabbed panes (run log, scores,
   evaluations, llm calls, telemetry). Ledger and Arena are inspection tools,
