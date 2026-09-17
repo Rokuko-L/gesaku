@@ -14,6 +14,7 @@ import sys
 
 from core import novel_tex as novel_tex_module
 from core import paths
+from core import prose
 from core.llm import call_llm
 
 from pipeline.pipeline_infra import (
@@ -118,6 +119,9 @@ def run_export(state: dict, skip_epub: bool = False) -> dict:
     _BOLD_RE    = re.compile(r'\*\*(.+?)\*\*')                   # **bold** → plain
 
     def _export_clean(text: str) -> str:
+        # Strip non-prose before the markdown formatting pass, so projects
+        # drafted before the guard existed still ship a clean manuscript.
+        text = prose.strip_non_prose(text)
         return _BOLD_RE.sub(r'\1', _EM_DASH_RE.sub(', ', text))
 
     # 4. Concatenate chapters into manuscript.md (written into project dir)
@@ -133,7 +137,14 @@ def run_export(state: dict, skip_epub: bool = False) -> dict:
 
     parts = []
     for ch_file in chapter_files:
-        text = _export_clean(ch_file.read_text(encoding="utf-8").strip())
+        raw = ch_file.read_text(encoding="utf-8").strip()
+        # A chapter that is mostly not prose (or derails early) cannot be
+        # repaired by stripping — it needs a redraft. Say so loudly rather
+        # than shipping a fragment in silence.
+        if prose.looks_like_non_prose(raw):
+            step(f"WARNING: {ch_file.name} has only {prose.prose_words(raw)} words of "
+                 f"prose after stripping — it needs a redraft, not an export")
+        text = _export_clean(raw)
         if text:
             parts.append(text)
 

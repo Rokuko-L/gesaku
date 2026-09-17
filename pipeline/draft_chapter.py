@@ -19,6 +19,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from core.genre import load_genre, prose_mode_system_block
 from core import paths
+from core import prose
 from core import textstats
 
 load_dotenv()
@@ -422,12 +423,23 @@ Write the chapter now. Full text, beginning to end.
         print("TRUNCATION_DETECTED: all attempts truncated — no draft produced", file=sys.stderr)
         sys.exit(2)
 
-    # Save
+    # Save. Strip anything that is not prose (an appended notes block, or a
+    # derail into prompt echo/reasoning) before it can enter the project.
     out_path = chapters_dir / f"ch_{chapter_num:02d}.md"
-    out_path.write_text(normalize_chapter_heading(result, chapter_num), encoding="utf-8")
+    body = normalize_chapter_heading(result, chapter_num)
+    if prose.cut_reason(body) == "derail":
+        print("NON_PROSE_DERAIL: draft interrupted by model output", file=sys.stderr)
+    if prose.looks_like_non_prose(body):
+        # Too little prose survives to be a chapter — fail the attempt so the
+        # drafting loop retries instead of keeping a fragment.
+        print(f"NON_PROSE_FRAGMENT: only {prose.prose_words(body)} words of prose "
+              f"survive; refusing to save", file=sys.stderr)
+        sys.exit(3)
+    body = prose.strip_non_prose(body)
+    out_path.write_text(body, encoding="utf-8")
     print(f"Saved to {out_path}", file=sys.stderr)
-    print(f"Word count: {len(result.split())}", file=sys.stderr)
-    print(result)
+    print(f"Word count: {len(body.split())}", file=sys.stderr)
+    print(body)
 
 if __name__ == "__main__":
     main()

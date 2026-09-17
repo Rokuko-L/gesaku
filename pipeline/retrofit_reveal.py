@@ -29,6 +29,7 @@ from dotenv import load_dotenv
 from core import canon as canon_mod
 from core import paths
 from core import plant_hygiene
+from core import prose
 from core import outline as outline_mod
 from core import textstats
 from core.genre import load_genre, prose_mode_system_block
@@ -184,7 +185,10 @@ def retrofit_chapter(
             file=sys.stderr,
         )
         return False
-    ch_path.write_text(outline_mod.normalize_chapter_heading(result, chapter_num), encoding="utf-8")
+    ch_path.write_text(
+        prose.strip_non_prose(outline_mod.normalize_chapter_heading(result, chapter_num)),
+        encoding="utf-8",
+    )
     print(f"  Saved ch{chapter_num} ({wc}w -> {new_wc}w)", file=sys.stderr)
     return True
 

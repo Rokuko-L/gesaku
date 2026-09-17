@@ -16,6 +16,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from core.genre import load_genre, prose_mode_system_block
 from core import paths
+from core import prose
 
 load_dotenv()
 
@@ -130,9 +131,13 @@ Write the FULL revised chapter now."""
     result = call_writer(prompt)
     
     out_path = chapters_dir / f"ch_{ch_num:02d}.md"
-    out_path.write_text(outline.normalize_chapter_heading(result, ch_num), encoding="utf-8")
+    body = outline.normalize_chapter_heading(result, ch_num)
+    if prose.cut_reason(body) == "derail":
+        print("NON_PROSE_DERAIL: revision interrupted by model output", file=sys.stderr)
+    body = prose.strip_non_prose(body)
+    out_path.write_text(body, encoding="utf-8")
     print(f"Saved to {out_path}", file=sys.stderr)
-    print(f"Word count: {len(result.split())}", file=sys.stderr)
+    print(f"Word count: {len(body.split())}", file=sys.stderr)
 
 if __name__ == "__main__":
     main()
