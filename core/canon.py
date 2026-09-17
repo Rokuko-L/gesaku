@@ -272,27 +272,65 @@ def sealed_denylist_terms(parsed: ParsedCanon, min_len: int = 4) -> list[str]:
     return sorted(terms)
 
 
+def _used_as_term(facts: list[str], name: str) -> bool:
+    """True when every mention is article-led or enumerated: "the Law", "Law III".
+
+    That pattern means canon *terminology* — a force, a rule, a mechanism —
+    rather than a character. v4's sealed facts say "Law III - Resonance Bleed
+    is irreversible" and characters.md lists "**The Law**" among the forces
+    acting on Corvo, which is how a noun ends up in the required-character list
+    while appearing in none of the pre-reveal chapters.
+
+    Matching is case-sensitive on purpose: the common noun in "kingdom law
+    classifies her" is not a mention of the term "Law", and counting it would
+    keep the term in the list.
+    """
+    mentions = 0
+    for fact in facts:
+        for m in re.finditer(rf"\b{re.escape(name)}\b", fact):
+            mentions += 1
+            before = fact[:m.start()].rstrip()
+            after = fact[m.end():].lstrip()
+            article_led = before.lower().endswith("the")
+            enumerated = bool(re.match(r"^(?:[IVXL]+|\d+)\b", after))
+            if not (article_led or enumerated):
+                return False
+    return mentions > 0
+
+
 def action_plant_characters(parsed: ParsedCanon, characters_text: str = "") -> list[str]:
     """Proper names from sealed facts that also appear in the character registry.
 
     These characters should have action-shaped pre-reveal plants so a post-reveal
     retrofit has concrete material to work with.
+
+    The registry test is word-bounded. It used to be `name in characters_text`,
+    a substring test against the whole document, which admitted every short
+    token ("I", "Arc") because the letters occur somewhere in the file — that is
+    what made the hygiene gate fail on names that were never characters.
     """
     if not characters_text:
         return []
+    facts = [f.fact for f in parsed.sealed_facts()]
+    sealed_blob = " ".join(facts)
     name_hits: set[str] = set()
-    # Title-case tokens in sealed facts (Mira, Kael, House Bells)
-    sealed_blob = " ".join(f.fact for f in parsed.sealed_facts())
-    # Single-letter names (A, B) are common in short fiction; allow them.
     for m in re.finditer(r"\b([A-Z][a-z]*(?:\s+[A-Z][a-z]+)*)\b", sealed_blob):
         name = m.group(1).strip()
-        # Keep single-letter names (A/B) even though "a" is a stopword.
+        if not name:
+            continue
+        # Single-letter names (A, B) are legitimate in short fiction, so they
+        # stay. Two exceptions: the narrator's "I" is a pronoun, never a
+        # character, and "T-1"/"T-5" is a power tier written as a letter plus a
+        # numeral.
+        if name == "I":
+            continue
+        if re.match(r"\s*-\s*\d", sealed_blob[m.end():]):
+            continue
         if len(name) > 1 and name.lower() in STOPWORDS:
             continue
-        if len(name) < 1:
+        if not re.search(rf"\b{re.escape(name)}\b", characters_text):
             continue
-        if name in characters_text or re.search(
-            rf"\b{re.escape(name)}\b", characters_text
-        ):
-            name_hits.add(name)
+        if _used_as_term(facts, name):
+            continue
+        name_hits.add(name)
     return sorted(name_hits)

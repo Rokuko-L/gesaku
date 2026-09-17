@@ -81,6 +81,114 @@ JSON only, no other text."""
 
     print(f"  {ch:2d}. {data['title']} ({wc}w)")
     return data
+def _harvest_text_and_source(h) -> tuple[str, int | None]:
+    """A harvest is `{"thread", "declared_chapter"}` after attribution, or a bare string."""
+    if isinstance(h, dict):
+        return str(h.get("thread") or ""), h.get("declared_chapter")
+    return str(h), None
+
+
+def attribute_harvests(ch: int, harvests, prior_plants, attempts: int = 2) -> list:
+    """For each of this chapter's payoffs, ask which earlier plant it resolves.
+
+    The chapter summarizer runs in isolation, so it can only ever describe a
+    payoff in that chapter's own vocabulary — which is why pairing by token
+    overlap left 101 of v4's 116 harvests with no plant. This second, small pass
+    shows the model the plants declared in earlier chapters and lets it *name*
+    the one it resolves.
+
+    Fail-soft: an unusable answer leaves the payoffs unattributed (they fall
+    back to inference) rather than failing the export.
+    """
+    if not harvests or not prior_plants:
+        return [None] * len(harvests)
+
+    from core.validation import HarvestAttributions
+
+    listed_payoffs = "\n".join(f"{i}. {h}" for i, h in enumerate(harvests, 1))
+    listed_plants = "\n".join(
+        f"- ch{p['chapter']}: {p['text']}" for p in prior_plants
+    )
+    prompt = f"""Match this chapter's payoffs to the setups they resolve.
+
+CHAPTER {ch} PAYOFFS:
+{listed_payoffs}
+
+PLANTS DECLARED IN EARLIER CHAPTERS:
+{listed_plants}
+
+For each payoff above, name the chapter whose plant it resolves. Return JSON:
+{{"attributions": [{{"index": 1, "planted_chapter": <chapter number or null>}}, ...]}}
+
+Rules:
+- Use a chapter number ONLY from the list above, and only for a payoff that
+  genuinely resolves that plant.
+- Use null when the payoff resolves something not in the list. Do not invent a
+  number, and do not force an unrelated plant onto a payoff.
+- Include one entry per payoff, using the payoff's index.
+
+JSON only, no other text."""
+
+    out = [None] * len(harvests)
+    for attempt in range(1, attempts + 1):
+        try:
+            parsed = parse_validated(
+                HarvestAttributions, call_model(prompt, max_tokens=800),
+                context=f"Ch {ch} harvest attribution",
+            )
+        except Exception as e:  # noqa: BLE001 — any failure degrades to inference
+            print(f"  [RETRY] Ch {ch} attribution failed (attempt {attempt}/{attempts}): {e}",
+                  file=sys.stderr)
+            continue
+        for a in parsed.attributions:
+            i = a.index - 1
+            pc = a.planted_chapter
+            # A payoff cannot resolve its own or a later chapter's plant.
+            if 0 <= i < len(harvests) and pc is not None and 1 <= int(pc) < ch:
+                out[i] = int(pc)
+        return out
+    return out
+
+
+def attribute_entries(entries: list) -> None:
+    """Resolve each payoff to the earlier chapter whose plant it pays off.
+
+    Runs after summarization so it can see every chapter's plants at once, and
+    in parallel because each call is small. Mutates entries in place: each
+    harvest becomes {"thread": str, "declared_chapter": int|None}.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    by_chapter = {e["num"]: [str(p) for p in e.get("plants") or []] for e in entries}
+
+    def prior_plants_for(ch: int) -> list:
+        return [{"chapter": n, "text": t}
+                for n in sorted(by_chapter) if n < ch
+                for t in by_chapter[n]]
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = {}
+        for e in entries:
+            harvests = [str(h) for h in e.get("harvests") or []]
+            futures[executor.submit(
+                attribute_harvests, e["num"], harvests, prior_plants_for(e["num"])
+            )] = (e, harvests)
+        for future in as_completed(futures):
+            entry, harvests = futures[future]
+            try:
+                attributions = list(future.result())
+            except Exception as e:  # noqa: BLE001 — attribution is best-effort
+                print(f"  [WARN] Ch {entry['num']} attribution unavailable: {e}",
+                      file=sys.stderr)
+                attributions = [None] * len(harvests)
+            if len(attributions) < len(harvests):
+                attributions += [None] * (len(harvests) - len(attributions))
+            entry["harvests"] = [
+                {"thread": text, "declared_chapter": pc}
+                for text, pc in zip(harvests, attributions)
+            ]
+
+
 def main():
     # Load supporting docs for context
     characters = paths.get_characters_path().read_text(encoding="utf-8")[:3000]
@@ -122,6 +230,8 @@ def main():
         print("FATAL: refusing to write an outline missing chapters — downstream eval/panel", file=sys.stderr)
         print("       would silently judge an incomplete book. Fix the failures and re-run.", file=sys.stderr)
         sys.exit(1)
+
+    attribute_entries(entries)
 
     expected_nums = {int(re.search(r"ch_(\d+)\.md", p.name).group(1)) for p in chapter_files}
     got_nums = {e["num"] for e in entries}
@@ -185,7 +295,10 @@ def main():
         if e.get("harvests"):
             lines.append("**Harvests:**")
             for h in e["harvests"]:
-                lines.append(f"- {h}")
+                text, decl = _harvest_text_and_source(h)
+                # The declared source rides in the bullet so the console can
+                # read identity straight off the file instead of re-inferring it.
+                lines.append(f"- {f'[payoff of ch{decl}] ' if decl else ''}{text}")
             lines.append("")
         lines.append(f"**Chapter question:** {e.get('chapter_question', 'N/A')}")
         lines.append("")
@@ -205,12 +318,20 @@ def main():
         for p in e.get("plants") or []:
             plant_rows.append({"text": str(p), "chapter": e["num"]})
         for h in e.get("harvests") or []:
-            harvest_rows.append({"text": str(h), "chapter": e["num"]})
+            text, decl = _harvest_text_and_source(h)
+            harvest_rows.append({"text": text, "chapter": e["num"],
+                                 "declared_chapter": decl})
     threads = match_plant_harvest_threads(plant_rows, harvest_rows)
 
     paid = sum(1 for t in threads if t["status"] == "paid off")
-    open_n = len(threads) - paid
-    lines.append(f"*{len(threads)} clustered threads · {paid} paid · {open_n} open*")
+    declared = sum(1 for t in threads if t.get("match") == "declared")
+    recalled_n = sum(1 for t in threads if t["status"] == "recalled")
+    open_n = sum(1 for t in threads if t["status"] == "open")
+    # Say what each number means: the old header folded plant-less payoffs into
+    # "open", which made the ledger read as loosely closed as it could.
+    lines.append(f"*{len(threads)} threads · {paid} paid ({declared} declared, "
+                 f"{paid - declared} inferred) · {recalled_n} payoff without a setup "
+                 f"· {open_n} setup without a payoff*")
     lines.append("")
     lines.append("| Thread | Planted | Harvested | Status |")
     lines.append("|--------|---------|-----------|--------|")
@@ -218,6 +339,8 @@ def main():
         planted = f"Ch {t['planted']}" if t.get("planted") else ""
         harvested = f"Ch {t['harvest']}" if t.get("harvest") else ""
         status = t["status"]
+        if status == "paid off" and t.get("match") == "declared":
+            status = "paid off (declared)"
         lines.append(f"| {t['thread']} | {planted} | {harvested} | {status} |")
 
     lines.append("")

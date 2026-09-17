@@ -186,15 +186,16 @@
  *
  * `status` describes the data only: `matched` needs a plant AND a payoff at
  * both ends; `plant-only` is an unpaid setup; `harvest-only` is a payoff with
- * no setup found ("orphan"). `matchMethod` is "slug" when the row carries a
- * stable slug, else "inferred" — the pairing came from token overlap rather
- * than declared identity. `span` is the arc length in chapters, or null.
+ * no setup found ("orphan"). `matchMethod` is "declared" when a payoff named
+ * the plant it resolves, "slug" when the row carries a stable slug, else
+ * "inferred" — the pairing came from token overlap rather than identity.
+ * `span` is the arc length in chapters, or null.
  * @typedef {Object} LedgerThread
  * @property {string} thread
  * @property {number|null} planted
  * @property {number|null} harvest
  * @property {"matched"|"plant-only"|"harvest-only"} status
- * @property {"slug"|"inferred"} matchMethod
+ * @property {"declared"|"slug"|"inferred"} matchMethod
  * @property {number|null} span
  *
  * @typedef {Object} Ledger

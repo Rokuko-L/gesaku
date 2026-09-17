@@ -23,13 +23,14 @@ from core.validation import MicroPlantExtract, OutputValidationError, parse_vali
 
 
 def _excerpt(chapter_text: str) -> str:
-    """Tail-weighted excerpt: opening + ending carry most plantable detail."""
-    words = chapter_text.split()
-    if len(words) <= 1200:
-        return chapter_text
-    head = " ".join(words[:400])
-    tail = textstats.tail_context(chapter_text, max_words=800)
-    return f"{head}\n\n[…]\n\n{tail}"
+    """The whole chapter.
+
+    This used to send the first 400 and last 800 words of any chapter over
+    1200 words, which made a payoff landing mid-chapter invisible: the extractor
+    never saw it, so the plant stayed "open" forever. Chapters here run a few
+    thousand words — comfortably one call.
+    """
+    return chapter_text
 
 
 def extract_for_chapter(chapter: int, reextract: bool = False) -> int:

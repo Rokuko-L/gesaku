@@ -260,6 +260,16 @@ def _cluster_threads_from_outline_bullets(txt: str) -> list:
             if not text:
                 continue
             row = {"text": text, "chapter": current_ch}
+            if mode == "harvest":
+                # "…" bullets written by build_outline carry the chapter whose
+                # plant this payoff resolves, so identity comes off the file
+                # rather than being re-inferred from wording.
+                declared = re.match(r"\[payoff of ch(\d+)\]\s*(.*)", text, re.I)
+                if declared:
+                    row["declared_chapter"] = int(declared.group(1))
+                    row["text"] = declared.group(2).strip()
+                    if not row["text"]:
+                        continue
             (plants if mode == "plant" else harvests).append(row)
     if not plants and not harvests:
         return []
@@ -356,6 +366,8 @@ def gen_ledger(p: Path, state: dict) -> dict:
                 threads.append(_thread_row(
                     t["thread"], t["planted"], t["harvest"],
                     t.get("planted_all"), t.get("harvested_all"),
+                    match_method=("declared" if t.get("match") == "declared"
+                                  else None),
                 ))
         else:
             # the ledger table cells are hard-truncated at 60 chars by older

@@ -294,14 +294,16 @@ Each chapter entry must start with "### Chapter N:".
 
         # Build active plants/debts context from previous blocks
         active_plants = []
-        # Find all plants in previous chapters (tolerant of em dash / curly quotes)
         prev_text = "\n\n".join(detailed_outlines[ch] for ch in sorted(detailed_outlines.keys()) if ch < start)
-        all_plants = re.findall(r'\[Plant:\s*([a-zA-Z0-9_]+)\s*[-–—]\s*["“]([^"”]+)["”]\]', prev_text)
-        all_harvests = re.findall(r'\[Harvest:\s*([a-zA-Z0-9_]+)\s*[-–—]\s*["“]([^"”]+)["”]\]', prev_text)
-        harvested_slugs = {h[0] for h in all_harvests}
-        for slug, desc in all_plants:
-            if slug not in harvested_slugs:
-                active_plants.append(f"- [Plant: {slug} - \"{desc}\"]")
+        # Shared parser: this used to be its own stricter regex (quotes required,
+        # no hyphens in slugs), so a tag the validator accepted could be
+        # invisible here and never reach the next block's context.
+        from core.outline import parse_plant_tags
+        all_plants, all_harvests = parse_plant_tags(prev_text)
+        harvested_slugs = {h["slug"] for h in all_harvests}
+        for plant in all_plants:
+            if plant["slug"] not in harvested_slugs:
+                active_plants.append(f"- [Plant: {plant['slug']} - \"{plant['desc']}\"]")
         active_plants_text = "\n".join(active_plants) if active_plants else "None (all previous plants resolved)"
 
         block_prompt = f"""You are a master story pacing engineer. Your task is to take the high-level roadmap and expand Chapters {start} through {end} of "{title}" into detailed chapter outlines.

@@ -259,6 +259,23 @@ class ChapterOutlineEntry(BaseModel):
     chapter_question: str = ""
 
 
+class HarvestAttribution(BaseModel):
+    """One payoff matched to the chapter whose plant it resolves."""
+
+    model_config = ConfigDict(extra="allow")
+
+    index: int
+    planted_chapter: int | None = None
+
+
+class HarvestAttributions(BaseModel):
+    """Output of the attribution pass: which earlier plant each payoff resolves."""
+
+    model_config = ConfigDict(extra="allow")
+
+    attributions: list[HarvestAttribution] = Field(default_factory=list)
+
+
 class CutEntry(BaseModel):
     """One adversarial-edit cut recommendation."""
 

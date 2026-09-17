@@ -331,6 +331,62 @@ def _beat_tokens_in_text(beat_label: str, text: str) -> bool:
         return False
     return True
 
+_PLANT_TAG_RE = re.compile(
+    # The description runs to the closing bracket and may contain apostrophes,
+    # commas and dashes. It used to be `[^'"\]]+`, which silently dropped every
+    # tag whose description contained a possessive — "Baal II's soul",
+    # "Lily's hands" — hiding 23 of v4's 42 plant tags.
+    r"""\[(Plant|Harvest)\s*:\s*([A-Za-z0-9_\-]+)\s*[-:]\s*([^\[\]]+?)\s*\]""",
+    re.IGNORECASE,
+)
+
+
+def chapter_sections(outline_text: str) -> dict:
+    """Split an outline into {chapter number: section text}.
+
+    Text before the first chapter heading is kept under key 0. The foundation
+    outline declares its global threads up there, so dropping it — as this used
+    to — hid 23 of v4's 42 plant tags from the validator and the debt extractor,
+    and made harvests of preamble plants look dangling.
+    """
+    sections = {}
+    current_ch = 0
+    current_lines = []
+    for line in outline_text.splitlines():
+        cleaned = line.strip().replace('*', '').replace('_', '')
+        m = re.match(r'^###\s*(?:Chapter|Ch\.?)\s*(\d+)\b', cleaned, re.IGNORECASE)
+        if m:
+            sections[current_ch] = "\n".join(current_lines)
+            current_ch = int(m.group(1))
+            current_lines = []
+        current_lines.append(line)
+    sections[current_ch] = "\n".join(current_lines)
+    return sections
+
+
+def parse_plant_tags(outline_text: str) -> tuple[list[dict], list[dict]]:
+    """Every `[Plant: slug - "desc"]` / `[Harvest: …]` tag, as (plants, harvests).
+
+    One owner for the tag format. This used to be three regexes that disagreed:
+    the validator's, a copy inside `extract_outline_debts`, and a stricter one in
+    `gen_outline` that required quotes and forbade hyphens in slugs — so whether
+    a tag existed depended on which caller you asked.
+
+    Each entry is {"chapter": int, "slug": str, "desc": str}, both lowercased.
+    """
+    plants, harvests = [], []
+    for chapter, content in chapter_sections(outline_text).items():
+        for kind, slug, desc in _PLANT_TAG_RE.findall(content):
+            entry = {
+                "chapter": chapter,
+                "slug": slug.strip().lower(),
+                # Descriptions are usually quoted; the quotes are not content.
+                "desc": desc.strip().strip("\"'\u201c\u201d").strip().lower(),
+            }
+            (plants if kind.lower() == "plant" else harvests).append(entry)
+    return plants, harvests
+
+
 def validate_plants_harvests(outline_text: str) -> tuple[bool, str]:
     """
     Validate that all plants and harvests in outline.md are logically consistent:
@@ -339,42 +395,8 @@ def validate_plants_harvests(outline_text: str) -> tuple[bool, str]:
       token-set overlap fallback is used.
     """
     import re
-    
-    # Split text by Chapter headings to locate each chapter's section
-    chapters_content = {}
-    current_ch = None
-    current_lines = []
-    
-    for line in outline_text.splitlines():
-        # Match Chapter headings with/without formatting
-        cleaned_line = line.strip().replace('*', '').replace('_', '')
-        m = re.match(r'^###\s*(?:Chapter|Ch\.?)\s*(\d+)\b', cleaned_line, re.IGNORECASE)
-        if m:
-            if current_ch is not None:
-                chapters_content[current_ch] = "\n".join(current_lines)
-            current_ch = int(m.group(1))
-            current_lines = []
-        if current_ch is not None:
-            current_lines.append(line)
-            
-    if current_ch is not None:
-        chapters_content[current_ch] = "\n".join(current_lines)
 
-    # Extract all plants and harvests from each chapter
-    plants = [] # list of dict: {"chapter": int, "slug": str, "desc": str}
-    harvests = [] # list of dict: {"chapter": int, "slug": str, "desc": str}
-    
-    tag_pattern = r'\[(Plant|Harvest):\s*([a-zA-Z0-9_-]+)\s*[:-]\s*[\'"]?([^\'\"\]]+)[\'"]?\]'
-    
-    for ch, content in chapters_content.items():
-        matches = re.findall(tag_pattern, content)
-        for tag_type, slug, desc in matches:
-            slug = slug.strip().lower()
-            desc = desc.strip().lower()
-            if tag_type.lower() == "plant":
-                plants.append({"chapter": ch, "slug": slug, "desc": desc})
-            else:
-                harvests.append({"chapter": ch, "slug": slug, "desc": desc})
+    plants, harvests = parse_plant_tags(outline_text)
 
     errors = []
     
@@ -412,41 +434,8 @@ def validate_plants_harvests(outline_text: str) -> tuple[bool, str]:
     return True, ""
 
 def extract_outline_debts(outline_text: str) -> list[str]:
-    """Extract all active plant slugs that have no corresponding harvest in the outline."""
-    import re
-    # Match Chapter headings with/without formatting
-    chapters_content = {}
-    current_ch = None
-    current_lines = []
-    
-    for line in outline_text.splitlines():
-        cleaned_line = line.strip().replace('*', '').replace('_', '')
-        m = re.match(r'^###\s*(?:Chapter|Ch\.?)\s*(\d+)\b', cleaned_line, re.IGNORECASE)
-        if m:
-            if current_ch is not None:
-                chapters_content[current_ch] = "\n".join(current_lines)
-            current_ch = int(m.group(1))
-            current_lines = []
-        if current_ch is not None:
-            current_lines.append(line)
-            
-    if current_ch is not None:
-        chapters_content[current_ch] = "\n".join(current_lines)
-
-    plants = []
-    harvests = []
-    tag_pattern = r'\[(Plant|Harvest):\s*([a-zA-Z0-9_-]+)\s*[:-]\s*[\'"]?([^\'\"\]]+)[\'"]?\]'
-    
-    for ch, content in chapters_content.items():
-        matches = re.findall(tag_pattern, content)
-        for tag_type, slug, desc in matches:
-            slug = slug.strip().lower()
-            desc = desc.strip().lower()
-            if tag_type.lower() == "plant":
-                plants.append({"chapter": ch, "slug": slug, "desc": desc})
-            else:
-                harvests.append({"chapter": ch, "slug": slug, "desc": desc})
-
+    """Plant slugs that have no harvest anywhere in the outline."""
+    plants, harvests = parse_plant_tags(outline_text)
     harvested_slugs = {h["slug"] for h in harvests}
     debts = []
     for p in plants:

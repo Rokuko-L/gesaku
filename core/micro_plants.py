@@ -16,8 +16,17 @@ from core import paths
 MAX_OPEN = 8
 MAX_NEW_PER_CHAPTER = 1
 DEFAULT_WINDOW = 12
-_MATCH_THRESHOLD = 0.40
-_NEAR_DUP_THRESHOLD = 0.55
+# Two different questions, so two different thresholds — named, because a
+# reader who sees "0.4" in one place and "0.55" in another cannot tell whether
+# that is deliberate. Pairing a payoff to a setup tolerates looser wording than
+# collapsing two setups that are meant to be the same thing.
+_PLANT_LINK_OVERLAP = 0.40
+_PLANT_LINK_MIN_SHARED = 2
+_NEAR_DUP_OVERLAP = 0.55
+_NEAR_DUP_MIN_SHARED = 2
+# Storing a new plant asks "is this already on the list?" — a symmetric
+# question, hence Jaccard rather than the overlap coefficient used above.
+_DEDUPE_JACCARD = 0.55
 
 _STOP = {
     "the", "a", "an", "and", "or", "but", "of", "in", "on", "at", "to", "for",
@@ -53,17 +62,25 @@ def overlap_coefficient(a: set[str], b: set[str]) -> float:
 
 
 def _should_link_plant_harvest(a: set[str], b: set[str]) -> bool:
+    """Does this payoff plausibly resolve this setup?
+
+    NB the overlap coefficient binds well before the shared-token floor on
+    ~11-token descriptions: 2 shared words score ~0.18 and 4 score ~0.36, so
+    in practice this asks for ~5 shared content words. Declared attributions
+    (see ``declared_chapter``) exist precisely because that is a high bar for
+    two independently written paraphrases.
+    """
     shared = a & b
-    if len(shared) < 2:
+    if len(shared) < _PLANT_LINK_MIN_SHARED:
         return False
-    return overlap_coefficient(a, b) >= 0.4
+    return overlap_coefficient(a, b) >= _PLANT_LINK_OVERLAP
 
 
 def _should_link_near_dup(a: set[str], b: set[str]) -> bool:
     shared = a & b
-    if len(shared) < 2:
+    if len(shared) < _NEAR_DUP_MIN_SHARED:
         return False
-    return overlap_coefficient(a, b) >= 0.55
+    return overlap_coefficient(a, b) >= _NEAR_DUP_OVERLAP
 
 
 def load_callbacks(path=None) -> dict:
@@ -99,11 +116,19 @@ def drop_source_chapter(data: dict, chapter: int) -> dict:
 
 
 def expire_stale(data: dict, current_chapter: int, window: int = DEFAULT_WINDOW) -> dict:
+    """Retire stale *nudges* — not the record that a plant exists.
+
+    `expired` means "stop suggesting this in revision", which is why
+    `mark_harvested` still accepts a payoff for an expired plant: the window is
+    editorial policy, while whether a setup was ever paid off is a fact.
+    """
     for c in data.get("callbacks", []):
         if c.get("status") != "open":
             continue
         planted = c.get("source_chapter") or 0
-        if current_chapter - planted > window:
+        # Honour the per-item window when one was stored.
+        limit = c.get("window") or window
+        if current_chapter - planted > limit:
             c["status"] = "expired"
             c["expired_chapter"] = current_chapter
     return data
@@ -157,7 +182,7 @@ def add_plants(
         if not text:
             continue
         toks = content_tokens(text)
-        if any(jaccard(toks, e) >= _NEAR_DUP_THRESHOLD for e in existing_tokens):
+        if any(jaccard(toks, e) >= _DEDUPE_JACCARD for e in existing_tokens):
             continue
         item = {
             "id": uuid.uuid4().hex[:10],
@@ -174,24 +199,38 @@ def add_plants(
 
 
 def mark_harvested(data: dict, chapter: int, harvested_ids: Iterable[str]) -> dict:
+    """Record payoffs. Idempotent, and refused when they cannot be true.
+
+    An `expired` plant can still be harvested: expiry only stops the revision
+    nudge (see `expire_stale`). A payoff dated at or before the plant's own
+    chapter is not a payoff — v4's store contains exactly that error
+    (`a0e954db23`, planted ch23, harvested ch19).
+    """
     ids = {str(i) for i in harvested_ids or []}
     for c in data.get("callbacks", []):
-        if c.get("status") == "open" and c.get("id") in ids:
-            c["status"] = "harvested"
-            c["harvested_chapter"] = chapter
+        if c.get("id") not in ids:
+            continue
+        if c.get("status") not in ("open", "expired"):
+            continue
+        planted = c.get("source_chapter") or 0
+        if chapter <= planted:
+            continue
+        c["status"] = "harvested"
+        c["harvested_chapter"] = chapter
     return data
 
 
 def match_plant_harvest_threads(
     plants: list[dict],
     harvests: list[dict],
-    threshold: float = _MATCH_THRESHOLD,
-    near_dup: float = _NEAR_DUP_THRESHOLD,
 ) -> list[dict]:
     """Cluster free-text plant/harvest bullets into coherent threads.
 
     plants/harvests: [{"text": str, "chapter": int}, ...]
-    Returns [{"thread", "planted", "harvest", "status"}, ...] sorted by
+    A harvest may also carry "declared_chapter": the chapter that set it up.
+    A declared link is honoured without any similarity test, and the resulting
+    thread reports "match": "declared" rather than "inferred".
+    Returns [{"thread", "planted", "harvest", "match", "status"}, ...] sorted by
     earliest plant/harvest chapter.
     """
     nodes: list[dict] = []
@@ -205,11 +244,18 @@ def match_plant_harvest_threads(
                 "text": text,
                 "chapter": int(row.get("chapter") or 0),
                 "tokens": content_tokens(text),
+                # A payoff may *declare* which chapter set it up. Declared
+                # identity beats inferred similarity: it is the difference
+                # between knowing and guessing.
+                "declared": (int(row["declared_chapter"])
+                             if kind == "harvest" and row.get("declared_chapter")
+                             else None),
             })
     if not nodes:
         return []
 
     parent = list(range(len(nodes)))
+    declared_roots: set[int] = set()
 
     def find(i: int) -> int:
         while parent[i] != i:
@@ -231,7 +277,14 @@ def match_plant_harvest_threads(
             else:
                 # plant may only pay off in a later (or same) chapter
                 plant, harvest = (a, b) if a["kind"] == "plant" else (b, a)
-                if (plant["chapter"] <= harvest["chapter"]
+                if (harvest["declared"] == plant["chapter"]
+                        and plant["chapter"] <= harvest["chapter"]):
+                    # The payoff named this chapter. No token test needed — but
+                    # ordering still holds: a payoff cannot resolve a plant that
+                    # has not happened yet.
+                    union(i, j)
+                    declared_roots.add(find(i))
+                elif (plant["chapter"] <= harvest["chapter"]
                         and _should_link_plant_harvest(plant["tokens"], harvest["tokens"])):
                     union(i, j)
 
@@ -245,7 +298,7 @@ def match_plant_harvest_threads(
         cl["texts"].append(node["text"])
 
     threads = []
-    for cl in clusters.values():
+    for root, cl in clusters.items():
         planted = sorted(set(cl["plants"]))
         harvested = sorted(set(cl["harvests"]))
         # Prefer a harvest description as the label when available
@@ -261,6 +314,10 @@ def match_plant_harvest_threads(
             "harvest": harvested[0] if harvested else None,
             "planted_all": planted,
             "harvested_all": harvested,
+            # "declared" means a payoff named its plant; "inferred" means we
+            # guessed from wording. The ledger must not confuse the two.
+            "match": ("declared" if any(find(r) == root for r in declared_roots)
+                      else "inferred"),
             "status": (
                 "paid off" if planted and harvested
                 else "recalled" if harvested
