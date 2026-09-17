@@ -266,8 +266,50 @@ def _cluster_threads_from_outline_bullets(txt: str) -> list:
     return match_plant_harvest_threads(plants, harvests)
 
 
+_SLUGLIKE = re.compile(r"^[a-z0-9]+(?:_[a-z0-9]+)+$")
+
+
+def _thread_row(thread: str, planted, harvest, planted_all=None, harvested_all=None,
+                match_method: str | None = None) -> dict:
+    """One ledger row, described factually.
+
+    status: matched (plant and payoff), plant-only, harvest-only.
+    match_method: "slug" when the row's identity is a stable slug, else
+      "inferred" — the pairing came from token overlap, not declared identity.
+    span: chapters from the earliest plant to the latest payoff, or None.
+    """
+    if planted is not None and harvest is not None:
+        status = "matched"
+    elif planted is not None:
+        status = "plant-only"
+    else:
+        status = "harvest-only"
+
+    span = None
+    if status == "matched":
+        p_all = planted_all or [planted]
+        h_all = harvested_all or [harvest]
+        span = max(h_all) - min(p_all)
+
+    if match_method is None:
+        match_method = "slug" if _SLUGLIKE.match(thread.strip()) else "inferred"
+
+    return {
+        "thread": thread,
+        "planted": planted,
+        "harvest": harvest,
+        "status": status,
+        "matchMethod": match_method,
+        "span": span,
+    }
+
+
 def gen_ledger(p: Path, state: dict) -> dict:
     total = state.get("chapters_total", 24)
+    # A finished book is a different reading than one still being written:
+    # an unpaid plant there is a promise the novel shipped without.
+    settled = (state.get("current_focus") == "done"
+               or state.get("phase") == "complete")
 
     premise = []
     part1 = p / ".outline_part1.md"
@@ -276,25 +318,33 @@ def gen_ledger(p: Path, state: dict) -> dict:
         sec = re.search(r"\*\*PREMISE BEATS:\*\*(.*?)(?=\n\*\*|\n#)", txt, re.S)
         if sec:
             for label in re.findall(r"^- \*\*\d+\.\s*(.+?):", sec.group(1), re.M):
-                premise.append({"label": clean(label), "done": True})
+                premise.append({"label": clean(label)})
 
     roadmap = []
     rm = p / ".outline_roadmap.md"
     if rm.exists():
         txt = rm.read_text(encoding="utf-8")
-        # body may follow the heading directly (no blank line)
-        for m in re.finditer(
-                r"^###\s+Chapter\s+(\d+):\s*([^\n]*)\n+(.+?)(?=\n###|\Z)",
-                txt, re.M | re.S):
-            num, slug, body = int(m.group(1)), m.group(2).strip(), m.group(3).strip()
-            sentences = re.split(r"(?<=[.!?])\s+", body)
+        # Split on the headings rather than matching to the next heading: the
+        # old `\n+` + lookahead swallowed the blank line, so alternate chapters
+        # were absorbed into the previous entry and their numbers went missing.
+        parts = re.split(r"^###\s+Chapter\s+(\d+)\s*:?[ \t]*([^\n]*)",
+                         txt, flags=re.MULTILINE)
+        for i in range(1, len(parts) - 2, 3):
+            num, heading, body = int(parts[i]), clean(parts[i + 1]), parts[i + 2].strip()
+            # "### Chapter 1: [ordinary_world] Teen Demon Lord Baal II…"
+            tag = re.match(r"^\[([^\]]+)\]\s*(.*)$", heading)
+            if tag:
+                title, lead = clean(tag.group(1)).replace("_", " "), tag.group(2).strip()
+            else:
+                title, lead = heading.replace("_", " ") or f"chapter {num}", ""
+            prose_body = (lead + " " + body).strip()
+            sentences = re.split(r"(?<=[.!?])\s+", prose_body)
             roadmap.append({
                 "chapter": num,
-                "title": clean(slug).replace("_", " ") or f"chapter {num}",
+                "title": title,
                 "beats": [clean(s) for s in sentences[:3] if clean(s)],
             })
         roadmap.sort(key=lambda c: c["chapter"])
-    roadmap = roadmap[:6]
 
     threads = []
     outline = p / "outline.md"
@@ -303,13 +353,10 @@ def gen_ledger(p: Path, state: dict) -> dict:
         clustered = _cluster_threads_from_outline_bullets(txt)
         if clustered:
             for t in clustered:
-                threads.append({
-                    "thread": t["thread"],
-                    "planted": t["planted"],
-                    "harvest": t["harvest"],
-                    "status": "paid off" if t["status"] == "paid off" else
-                              "paid off" if t["status"] == "recalled" else "open",
-                })
+                threads.append(_thread_row(
+                    t["thread"], t["planted"], t["harvest"],
+                    t.get("planted_all"), t.get("harvested_all"),
+                ))
         else:
             # the ledger table cells are hard-truncated at 60 chars by older
             # pipeline builds; recover full thread text from outline bullets when possible
@@ -337,43 +384,47 @@ def gen_ledger(p: Path, state: dict) -> dict:
                             label = clean(full)
                         else:
                             label = label.rsplit(" ", 1)[0] + "…"
-                    status = clean(status_cell).lower() if status_cell else ""
-                    if status in ("paid off", "paid", "harvested", "recalled"):
-                        paid = True
-                    elif status in ("open", "unpaid"):
-                        paid = False
-                    else:
-                        paid = bool(hm)
-                    threads.append({
-                        "thread": label,
-                        "planted": int(pm.group(1)) if pm else None,
-                        "harvest": int(hm.group(1)) if hm else None,
-                        "status": "paid off" if paid else "open",
-                    })
+                    threads.append(_thread_row(
+                        label,
+                        int(pm.group(1)) if pm else None,
+                        int(hm.group(1)) if hm else None,
+                    ))
     threads.sort(key=lambda t: (t["planted"] or t["harvest"] or 0,
                                 t["harvest"] or 9999))
 
-    # Planned major threads from the foundation roadmap (the real craft arcs)
+    # Planned major threads from the foundation roadmap (the real craft arcs).
+    # The roadmap writes these as "**1. slug**", not "### slug" — parsing only
+    # the latter left this section permanently empty, hiding every long arc.
     planned = []
     if rm.exists():
         rtxt = rm.read_text(encoding="utf-8")
         sec = re.search(
             r"GLOBAL PLOT THREADS LEDGER\n(.*?)(?=\n## |\Z)", rtxt, re.S | re.I)
         if sec:
-            blocks = re.split(r"\n(?=###\s)", sec.group(1))
+            blocks = re.split(r"\n(?=\*\*\d+\.|\*\*[a-zA-Z0-9_]+|###\s)", sec.group(1))
             for block in blocks:
-                hm = re.match(r"###\s+\**\s*([a-zA-Z0-9_]+)", block.strip())
+                hm = re.match(
+                    r"(?:###\s+)?\**\s*(?:\d+\.\s*)?([a-zA-Z0-9_]+)\s*\**", block.strip())
                 if not hm:
                     continue
                 slug = hm.group(1)
-                pm = re.search(r"Planted:\*\*\s*Chapter\s*(\d+)", block, re.I)
-                hv = re.search(r"Harvested:\*\*\s*Chapter\s*(\d+)", block, re.I)
-                planned.append({
-                    "thread": slug.replace("_", " "),
-                    "planted": int(pm.group(1)) if pm else None,
-                    "harvest": int(hv.group(1)) if hv else None,
-                    "status": "paid off" if hv else "open",
-                })
+                # Planted/Harvested lines routinely name several chapters; the
+                # arc is earliest plant -> latest payoff.
+                planted_text = (block.split("Planted:")[1].split("Harvested:")[0]
+                                if "Planted:" in block else "")
+                planted_chs = [int(n) for n in
+                               re.findall(r"Chapter\s*(\d+)", planted_text, re.I)]
+                harvest_text = block.split("Harvested:")[1] if "Harvested:" in block else ""
+                harvest_chs = [int(n) for n in
+                               re.findall(r"Chapter\s*(\d+)", harvest_text, re.I)]
+                planned.append(_thread_row(
+                    slug.replace("_", " "),
+                    min(planted_chs) if planted_chs else None,
+                    max(harvest_chs) if harvest_chs else None,
+                    planted_chs or None,
+                    harvest_chs or None,
+                    match_method="slug",
+                ))
 
     # Prose-emergent micro-plants (open_callbacks.json), if the extractor has run
     callbacks = []
@@ -400,6 +451,7 @@ def gen_ledger(p: Path, state: dict) -> dict:
         "plannedThreads": planned,
         "callbacks": callbacks,
         "chaptersTotal": total,
+        "settled": settled,
     }
 
 

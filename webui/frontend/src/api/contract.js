@@ -183,13 +183,28 @@
 
 /**
  * Beats & harvests ledger (GET /api/ledger).
+ *
+ * `status` describes the data only: `matched` needs a plant AND a payoff at
+ * both ends; `plant-only` is an unpaid setup; `harvest-only` is a payoff with
+ * no setup found ("orphan"). `matchMethod` is "slug" when the row carries a
+ * stable slug, else "inferred" — the pairing came from token overlap rather
+ * than declared identity. `span` is the arc length in chapters, or null.
+ * @typedef {Object} LedgerThread
+ * @property {string} thread
+ * @property {number|null} planted
+ * @property {number|null} harvest
+ * @property {"matched"|"plant-only"|"harvest-only"} status
+ * @property {"slug"|"inferred"} matchMethod
+ * @property {number|null} span
+ *
  * @typedef {Object} Ledger
- * @property {Array<{label: string, done: boolean}>} premiseBeats
+ * @property {Array<{label: string}>} premiseBeats
  * @property {Array<{chapter: number, title: string, beats: string[]}>} roadmap
- * @property {Array<{thread: string, planted: number|null, harvest: number|null, status: "paid off"|"open"}>} threads
- * @property {Array<{thread: string, planted: number|null, harvest: number|null, status: "paid off"|"open"}>} [plannedThreads]
+ * @property {Array<LedgerThread>} threads
+ * @property {Array<LedgerThread>} plannedThreads
  * @property {Array<{id: string, text: string, kind: string, sourceChapter: number|null, harvestChapter: number|null, status: string}>} [callbacks]
  * @property {number} chaptersTotal
+ * @property {boolean} settled   // the book is finished, so unpaid plants shipped that way
  */
 
 /**

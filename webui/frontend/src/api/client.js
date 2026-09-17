@@ -5,6 +5,7 @@ import chapters from '../fixtures/chapters.json'
 import evals from '../fixtures/evals.json'
 import revision from '../fixtures/revision.json'
 import tournament from '../fixtures/tournament.json'
+import ledger from '../fixtures/ledger.json'
 
 /**
  * API client — implements the contract in contract.js.
@@ -181,7 +182,9 @@ export const api = {
   },
 
   async getLedger(project) {
-    return live(`/api/ledger${q(project)}`, null)
+    // The generator has always produced ledger.json; it simply was not imported,
+    // so offline returned null and the view crashed on it.
+    return live(`/api/ledger${q(project)}`, ledger)
   },
 
   /** Launch run_pipeline.py for a new project (creation wizard). */
