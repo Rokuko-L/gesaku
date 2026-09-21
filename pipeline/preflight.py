@@ -19,6 +19,50 @@ from core.genre import load_genre
 from pipeline.pipeline_infra import timeout_for
 
 
+def probe_tool_path(model_key: str = "judge") -> tuple[bool, str]:
+    """One trivial tool call through the resolved endpoint.
+
+    Returns (ok, message). Detects gateways that strip or flatten tool_use.
+    """
+    from core.llm import (
+        _resolve_base_url, _resolve_model, _build_tool_request,
+        resolve_provider, _parse_tool_turn_from_response, get_client,
+    )
+    provider = resolve_provider(model_key)
+    model = _resolve_model(provider, model_key)
+    base = _resolve_base_url(provider, model_key)
+    tools = [{
+        "name": "noop_tool",
+        "description": "Returns ok. Used only for gateway tool-path preflight.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"echo": {"type": "string"}},
+            "required": ["echo"],
+        },
+    }]
+    messages = [{"role": "user", "content": "Call noop_tool with echo=ping."}]
+    url_path, headers, payload = _build_tool_request(
+        provider, model, None, messages, tools, max_tokens=256,
+        temperature=0.0, beta_context=False,
+    )
+    url = f"{base}{url_path}"
+    client = get_client()
+    resp = client.post(url, headers=headers, json=payload, timeout=timeout_for("probe"))
+    if resp.status_code >= 400:
+        return False, f"HTTP {resp.status_code} on tool probe: {resp.text[:160]}"
+    _text, tool_calls, stop, parse_ok, body_head = _parse_tool_turn_from_response(resp, provider)
+    if not parse_ok:
+        return False, f"tool probe body unparseable: {body_head!r}"
+    if not tool_calls:
+        return False, (
+            "endpoint answered but returned no tool_use/tool_calls — "
+            f"gateway may strip tools (stop={stop}, body={body_head!r})"
+        )
+    if tool_calls[0].get("name") != "noop_tool":
+        return False, f"unexpected tool name in probe: {tool_calls[0].get('name')!r}"
+    return True, "tool path ok"
+
+
 
 # ---------------------------------------------------------------------------
 # Sanity check (pre-flight before any LLM call)
@@ -59,7 +103,11 @@ def sanity_check(args):
             probe = httpx.post(
                 f"{_resolve_base_url(provider, 'writer')}"
                 f"{'/v1/messages' if provider == 'anthropic' else '/chat/completions'}",
-                headers={"content-type": "application/json"},
+                headers={
+                    "content-type": "application/json",
+                    **({"x-api-key": os.getenv("ANTHROPIC_API_KEY", ""),
+                        "anthropic-version": "2023-06-01"} if provider == "anthropic" else {}),
+                },
                 json={"model": model, "max_tokens": 1,
                       "messages": [{"role": "user", "content": "ping"}]},
                 timeout=timeout_for("probe"),
@@ -75,6 +123,26 @@ def sanity_check(args):
     except Exception as e:
         print(f"FAIL: provider config broken ({e})", file=sys.stderr)
         ok = False
+
+    # 3b. Tool-call path (continuity judge). Local proxies sometimes strip
+    # tool blocks. WARN by default; FAIL when GESAKU_REQUIRE_TOOLS=1.
+    require_tools = (os.getenv("GESAKU_REQUIRE_TOOLS") or "").strip().lower() in ("1", "true", "yes")
+    try:
+        tool_ok, tool_msg = probe_tool_path()
+        if not tool_ok:
+            if require_tools:
+                print(f"FAIL: tool-call path broken — {tool_msg}", file=sys.stderr)
+                ok = False
+            else:
+                print(f"WARN: tool-call path unverified — {tool_msg} "
+                      f"(continuity open-pass will not run; set GESAKU_REQUIRE_TOOLS=1 to enforce)",
+                      file=sys.stderr)
+    except Exception as e:
+        if require_tools:
+            print(f"FAIL: tool-path probe error — {e}", file=sys.stderr)
+            ok = False
+        else:
+            print(f"WARN: tool-path probe error ({e})", file=sys.stderr)
 
     # 4. At least one of seed.txt or --notes exists
     if not (root_dir / "seed.txt").exists() and not paths.get_seed_path().exists() and not notes_provided:

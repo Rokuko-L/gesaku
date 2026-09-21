@@ -88,6 +88,32 @@ def validate_generator_output(content: str, name: str, min_len: int = 100, expec
                 raise RuntimeError(f"{name}: output missing expected header '{h}'")
     return content
 
+def extract_chapter_outline(outline_text: str, chapter_num: int) -> str:
+    """Extract a specific chapter's outline entry from the DETAILED section.
+
+    Scoped to '## DETAILED CHAPTER OUTLINES' so the HIGH-LEVEL ROADMAP one-liner
+    is never matched instead of the real beats entry. Raises ValueError if missing.
+    """
+    if "## DETAILED CHAPTER OUTLINES" in outline_text:
+        outline_text = outline_text.split("## DETAILED CHAPTER OUTLINES", 1)[1]
+    pattern = rf'###\s*\*?\*?\s*(?:Chapter|Ch\.?)\s*\*?\*?\s*{chapter_num}\b.*?(?=###\s*\*?\*?\s*(?:Chapter|Ch\.?)\s*\*?\*?\s*(?:\d+)\b|## Act|## Foreshadowing|$)'
+    match = re.search(pattern, outline_text, re.IGNORECASE | re.DOTALL)
+    if not match:
+        raise ValueError(
+            f"Chapter {chapter_num} outline entry not found in the "
+            f"## DETAILED CHAPTER OUTLINES section — refusing to draft without beats."
+        )
+    return match.group(0).strip()
+
+def extract_next_chapter_outline(outline_text: str, chapter_num: int) -> str:
+    """Extract the next chapter's outline (first few lines for continuity)."""
+    try:
+        next_entry = extract_chapter_outline(outline_text, chapter_num + 1)
+    except ValueError:
+        return "(final chapter)"
+    lines = next_entry.split('\n')[:10]
+    return '\n'.join(lines)
+
 def _normalize_beat_label(label: str) -> str:
     """Normalize a beat label for fuzzy matching — remove bold, POV, numbering."""
     label = re.sub(r'\*\*', '', label)

@@ -101,6 +101,57 @@ class TruncationError(Exception):
     """Raised when the API response was truncated (stop_reason == 'max_tokens')."""
     pass
 
+
+# Committed default for tool-using loops (continuity judge). Named-table
+# owner in pipeline: pipeline_infra.judge_tool_budget(); core keeps this
+# constant so llm.py stays pipeline-free.
+DEFAULT_TOOL_BUDGET = 12
+
+
+class ToolLoopResult:
+    """Final state of a call_llm_tools multi-turn tool loop."""
+
+    def __init__(
+        self,
+        *,
+        text: str = "",
+        stop_reason: str | None = None,
+        agent_stop: str = "end_turn",
+        tool_calls_used: int = 0,
+        budget: int = DEFAULT_TOOL_BUDGET,
+        trace: list | None = None,
+        model: str = "",
+        provider: str = "",
+        tokens_in: int = 0,
+        tokens_out: int = 0,
+        messages: list | None = None,
+    ):
+        self.text = text
+        self.stop_reason = stop_reason
+        self.agent_stop = agent_stop
+        self.tool_calls_used = tool_calls_used
+        self.budget = budget
+        self.trace = trace if trace is not None else []
+        self.model = model
+        self.provider = provider
+        self.tokens_in = tokens_in
+        self.tokens_out = tokens_out
+        self.messages = messages if messages is not None else []
+
+    def to_dict(self) -> dict:
+        return {
+            "text": self.text,
+            "stop_reason": self.stop_reason,
+            "agent_stop": self.agent_stop,
+            "tool_calls_used": self.tool_calls_used,
+            "budget": self.budget,
+            "trace": list(self.trace),
+            "model": self.model,
+            "provider": self.provider,
+            "tokens_in": self.tokens_in,
+            "tokens_out": self.tokens_out,
+        }
+
 def _warn_unused_trailing(text: str, consumed_len: int) -> None:
     """Warn to stderr when a response contains content after the first JSON value."""
     import sys
@@ -452,6 +503,321 @@ def _build_request(provider: str, model: str, system, prompt, max_tokens, temper
         payload["temperature"] = temperature
     return "/chat/completions", headers, payload
 
+
+def _normalize_tools_for_dialect(provider: str, tools: list) -> list:
+    """Accept either dialect's tool schema; emit the provider's shape."""
+    normalized = []
+    for t in tools or []:
+        if not isinstance(t, dict):
+            continue
+        if provider == "anthropic":
+            if t.get("type") == "function" and "function" in t:
+                fn = t["function"]
+                normalized.append({
+                    "name": fn.get("name", ""),
+                    "description": fn.get("description", ""),
+                    "input_schema": fn.get("parameters") or fn.get("input_schema") or {"type": "object", "properties": {}},
+                })
+            else:
+                normalized.append({
+                    "name": t.get("name", ""),
+                    "description": t.get("description", ""),
+                    "input_schema": t.get("input_schema") or t.get("parameters") or {"type": "object", "properties": {}},
+                })
+        else:
+            if t.get("type") == "function" and "function" in t:
+                normalized.append(t)
+            else:
+                normalized.append({
+                    "type": "function",
+                    "function": {
+                        "name": t.get("name", ""),
+                        "description": t.get("description", ""),
+                        "parameters": t.get("input_schema") or t.get("parameters") or {"type": "object", "properties": {}},
+                    },
+                })
+    return normalized
+
+
+def _build_tool_request(provider, model, system, messages, tools, max_tokens, temperature, beta_context):
+    """Build (url_path, headers, payload) for a tool-enabled chat turn."""
+    headers = {"content-type": "application/json"}
+    headers.update(_load_extra_headers())
+    tools_norm = _normalize_tools_for_dialect(provider, tools)
+
+    if provider == "anthropic":
+        api_key = os.environ.get(KEY_ENV_VARS[provider], "")
+        if api_key:
+            headers["x-api-key"] = api_key
+        headers["anthropic-version"] = "2023-06-01"
+        if beta_context:
+            headers["anthropic-beta"] = "context-1m-2025-08-07"
+        payload = {
+            "model": model,
+            "max_tokens": get_max_tokens_with_thinking(max_tokens),
+            "temperature": temperature,
+            "messages": messages,
+            "tools": tools_norm,
+        }
+        if system:
+            payload["system"] = system
+        return "/v1/messages", headers, payload
+
+    api_key = os.environ.get(KEY_ENV_VARS[provider], "")
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    if beta_context:
+        print(
+            "[llm] beta_context requested but provider is openai — ignored (Anthropic-only beta)",
+            file=sys.stderr,
+        )
+    msgs = list(messages)
+    if system:
+        msgs.insert(0, {"role": "system", "content": system})
+    payload = {"model": model, "messages": msgs, "tools": tools_norm}
+    if _looks_like_reasoning_model(model):
+        payload["max_completion_tokens"] = get_max_tokens_with_thinking(max_tokens)
+    else:
+        payload["max_tokens"] = get_max_tokens_with_thinking(max_tokens)
+        payload["temperature"] = temperature
+    return "/chat/completions", headers, payload
+
+
+def _parse_tool_turn(data: dict, provider: str):
+    """Return (text, tool_calls, stop_reason) for one API response.
+
+    tool_calls: [{id, name, input}]
+    """
+    if provider == "openai" or (isinstance(data, dict) and "choices" in data):
+        choice = (data.get("choices") or [{}])[0]
+        message = choice.get("message", {}) or {}
+        text = message.get("content") or ""
+        if isinstance(text, list):
+            text = "".join(
+                b.get("text", "") for b in text if isinstance(b, dict) and b.get("type") in (None, "text")
+            )
+        raw_calls = message.get("tool_calls") or []
+        tool_calls = []
+        for c in raw_calls:
+            fn = c.get("function") or {}
+            args_raw = fn.get("arguments") or "{}"
+            try:
+                args = json.loads(args_raw) if isinstance(args_raw, str) else (args_raw or {})
+            except Exception:
+                args = {"_raw": args_raw}
+            tool_calls.append({
+                "id": c.get("id") or f"call_{len(tool_calls)}",
+                "name": fn.get("name", ""),
+                "input": args if isinstance(args, dict) else {"value": args},
+            })
+        stop = _normalize_stop_reason(choice.get("finish_reason"))
+        return text, tool_calls, stop
+
+    content = data.get("content") or []
+    texts = []
+    tool_calls = []
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        btype = block.get("type")
+        if btype == "text":
+            texts.append(block.get("text") or "")
+        elif btype == "tool_use":
+            tool_calls.append({
+                "id": block.get("id") or f"toolu_{len(tool_calls)}",
+                "name": block.get("name", ""),
+                "input": block.get("input") or {},
+            })
+    return "\n".join(texts), tool_calls, data.get("stop_reason")
+
+
+def _parse_tool_turn_from_response(resp, provider: str):
+    """JSON or SSE body -> (text, tool_calls, stop_reason, parse_ok, body_head).
+
+    Gateways often return unsolicited SSE. Parse failure must not look like
+    natural completion.
+    """
+    raw = resp.text or ""
+    body_head = raw[:200]
+    if _is_sse_body(resp):
+        text_parts = []
+        tool_calls = []
+        stop_reason = None
+        saw_sse_payload = False
+        for item in _iter_sse_objects(raw):
+            saw_sse_payload = True
+            if provider == "openai":
+                for choice in item.get("choices") or []:
+                    delta = choice.get("delta") or {}
+                    if delta.get("content"):
+                        text_parts.append(delta["content"])
+                    for c in delta.get("tool_calls") or []:
+                        fn = c.get("function") or {}
+                        args_raw = fn.get("arguments") or "{}"
+                        try:
+                            args = json.loads(args_raw) if isinstance(args_raw, str) else (args_raw or {})
+                        except Exception:
+                            args = {"_raw": args_raw}
+                        tool_calls.append({
+                            "id": c.get("id") or f"call_{len(tool_calls)}",
+                            "name": fn.get("name", ""),
+                            "input": args if isinstance(args, dict) else {"value": args},
+                        })
+                    if choice.get("finish_reason"):
+                        stop_reason = _normalize_stop_reason(choice["finish_reason"])
+            else:
+                if item.get("type") == "message":
+                    for block in item.get("content") or []:
+                        if not isinstance(block, dict):
+                            continue
+                        if block.get("type") == "text":
+                            text_parts.append(block.get("text") or "")
+                        elif block.get("type") == "tool_use":
+                            tool_calls.append({
+                                "id": block.get("id") or f"toolu_{len(tool_calls)}",
+                                "name": block.get("name", ""),
+                                "input": block.get("input") or {},
+                            })
+                    if item.get("stop_reason"):
+                        stop_reason = item["stop_reason"]
+                elif item.get("type") == "content_block_delta":
+                    delta = item.get("delta") or {}
+                    if delta.get("type") == "text_delta":
+                        text_parts.append(delta.get("text") or "")
+                elif item.get("type") == "content_block_start":
+                    block = item.get("content_block") or {}
+                    if block.get("type") == "tool_use":
+                        tool_calls.append({
+                            "id": block.get("id") or f"toolu_{len(tool_calls)}",
+                            "name": block.get("name", ""),
+                            "input": block.get("input") or {},
+                        })
+                elif item.get("type") == "message_delta":
+                    if (item.get("delta") or {}).get("stop_reason"):
+                        stop_reason = item["delta"]["stop_reason"]
+        if not saw_sse_payload and not text_parts and not tool_calls and stop_reason is None:
+            return "", [], None, False, body_head
+        return "\n".join(text_parts), tool_calls, stop_reason, True, body_head
+
+    try:
+        data = _parse_response_json(raw)
+    except Exception:
+        return "", [], None, False, body_head
+    if not isinstance(data, dict) or not data:
+        return "", [], None, False, body_head
+    text, tool_calls, stop_reason = _parse_tool_turn(data, provider)
+    return text, tool_calls, stop_reason, True, body_head
+
+
+def _build_tool_request(provider, model, system, messages, tools, max_tokens, temperature, beta_context):
+    """Build (url_path, headers, payload) for a tool-enabled chat turn."""
+    headers = {"content-type": "application/json"}
+    headers.update(_load_extra_headers())
+    tools_norm = _normalize_tools_for_dialect(provider, tools)
+
+    if provider == "anthropic":
+        api_key = os.environ.get(KEY_ENV_VARS[provider], "")
+        if api_key:
+            headers["x-api-key"] = api_key
+        headers["anthropic-version"] = "2023-06-01"
+        if beta_context:
+            headers["anthropic-beta"] = "context-1m-2025-08-07"
+        payload = {
+            "model": model,
+            "max_tokens": get_max_tokens_with_thinking(max_tokens),
+            "temperature": temperature,
+            "messages": messages,
+            "tools": tools_norm,
+        }
+        if system:
+            payload["system"] = system
+        return "/v1/messages", headers, payload
+
+    api_key = os.environ.get(KEY_ENV_VARS[provider], "")
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    if beta_context:
+        print(
+            "[llm] beta_context requested but provider is openai — ignored (Anthropic-only beta)",
+            file=sys.stderr,
+        )
+    msgs = list(messages)
+    if system:
+        msgs.insert(0, {"role": "system", "content": system})
+    payload = {"model": model, "messages": msgs, "tools": tools_norm}
+    if _looks_like_reasoning_model(model):
+        payload["max_completion_tokens"] = get_max_tokens_with_thinking(max_tokens)
+    else:
+        payload["max_tokens"] = get_max_tokens_with_thinking(max_tokens)
+        payload["temperature"] = temperature
+    return "/chat/completions", headers, payload
+
+
+def _post_llm(url, headers, payload, timeout, *, emit_prefix, model_key, model, prompt_chars):
+    """Single POST with call_llm-style transport retries. Returns (resp, attempt)."""
+    import time
+    max_retries = 5
+    backoff = 2
+    last_err = None
+    for attempt in range(1, max_retries + 1):
+        t0 = time.perf_counter()
+        try:
+            client = get_client()
+            resp = client.post(url, headers=headers, json=payload, timeout=timeout)
+            resp.raise_for_status()
+            return resp, attempt
+        except (httpx.HTTPStatusError, httpx.RequestError) as e:
+            _emit_llm_event({
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
+                      + f".{int(time.perf_counter() * 1000) % 1000:03d}Z",
+                "model_key": model_key,
+                "model": model,
+                "ok": False,
+                "attempt": attempt,
+                "duration_ms": round((time.perf_counter() - t0) * 1000),
+                "error": str(e)[:200],
+                "prompt_chars": prompt_chars,
+                "loop": emit_prefix,
+            })
+            if isinstance(e, httpx.HTTPStatusError) and e.response.status_code in [400, 401, 403, 404]:
+                raise e
+            last_err = e
+            if attempt == max_retries:
+                raise e
+            print(f"API tool-loop call failed (attempt {attempt}/{max_retries}): {e}. Retrying in {backoff}s...", file=sys.stderr)
+            time.sleep(backoff)
+            backoff *= 2
+    raise last_err
+
+
+def _harvest_final_text(provider, model, system, msgs, max_tokens, temperature, timeout, *, model_key):
+    """One last tool-free POST to harvest verdict text after budget exhaust."""
+    note = (
+        "\n\nBUDGET EXHAUSTED: tool budget is spent. Emit your final JSON verdict now "
+        "using only evidence already gathered. No further tool calls."
+    )
+    harvest_msgs = [dict(m) for m in msgs] + [{"role": "user", "content": note}]
+    url_path, headers, payload = _build_tool_request(
+        provider, model, system, harvest_msgs, [], max_tokens, temperature, beta_context=False
+    )
+    base = _resolve_base_url(provider, model_key)
+    url = f"{base}{url_path}"
+    try:
+        resp, _attempt = _post_llm(
+            url, headers, payload, timeout,
+            emit_prefix="tool_loop_final", model_key=model_key, model=model,
+            prompt_chars=sum(len(str(m.get("content", ""))) for m in harvest_msgs),
+        )
+        text, _calls, stop, ok, _head = _parse_tool_turn_from_response(resp, provider)
+        tin, tout, _sr = _response_telemetry(resp, provider)
+        return text, stop, tin, tout, ok
+    except Exception as e:
+        print(f"WARN: tool-loop final harvest failed: {e}", file=sys.stderr)
+        return "", None, 0, 0, False
+
+
+
+
 def call_llm(
     prompt,
     system=None,
@@ -463,6 +829,7 @@ def call_llm(
     timeout_role="standard",
     raise_on_truncation=True,
 ):
+    """Single-shot chat completion. Every non-tool LLM call flows through here."""
     if timeout is None:
         timeout = llm_timeout(timeout_role)
     provider = resolve_provider(model_key)
@@ -474,7 +841,6 @@ def call_llm(
     url = f"{base_url}{url_path}"
 
     import time
-    import sys
 
     max_retries = 5
     backoff = 2
@@ -482,12 +848,7 @@ def call_llm(
         t0 = time.perf_counter()
         try:
             client = get_client()
-            resp = client.post(
-                url,
-                headers=headers,
-                json=payload,
-                timeout=timeout,
-            )
+            resp = client.post(url, headers=headers, json=payload, timeout=timeout)
             resp.raise_for_status()
             tokens_in, tokens_out, stop_reason = _response_telemetry(resp, provider)
             _emit_llm_event({
@@ -501,8 +862,6 @@ def call_llm(
                 "tokens_out": tokens_out,
                 "duration_ms": round((time.perf_counter() - t0) * 1000),
                 "stop_reason": stop_reason,
-                # What was actually sent: the user prompt plus the system
-                # prompt, which is prepended and can dwarf it.
                 "prompt_chars": len(str(prompt)) + (len(system) if system else 0),
                 "response_chars": len(resp.text),
                 "prompt_head": str(prompt)[:300],
@@ -538,6 +897,299 @@ def call_llm(
             print(f"API call failed (attempt {attempt}/{max_retries}): {e}. Retrying in {backoff}s...", file=sys.stderr)
             time.sleep(backoff)
             backoff *= 2
+
+
+def call_llm_tools(
+    messages,
+    tools,
+    executor,
+    *,
+    system=None,
+    model_key="judge",
+    max_tokens=8000,
+    temperature=0.2,
+    beta_context=True,
+    timeout=None,
+    timeout_role="xlong",
+    budget=None,
+    on_tool_result=None,
+):
+    """Multi-turn tool loop. Budget-capped; never free-running.
+
+    executor(name, input_dict) -> str | dict
+    budget=None uses DEFAULT_TOOL_BUDGET (12). Hosts should pass
+    pipeline_infra.judge_tool_budget() when the named env table matters.
+    Transport retries do not reset the tool budget.
+
+    agent_stop: end_turn | budget_exhausted | max_tokens | error
+    (leads_exhausted is applied by the continuity judge from its verdict schema.)
+
+    Unparseable / gateway-stripped bodies set agent_stop=error (never end_turn).
+    On budget_exhausted the loop attempts one final tool-free harvest POST so
+    the caller still gets verdict text when the model complies.
+    """
+    import time
+
+    if budget is None:
+        budget = DEFAULT_TOOL_BUDGET
+    budget = max(0, int(budget))
+    if timeout is None:
+        timeout = llm_timeout(timeout_role)
+
+    provider = resolve_provider(model_key)
+    model = _resolve_model(provider, model_key)
+    base_url = _resolve_base_url(provider, model_key)
+
+    msgs = [dict(m) for m in (messages or [])]
+    trace = []
+    tool_calls_used = 0
+    tokens_in = 0
+    tokens_out = 0
+    last_text = ""
+    last_stop = None
+    agent_stop = "end_turn"
+    transcript_complete = True
+
+    def _result(harvest=False):
+        nonlocal last_text, last_stop, tokens_in, tokens_out
+        if harvest and agent_stop == "budget_exhausted":
+            h_text, h_stop, tin, tout, ok = _harvest_final_text(
+                provider, model, system, msgs, max_tokens, temperature, timeout,
+                model_key=model_key,
+            )
+            tokens_in += tin or 0
+            tokens_out += tout or 0
+            if ok and h_text:
+                last_text = h_text
+                if h_stop:
+                    last_stop = h_stop
+        tr = list(trace)
+        if not transcript_complete:
+            tr.append({
+                "ts": "meta",
+                "tool": "(transcript)",
+                "input": {"complete": False},
+                "output_chars": 0,
+                "ok": True,
+                "error": "messages_not_re_sendable_after_budget_cut",
+            })
+        return ToolLoopResult(
+            text=last_text,
+            stop_reason=last_stop,
+            agent_stop=agent_stop,
+            tool_calls_used=tool_calls_used,
+            budget=budget,
+            trace=tr,
+            model=model,
+            provider=provider,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            messages=msgs,
+        )
+
+    while True:
+        url_path, headers, payload = _build_tool_request(
+            provider, model, system, msgs, tools, max_tokens, temperature, beta_context
+        )
+        url = f"{base_url}{url_path}"
+        t0 = time.perf_counter()
+        try:
+            resp, attempt = _post_llm(
+                url, headers, payload, timeout,
+                emit_prefix="tool_loop", model_key=model_key, model=model,
+                prompt_chars=(len(system or "") + sum(len(str(m.get("content", ""))) for m in msgs)),
+            )
+        except (httpx.HTTPStatusError, httpx.RequestError) as e:
+            agent_stop = "error"
+            last_stop = "error"
+            trace.append({
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()),
+                "tool": "(transport)",
+                "input": {},
+                "output_chars": 0,
+                "ok": False,
+                "error": str(e)[:200],
+            })
+            print(f"WARN: tool-loop transport failure: {str(e)[:200]}", file=sys.stderr)
+            return _result(harvest=False)
+
+        tin, tout, _sr = _response_telemetry(resp, provider)
+        if tin:
+            tokens_in += tin
+        if tout:
+            tokens_out += tout
+        text, tool_calls, stop_reason, parse_ok, body_head = _parse_tool_turn_from_response(resp, provider)
+        last_text = text if text else last_text
+        last_stop = stop_reason
+        _emit_llm_event({
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
+                  + f".{int(time.perf_counter() * 1000) % 1000:03d}Z",
+            "model_key": model_key,
+            "model": model,
+            "ok": parse_ok,
+            "attempt": attempt,
+            "tokens_in": tin,
+            "tokens_out": tout,
+            "duration_ms": round((time.perf_counter() - t0) * 1000),
+            "stop_reason": stop_reason,
+            "loop": "tool_loop",
+            "tool_calls": len(tool_calls),
+            "tool_calls_used": tool_calls_used,
+            "budget": budget,
+        })
+
+        if not parse_ok:
+            agent_stop = "error"
+            last_stop = "error"
+            trace.append({
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()),
+                "tool": "(parse)",
+                "input": {},
+                "output_chars": 0,
+                "ok": False,
+                "error": f"unparseable_tool_response: {body_head!r}",
+            })
+            print(f"WARN: tool-loop unparseable response body: {body_head!r}", file=sys.stderr)
+            return _result(harvest=False)
+
+        if stop_reason == "max_tokens" and not tool_calls:
+            agent_stop = "max_tokens"
+            break
+
+        if not tool_calls:
+            if stop_reason in ("tool_use", "tool_calls"):
+                agent_stop = "error"
+                last_stop = "error"
+                trace.append({
+                    "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()),
+                    "tool": "(stripped)",
+                    "input": {"stop_reason": stop_reason},
+                    "output_chars": 0,
+                    "ok": False,
+                    "error": "stop_reason_tool_use_but_no_tool_calls_parsed",
+                })
+                print(
+                    f"WARN: tool-loop stop_reason={stop_reason} but no tool calls parsed "
+                    f"(gateway may strip tools): {body_head!r}",
+                    file=sys.stderr,
+                )
+                return _result(harvest=False)
+            agent_stop = "end_turn"
+            break
+
+        if tool_calls_used >= budget:
+            agent_stop = "budget_exhausted"
+            transcript_complete = False
+            trace.append({
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()),
+                "tool": "(none)",
+                "input": {"skipped_tool_calls": [t.get("name") for t in tool_calls]},
+                "output_chars": 0,
+                "ok": False,
+                "error": "budget_exhausted_before_execution",
+            })
+            break
+
+        executed = []
+        skipped = []
+        for tc in tool_calls:
+            if tool_calls_used >= budget:
+                skipped.append(tc)
+                continue
+            tool_calls_used += 1
+            name = tc.get("name") or ""
+            t_in = tc.get("input") or {}
+            try:
+                out = executor(name, t_in)
+                if out is None:
+                    out_s = ""
+                elif isinstance(out, str):
+                    out_s = out
+                else:
+                    out_s = json.dumps(out, ensure_ascii=False)
+                ok = True
+                err = None
+            except Exception as e:
+                out_s = f"ERROR: {e}"
+                ok = False
+                err = str(e)[:200]
+            entry = {
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()),
+                "tool": name,
+                "input": t_in,
+                "output_chars": len(out_s),
+                "ok": ok,
+            }
+            if err:
+                entry["error"] = err
+            trace.append(entry)
+            if on_tool_result is not None:
+                try:
+                    on_tool_result(entry, out_s)
+                except Exception as cb_e:
+                    print(f"WARN: on_tool_result failed: {cb_e}", file=sys.stderr)
+            executed.append({"tc": tc, "out_s": out_s})
+
+        if not executed:
+            agent_stop = "budget_exhausted"
+            transcript_complete = False
+            break
+
+        if provider == "anthropic":
+            assistant_content = []
+            if text:
+                assistant_content.append({"type": "text", "text": text})
+            for ex in executed:
+                tc = ex["tc"]
+                assistant_content.append({
+                    "type": "tool_use",
+                    "id": tc["id"],
+                    "name": tc["name"],
+                    "input": tc.get("input") or {},
+                })
+            msgs.append({"role": "assistant", "content": assistant_content})
+            msgs.append({
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": ex["tc"]["id"],
+                    "content": ex["out_s"],
+                } for ex in executed],
+            })
+        else:
+            assistant_msg = {"role": "assistant", "content": text or None}
+            assistant_msg["tool_calls"] = [{
+                "id": ex["tc"]["id"],
+                "type": "function",
+                "function": {
+                    "name": ex["tc"]["name"],
+                    "arguments": json.dumps(ex["tc"].get("input") or {}),
+                },
+            } for ex in executed]
+            msgs.append(assistant_msg)
+            for ex in executed:
+                msgs.append({
+                    "role": "tool",
+                    "tool_call_id": ex["tc"]["id"],
+                    "content": ex["out_s"],
+                })
+
+        if skipped:
+            transcript_complete = False
+            trace.append({
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()),
+                "tool": "(none)",
+                "input": {"skipped_tool_calls": [t.get("name") for t in skipped]},
+                "output_chars": 0,
+                "ok": False,
+                "error": "budget_exhausted_mid_turn",
+            })
+
+        if tool_calls_used >= budget:
+            agent_stop = "budget_exhausted"
+            break
+
+    return _result(harvest=True)
 
 
 # The healing parser lives in its own module; re-exported here because

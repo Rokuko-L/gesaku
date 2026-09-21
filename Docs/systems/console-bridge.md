@@ -103,8 +103,14 @@ an attacker endpoint — or spawn and kill runs.
 | `GET /api/evals?project=` | eval-log map keyed by eval-log chapter key (`ch01`) |
 | `GET /api/revision?project=` | revision briefs, adversarial cuts, novel reviews |
 | `GET /api/tournament?project=` | synthesized A/B matches from discard/keep pairs |
-| `GET /api/settings` | live `.env` + env-aware gate constants (models, thresholds, defaults, `prices`) |
-| `POST /api/settings` | merge payload into `.env` (baseUrl, optional full apiKey, models, thresholds, heuristics, defaults, prices) and return refreshed settings |
+| `GET /api/settings` | live `.env` + env-aware gate constants (models, thresholds, heuristics, **agentic**, defaults, prices) |
+| `POST /api/settings` | merge payload into `.env` (baseUrl, optional full apiKey, models, thresholds, heuristics, **agentic** → `GESAKU_RETRIEVAL_MODE` / `GESAKU_JUDGE_TOOL_BUDGET` / `GESAKU_REQUIRE_TOOLS`, defaults, prices) and return refreshed settings |
+
+**Settings env ownership:** while the bridge process lives, GET merges
+process env *over* the file — a manual `.env` edit is invisible until
+restart. Settings POST writes the file *and* process env; it is a full-state
+write for keys present in the payload. Agentic tool budget is clamped 0–200
+on read and write (`judge_tool_budget()`).
 
 ## Frontend architecture
 

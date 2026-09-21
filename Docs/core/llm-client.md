@@ -72,6 +72,8 @@ before — four separate "raise the timeout" commits during one production run.
 | Symbol | Purpose |
 |---|---|
 | `call_llm(prompt, system, model_key, max_tokens, temperature, beta_context, timeout, timeout_role, raise_on_truncation)` | POST to the resolved provider endpoint with retries (5 attempts, exponential backoff; 4xx auth errors fail fast). |
+| `call_llm_tools(messages, tools, executor, *, budget=None, ...)` | Multi-turn tool loop. `executor(name, input_dict)` is host-owned. Returns `ToolLoopResult`. Budget default **12** (`DEFAULT_TOOL_BUDGET`); pipeline owner `pipeline_infra.judge_tool_budget()` / `GESAKU_JUDGE_TOOL_BUDGET`. Transport retries do not reset budget. `agent_stop`: `end_turn` \| `budget_exhausted` \| `max_tokens` \| `error`. |
+| `ToolLoopResult` | `text`, `stop_reason`, `agent_stop`, `tool_calls_used`, `budget`, `trace[]`, tokens, provider/model. |
 | `llm_timeout(role)` | Resolve a named budget (`short`/`standard`/`long`/`xlong`), env-overridable. |
 | `resolve_provider(model_key)` | Dialect resolution (see precedence above). |
 | `DEFAULT_MODELS` | Role → model per provider, used when the env var is unset. |
@@ -80,6 +82,27 @@ before — four separate "raise the timeout" commits during one production run.
 | `extract_text_from_response` / `extract_text_and_stop_reason` | Take `dialect=`; handle JSON, SSE, and dict responses for both shapes. |
 | `set_client(client)` | Test seam — install an `httpx.Client` (e.g. `MockTransport`). |
 | `parse_json_response(text) -> dict \| list` | **Healing parser** — see below. |
+| `DEFAULT_TOOL_BUDGET` | **12** — committed default for tool loops. |
+| `call_llm_tools(...)` / `ToolLoopResult` | Multi-turn tool loop + result. See pipeline_infra `judge_tool_budget` / `GESAKU_JUDGE_TOOL_BUDGET`. Preflight: `pipeline.preflight.probe_tool_path`. |
+
+## Tool loop (`call_llm_tools`)
+
+Dual-dialect tool calling on the same client:
+
+| Concern | Anthropic | OpenAI |
+|---|---|---|
+| Schema | `tools[]` name/description/input_schema | `tools[]` type=function |
+| Model calls tool | `tool_use` content blocks, `stop_reason=tool_use` | `message.tool_calls`, `finish_reason=tool_calls` |
+| Host returns result | `tool_result` in next user message | `role: tool` + `tool_call_id` |
+
+Rules:
+
+- `executor(name, input_dict) -> str|dict` is host-owned and read-only at call sites we ship.
+- Budget: `budget=None` → `DEFAULT_TOOL_BUDGET` (12). Pipeline named owner: `pipeline_infra.judge_tool_budget()`.
+- Transport retries do **not** reset the tool budget.
+- When budget is exhausted mid-turn, remaining tool calls are not executed; `agent_stop=budget_exhausted`.
+- `agent_stop` is wire-level (`end_turn`/`budget_exhausted`/`max_tokens`/`error`). Continuity maps `leads_exhausted` from its verdict schema.
+- Offline mock: `MockLLM().install_tools([{\"text\",\"tool_calls\"}, ...])`.
 
 ## The Healing Parser
 

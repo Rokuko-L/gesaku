@@ -141,6 +141,8 @@ TIMEOUT_SHORT = 300      # quick mechanical steps (sanitize, cuts, tex)
 TIMEOUT_STANDARD = 900   # single generation passes (draft, revision)
 TIMEOUT_LONG = 1800      # full-novel evals, chapter evals on slow proxies
 TIMEOUT_XLONG = 3600     # foundation-scale generation blocks
+# Committed default for the continuity open-pass tool loop (not a placeholder).
+JUDGE_TOOL_BUDGET = 12
 
 
 def _env_timeout(name: str, default: int) -> int:
@@ -161,6 +163,17 @@ def timeout_for(stage: str) -> int:
         "xlong": _env_timeout("GESAKU_TIMEOUT_XLONG", TIMEOUT_XLONG),
     }
     return table.get(stage, table["standard"])
+
+
+def judge_tool_budget() -> int:
+    """Named budget for continuity open-pass tool calls (default 12).
+
+    Clamped to 0–200 — same range as the Settings POST validation and the
+    webui slider. Hand-edited .env values outside that range are clamped on
+    read so GET/POST/runtime agree.
+    """
+    val = _env_int("GESAKU_JUDGE_TOOL_BUDGET", JUDGE_TOOL_BUDGET)
+    return max(0, min(200, val))
 
 
 # ---------------------------------------------------------------------------

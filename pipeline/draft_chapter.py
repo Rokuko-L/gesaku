@@ -8,7 +8,8 @@ from pathlib import Path as _Path
 sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
 
 from core.llm import TruncationError, call_llm
-from core.outline import (normalize_chapter_heading, open_debts_for_chapter,
+from core.outline import (extract_chapter_outline, extract_next_chapter_outline,
+                          normalize_chapter_heading, open_debts_for_chapter,
                           parse_premise_beats)
 from core.paths import get_novel_title
 from core.textstats import check_structural_repetition
@@ -21,6 +22,7 @@ from dotenv import load_dotenv
 from core.genre import load_genre, prose_mode_system_block
 from core import paths
 from core import prose
+from core import retrieval
 from core import textstats
 
 load_dotenv()
@@ -54,39 +56,6 @@ def load_file(path):
         return Path(path).read_text(encoding="utf-8")
     except FileNotFoundError:
         return ""
-
-def extract_chapter_outline(outline_text, chapter_num):
-    """Extract a specific chapter's outline entry from the DETAILED section.
-
-    Scoped to '## DETAILED CHAPTER OUTLINES' so the HIGH-LEVEL ROADMAP one-liner
-    (which appears earlier in the file) is never matched instead of the real
-    beats entry. Raises if the entry is missing — a chapter drafted without its
-    outline is worse than no draft at all.
-    """
-    if "## DETAILED CHAPTER OUTLINES" in outline_text:
-        # Scope to the detailed section: a fresh outline's HIGH-LEVEL ROADMAP
-        # one-liner appears first and must never be drafted from instead of the
-        # real beats entry.
-        outline_text = outline_text.split("## DETAILED CHAPTER OUTLINES", 1)[1]
-    # Rebuilt outlines (post-export, "### Ch N:" format) have no roadmap and no
-    # DETAILED header — whole-text search is correct for them.
-    pattern = rf'###\s*\*?\*?\s*(?:Chapter|Ch\.?)\s*\*?\*?\s*{chapter_num}\b.*?(?=###\s*\*?\*?\s*(?:Chapter|Ch\.?)\s*\*?\*?\s*(?:\d+)\b|## Act|## Foreshadowing|$)'
-    match = re.search(pattern, outline_text, re.IGNORECASE | re.DOTALL)
-    if not match:
-        raise ValueError(
-            f"Chapter {chapter_num} outline entry not found in the "
-            f"## DETAILED CHAPTER OUTLINES section — refusing to draft without beats."
-        )
-    return match.group(0).strip()
-
-def extract_next_chapter_outline(outline_text, chapter_num):
-    """Extract the next chapter's outline (just first few lines for continuity)."""
-    try:
-        next_entry = extract_chapter_outline(outline_text, chapter_num + 1)
-    except ValueError:
-        return "(final chapter)"
-    lines = next_entry.split('\n')[:10]
-    return '\n'.join(lines)
 
 def scan_prior_chapter_crutches(chapters_dir, current_chapter, max_phrases=12):
     """Find distinctive phrases used across PRIOR chapters and warn against reuse.
@@ -304,6 +273,23 @@ between beats should be a natural prose transition, not a labeled divider.
                     "Weigh reader-grounding with extra scrutiny — ensure every concept is "
                     "properly introduced on the page.\n"
                 )
+    pack = retrieval.build_retrieval_pack(
+        chapter_num=chapter_num,
+        chapter_outline=chapter_outline,
+        characters_text=characters,
+        world_text=world,
+        canon_view=canon_view,
+        orientation_facts=orientation_facts,
+    )
+    retrieval.write_retrieval_telemetry(
+        pack,
+        chapter_num,
+        paths.get_eval_logs_dir() / f"retrieval_ch{chapter_num:02d}.json",
+    )
+    # Degrade to source bibles if pack is empty; placeholder only when source is empty.
+    world_block = pack.world_block or world or "(world bible unavailable)"
+    characters_block = pack.characters_block or characters or "(character registry unavailable)"
+
     prompt = f"""Write Chapter {chapter_num} of "{title}."
 
 VOICE DEFINITION (follow this exactly):
@@ -319,10 +305,10 @@ PREVIOUS CHAPTER'S ENDING (continue from here):
 {prev_tail}
 
 WORLD BIBLE (reference for worldbuilding details):
-{world}
+{world_block}
 
 CHARACTER REGISTRY (reference for speech patterns and behavior):
-{characters}
+{characters_block}
 """
 
     if canon_view:

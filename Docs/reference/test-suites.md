@@ -28,11 +28,16 @@ E2E layer, not here.
 | `tests/test_plant_coverage.py` | 10 | pre-reveal outline leak regex + action-plant coverage floor |
 | `tests/test_declared_plants.py` | 8 | a declared payoff↔plant link beats token inference, survives unrelated wording, still obeys ordering, and reads back off the outline bullet |
 | `tests/test_mock_llm.py` | 8 | mock harness + validation-retry integration |
+| `tests/test_retrieval.py` | 16 | host-scoped packs: mode, terms, parent→child sections, sealed-pack, fallback flags, named budgets |
+| `tests/test_llm_tools.py` | 16 | tool substrate: dialect payloads, SSE/JSON parse, budget harvest, transport retry, stripped gateway, preflight, named budget=12 |
+| `tests/test_continuity_closed.py` | 15 | closed continuity: trust map, seal policy (no frame noise), overlap structured match, smoke |
+| `tests/test_continuity_open.py` | 6 | open-pass mock loop, budget stop, path escape (sibling prefix), overlap |
 | `tests/test_epub_export.py` | 7 | EPUB build + structural validation (zip layout, OPF/spine/nav/NCX targets, escaping, stable identifier) and the export/CLI wiring |
 | `tests/test_multi_project.py` | 6 | project-dir/state isolation, registry atomicity, path-traversal guard, from-scratch cleanup |
 | `tests/test_run_manager.py` | 6 | bridge liveness: dead pid is not our run, stale `run.json` is dropped, tree-kill guards |
 | `tests/test_utils_stress.py` | 6 | concurrency + traversal edge cases |
 | `tests/test_webui_server.py` | 5 | bridge import smoke, `norm_phase`, `_mask`, `llm_event_view` (+ producer-source guard) |
+| `tests/test_webui_settings_agentic.py` | 5 | Settings `agentic` knobs: GET defaults/env, POST .env write, invalid mode/budget rejected |
 | `tests/test_export_restore.py` | 4 | the export peak restore: extra chapters dropped, plant store restored, orphan store dropped |
 | `tests/test_gatekeepers.py` | 4 | outline gatekeepers execute for real — drift verdicts block/pass, short books skip without LLM calls |
 | `tests/test_path_contamination.py` | 4 | cross-project leakage, root cleanliness, registry placement |

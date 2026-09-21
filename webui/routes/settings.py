@@ -73,12 +73,34 @@ def _write_env_file(updates: dict[str, str]) -> None:
         if k not in seen:
             out.append(f"{k}={v}")
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.parent / (path.name + ".tmp")
-    tmp.write_text("\n".join(out) + "\n", encoding="utf-8")
-    os.replace(tmp, path)
-    # Make subsequent os.getenv / load_dotenv-less readers see new values
+    # Unique tmp name — concurrent Settings commits from two tabs must not
+    # share `.env.tmp` (last replace wins / torn interleave).
+    import tempfile
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write("\n".join(out) + "\n")
+        os.replace(tmp_name, path)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+    # Make subsequent os.getenv / load_dotenv-less readers see new values.
+    # Note: process env wins over the file on GET while the bridge lives —
+    # a manual .env edit is invisible until restart unless Settings writes it.
     for k, v in updates.items():
         os.environ[k] = v
+
+
+def _clamp_tool_budget(raw) -> int:
+    """0–200 inclusive; junk → default 12 (same range as POST + judge_tool_budget)."""
+    try:
+        val = int(float(raw))
+    except (TypeError, ValueError):
+        return pipeline_infra.JUDGE_TOOL_BUDGET
+    return max(0, min(200, val))
 
 
 class SettingsPayload(BaseModel):
@@ -89,6 +111,7 @@ class SettingsPayload(BaseModel):
     heuristics: dict[str, float] | None = None
     defaults: dict[str, str | int] | None = None
     prices: dict[str, float | None] | None = None
+    agentic: dict[str, str | int | None] | None = None
 
 
 def _price(merged: dict, key: str) -> float | None:
@@ -116,6 +139,9 @@ def settings():
         chapter_count = int(float(merged.get("GESAKU_CHAPTERS", "24") or 24))
     except ValueError:
         chapter_count = 24
+    retrieval_mode = (merged.get("GESAKU_RETRIEVAL_MODE") or "dump").strip().lower()
+    if retrieval_mode not in ("dump", "scoped"):
+        retrieval_mode = "dump"
     return {
         "baseUrl": merged.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
         "apiKeyMasked": _mask(merged.get("ANTHROPIC_API_KEY")),
@@ -129,6 +155,14 @@ def settings():
             "maxChapterAttempts": pipeline_infra.max_chapter_attempts(),
             "revisionCycles": pipeline_infra.min_revision_cycles(),
             "plateauDelta": pipeline_infra.plateau_delta(),
+        },
+        "agentic": {
+            "retrievalMode": retrieval_mode,
+            # Clamped on read so GET never reports what POST would reject.
+            "judgeToolBudget": _clamp_tool_budget(pipeline_infra.judge_tool_budget()),
+            # Truthiness set matches preflight: ("1","true","yes") lowercased.
+            "requireTools": (merged.get("GESAKU_REQUIRE_TOOLS") or "").strip().lower()
+                             in ("1", "true", "yes"),
         },
         "prices": {
             "inputPerMTok": _price(merged, "GESAKU_PRICE_INPUT_PER_MTOK"),
@@ -166,12 +200,35 @@ def settings_commit(payload: SettingsPayload):
             updates["GESAKU_MIN_REVISION_CYCLES"] = str(int(payload.heuristics["revisionCycles"]))
         if payload.heuristics.get("plateauDelta") is not None:
             updates["GESAKU_PLATEAU_DELTA"] = str(float(payload.heuristics["plateauDelta"]))
+    if payload.agentic:
+        mode = payload.agentic.get("retrievalMode")
+        if mode is not None:
+            mode_s = str(mode).strip().lower()
+            if mode_s not in ("dump", "scoped"):
+                raise HTTPException(400, "agentic.retrievalMode must be dump|scoped")
+            updates["GESAKU_RETRIEVAL_MODE"] = mode_s
+        budget = payload.agentic.get("judgeToolBudget")
+        if budget is not None:
+            try:
+                b = int(budget)
+            except (TypeError, ValueError):
+                raise HTTPException(400, "agentic.judgeToolBudget must be an integer 0-200")
+            if b < 0 or b > 200:
+                raise HTTPException(400, "agentic.judgeToolBudget must be 0-200")
+            updates["GESAKU_JUDGE_TOOL_BUDGET"] = str(b)
+        req = payload.agentic.get("requireTools")
+        if req is not None:
+            # Same set as GET/preflight: ("1","true","yes"). "on"/"enabled" → false.
+            updates["GESAKU_REQUIRE_TOOLS"] = "1" if str(req).lower() in ("1", "true", "yes") else "0"
     if payload.defaults:
         genre = payload.defaults.get("genre")
         if genre is not None and str(genre).strip():
             updates["GESAKU_GENRE"] = str(genre).strip()
         if payload.defaults.get("chapterCount") is not None:
-            updates["GESAKU_CHAPTERS"] = str(int(payload.defaults["chapterCount"]))
+            try:
+                updates["GESAKU_CHAPTERS"] = str(int(payload.defaults["chapterCount"]))
+            except (TypeError, ValueError):
+                raise HTTPException(400, "defaults.chapterCount must be an integer")
         notes = payload.defaults.get("notes")
         if notes is not None:
             updates["GESAKU_NOTES"] = str(notes)

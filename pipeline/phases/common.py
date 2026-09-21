@@ -85,9 +85,9 @@ def update_canon_from_eval(ch: int, attempt_num: int = None, eval_log_path=None)
 
 
 def on_chapter_kept(ch: int, reextract: bool = False) -> None:
-    """Fail-soft post-keep hook: extract prose-emergent micro-plants.
+    """Fail-soft post-keep hook: micro-plants + closed continuity pass.
 
-    Never blocks drafting/revision. Distinct from outline-tag `state["debts"]`.
+    Never blocks drafting/revision. Continuity is warn-only.
     """
     script = "pipeline/extract_micro_plants.py"
     cmd = f'"{sys.executable}" {script} {ch}'
@@ -99,6 +99,18 @@ def on_chapter_kept(ch: int, reextract: bool = False) -> None:
             step(f"micro-plant extract skipped for ch{ch} (rc={rep.returncode})")
     except Exception as e:
         step(f"micro-plant extract failed for ch{ch}: {e}")
+
+    # Closed continuity pass — deterministic, warn-only, fail-soft.
+    try:
+        cont_cmd = f'"{sys.executable}" pipeline/continuity_closed.py {ch}'
+        cres = run_tool(cont_cmd, timeout=timeout_for("short"), check=False)
+        if cres.returncode != 0:
+            step(f"continuity_closed skipped for ch{ch} (rc={cres.returncode})")
+    except Exception as e:
+        step(f"continuity_closed failed for ch{ch}: {e}")
+
+    # Open continuity judge is CLI/opt-in until Phase 6 budget data — do not
+    # block keep on a live LLM tool loop. Operators run continuity_open.py.
 
 
 CALLBACKS_SIDECAR = "open_callbacks.json"

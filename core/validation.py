@@ -77,6 +77,30 @@ class NovelScoreOutput(BaseModel):
         return v
 
 
+class ContinuityFinding(BaseModel):
+    """One continuity finding (closed or open pass)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    kind: str = "continuity"
+    claim: str
+    chapters: list[int] = Field(default_factory=list)
+    evidence: list[str] = Field(default_factory=list)
+    severity: str = "warn"
+    author_only: bool = False
+    trust: str = "low"
+
+
+class ContinuityVerdict(BaseModel):
+    """Open-pass continuity judge verdict (host appends stop/trace/overlap)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    findings: list[ContinuityFinding] = Field(default_factory=list)
+    leads_exhausted: bool = False
+    notes: str = ""
+
+
 class CompareOutput(BaseModel):
     """Head-to-head chapter comparison verdict."""
 

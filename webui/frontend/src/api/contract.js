@@ -88,6 +88,8 @@
  * @property {{writer: string, judge: string, review: string}} models
  * @property {{foundation: number, chapter: number}} thresholds  // 0-10 gates
  * @property {{maxChapterAttempts: number, revisionCycles: number, plateauDelta: number}} heuristics
+ * @property {{retrievalMode: "dump"|"scoped", judgeToolBudget: number, requireTools: boolean}} agentic
+ *   // GESAKU_RETRIEVAL_MODE, GESAKU_JUDGE_TOOL_BUDGET, GESAKU_REQUIRE_TOOLS
  * @property {{inputPerMTok: number|null, outputPerMTok: number|null}} prices
  *   // USD per 1M tokens (GESAKU_PRICE_*); null = not configured, so telemetry
  *   // omits cost instead of inventing one

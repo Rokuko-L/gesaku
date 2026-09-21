@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 from core.genre import load_genre, prose_mode_system_block
 from core import paths
 from core import prose
+from core import retrieval
 
 load_dotenv()
 
@@ -92,6 +93,30 @@ def main():
     except Exception:
         pass
 
+    chapter_outline = ""
+    try:
+        outline_text = paths.get_outline_path().read_text(encoding="utf-8")
+        from core.outline import extract_chapter_outline
+        chapter_outline = extract_chapter_outline(outline_text, ch_num)
+    except (OSError, ValueError) as e:
+        print(f"WARN: revision could not load chapter {ch_num} outline: {e}", file=sys.stderr)
+        chapter_outline = ""
+
+    pack = retrieval.build_retrieval_pack(
+        chapter_num=ch_num,
+        chapter_outline=chapter_outline,
+        characters_text=characters,
+        world_text=world,
+        extra_texts=[brief, old_text[:2000]],
+    )
+    retrieval.write_retrieval_telemetry(
+        pack,
+        ch_num,
+        paths.get_eval_logs_dir() / f"retrieval_ch{ch_num:02d}.json",
+    )
+    characters_block = pack.characters_block or characters
+    world_block = pack.world_block or world
+
     prompt = f"""Rewrite Chapter {ch_num} of "{title}."
 
 REVISION BRIEF (follow this exactly):
@@ -101,10 +126,10 @@ VOICE DEFINITION:
 {voice}
 
 CHARACTER REGISTRY:
-{characters}
+{characters_block}
 
 WORLD BIBLE:
-{world}
+{world_block}
 
 PREVIOUS CHAPTER ENDING (maintain continuity):
 {prev_tail}

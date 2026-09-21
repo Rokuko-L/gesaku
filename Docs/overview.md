@@ -21,6 +21,8 @@ core/             Shared library — no pipeline-specific logic
 │                   llm.py for the documented entry point
 ├── canon.py        Canon.md parse + chapter-scoped writer/judge views;
 │                   sealed foundation (visible_from) + denylist terms
+├── retrieval.py    Host-scoped draft/revision context packs (GESAKU_RETRIEVAL_MODE)
+├── continuity_text.py  Closed-pass continuity text helpers + A↔tool overlap metric
 ├── plant_hygiene.py Outline plant hygiene: pre-reveal leak regex + action-plant
 │                   coverage floor
 ├── micro_plants.py  Prose-emergent micro-plant store (open_callbacks.json) +
@@ -57,6 +59,8 @@ pipeline/         Orchestration and per-stage tooling
 ├── orientation.py    Outline orientation-fact coverage check
 ├── eval_prompts.py   Judge prompt construction (genre-config driven)
 ├── evaluate.py       Scoring engine: slop + judge + penalties (judge_view)
+├── continuity_closed.py  Deterministic Findings A (no LLM; unequal trust)
+├── continuity_open.py    Bounded tool-using continuity judge (budget=12)
 ├── briefs/           Revision-brief generators, one module per feedback source
 ├── retrofit_reveal.py Post-reveal rewrite of ch 1..R-1 (coverage-gated)
 └── ...               drafting/revision/export stage scripts
@@ -103,8 +107,10 @@ git keep/discard per attempt, results.tsv score log)
 | [pipeline/spec.md](pipeline/spec.md) | Full pipeline process spec (phases, revision loop) |
 | [pipeline/state-and-git.md](pipeline/state-and-git.md) | state.json, registry, git keep/discard plumbing |
 | [pipeline/scoring-engine.md](pipeline/scoring-engine.md) | How chapters get scored (slop + judge + penalties) |
+| [pipeline/continuity-judge.md](pipeline/continuity-judge.md) | Closed Findings A + bounded open-pass judge |
 | [core/path-resolution.md](core/path-resolution.md) | Project isolation, path helpers, atomic writes |
 | [core/llm-client.md](core/llm-client.md) | API client, retries, truncation, JSON repair |
+| [core/context-retrieval.md](core/context-retrieval.md) | Scoped draft/revision context packs |
 | [core/output-validation.md](core/output-validation.md) | Pydantic schemas for LLM output, self-correction retries |
 | [core/prose-guard.md](core/prose-guard.md) | Cutting non-prose model output (notes blocks, mid-chapter derails) |
 | [core/prompt-management.md](core/prompt-management.md) | prompts/ directory and loader conventions |
@@ -112,6 +118,7 @@ git keep/discard per attempt, results.tsv score log)
 | [systems/console-bridge.md](systems/console-bridge.md) | webui FastAPI bridge: endpoints, run instructions, deferred scope |
 | [reference/test-suites.md](reference/test-suites.md) | Offline suite index + how to run |
 | [reference/project-refactor.md](reference/project-refactor.md) | Multi-project refactor record (completed) |
+| [reference/agentic-upgrades.md](reference/agentic-upgrades.md) | Plan of record: scoped retrieval + bounded continuity judge |
 | [reference/archive/](reference/archive/) | Superseded docs (ANTI-PATTERNS.md, program.md, test-infra.md) — historical only |
 
 ## Pipeline Fuel — NOT documentation

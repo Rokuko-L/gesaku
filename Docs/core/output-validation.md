@@ -30,6 +30,7 @@ explanation designed to be pasted into a self-correction retry prompt.
 | `TonalDriftVerdict` | `has_drift: bool` | Outline tonal-drift gate (`gen_outline.verify_tonal_drift`). `has_drift` is **required** — a judge that omits it must fail validation, not silently default to "no drift" (that is exactly how the gatekeeper went quietly dead once before). Accepts string booleans; coerces a lone `violations` string into a list. |
 | `MicroPlantExtract` | none (both lists default) | Post-keep micro-plant extraction; caps `new_plants` at 4. |
 | `HarvestAttributions` | none (`attributions` defaults) | The ledger's attribution pass (`build_outline.attribute_harvests`): each payoff names the earlier chapter whose plant it resolves, or `null`. Every accepted chapter must be one that was actually shown to the model — a hallucinated number must not be written into the outline as a declared source. |
+| `ContinuityVerdict` / `ContinuityFinding` | none (`findings` defaults) | Open-pass continuity judge. Owned by **this module** (`core/validation.py`); `pipeline/continuity_open.py` imports them. `leads_exhausted` is the stop signal; findings carry `author_only` + `trust`. Host appends `agent_stop`, `overlap_a_tool_targets`, trace. |
 
 ## Where It's Wired
 
