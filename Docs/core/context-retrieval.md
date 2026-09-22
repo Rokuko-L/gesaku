@@ -52,8 +52,11 @@ RetrievalPack
 | `pipeline/draft_chapter.py` | draft prompt world/character blocks |
 | `pipeline/gen_revision.py` | revision prompt blocks (outline + brief + old draft head) |
 
-Telemetry: `projects/<name>/eval_logs/retrieval_chNN.json` (atomic, fail-soft with stderr WARN).
-`llm_events.jsonl` still records `prompt_chars` for size deltas.
+Telemetry: `projects/<name>/eval_logs/retrieval_chNN_telemetry.json` (atomic, fail-soft with stderr WARN).
+The `_telemetry` suffix is deliberate: eval-score lookups glob `*_chNN.json`
+and take the last sorted match, so a bare `retrieval_chNN.json` would shadow
+the real eval sidecar. `llm_events.jsonl` still records `prompt_chars` for
+size deltas.
 
 ## Invariants
 

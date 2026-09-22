@@ -15,6 +15,7 @@ import sys
 from pathlib import Path as _Path
 sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
 
+from core import _utf8  # noqa: F401  (forces UTF-8 stdout/locale)
 from core.llm import call_llm, extract_text_from_response, get_max_tokens_with_thinking, TruncationError
 from core import paths
 import os
@@ -240,7 +241,7 @@ def cmd_review(args):
     
     # Save human-readable copy
     if args.output:
-        Path(args.output).write_text(review_text)
+        Path(args.output).write_text(review_text, encoding="utf-8")
         print(f"Human-readable copy: {args.output}", file=sys.stderr)
     
     # Print summary

@@ -111,7 +111,7 @@ class SettingsPayload(BaseModel):
     heuristics: dict[str, float] | None = None
     defaults: dict[str, str | int] | None = None
     prices: dict[str, float | None] | None = None
-    agentic: dict[str, str | int | None] | None = None
+    agentic: dict[str, str | int | float | None] | None = None
 
 
 def _price(merged: dict, key: str) -> float | None:
@@ -209,6 +209,10 @@ def settings_commit(payload: SettingsPayload):
             updates["GESAKU_RETRIEVAL_MODE"] = mode_s
         budget = payload.agentic.get("judgeToolBudget")
         if budget is not None:
+            # A float is rejected, not truncated: 12.7 -> 12 would silently
+            # change an operator's intent (and 0.5 -> 0 disables the tool loop).
+            if isinstance(budget, float) and not budget.is_integer():
+                raise HTTPException(400, "agentic.judgeToolBudget must be an integer 0-200")
             try:
                 b = int(budget)
             except (TypeError, ValueError):

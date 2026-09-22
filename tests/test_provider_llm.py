@@ -21,6 +21,7 @@ import httpx
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core import llm
+from core import llm_base
 
 
 def _mock_client(handler):
@@ -59,7 +60,7 @@ def _pinned_provider_env(provider, **overrides):
 
 
 class EnvIsolationTestBase(unittest.TestCase):
-    """Snapshot/restore LLM env + llm._client around every test.
+    """Snapshot/restore LLM env + llm_base._client around every test.
 
     Minimal discover-order guard: a case that forgets to restore (or a
     module that mutates env at import time) cannot leak into the next case.
@@ -68,7 +69,7 @@ class EnvIsolationTestBase(unittest.TestCase):
     def setUp(self):
         super().setUp()
         self._saved_llm_env = {k: os.environ.get(k) for k in _LLM_ENV_KEYS}
-        self._saved_client = llm._client
+        self._saved_client = llm_base._client
         self.addCleanup(self._restore_isolation)
 
     def _restore_isolation(self):
@@ -304,6 +305,92 @@ class ExtraHeadersTest(EnvIsolationTestBase):
         with patch.dict(os.environ, {"GESAKU_EXTRA_HEADERS": "{not json"}):
             with self.assertRaises(llm.ProviderError):
                 llm._load_extra_headers()
+
+
+_EMPTY_SSE = (
+    'event: message_start\n'
+    'data: {"type":"message_start","message":{"id":"x","role":"assistant",'
+    '"content":[],"usage":{"input_tokens":0,"output_tokens":0}}}\n\n'
+)
+_TEXT_SSE = (
+    'event: content_block_start\n'
+    'data: {"type":"content_block_start","index":0,'
+    '"content_block":{"type":"text","text":""}}\n\n'
+    'event: content_block_delta\n'
+    'data: {"type":"content_block_delta","index":0,'
+    '"delta":{"type":"text_delta","text":"hello"}}\n\n'
+    'event: message_delta\n'
+    'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},'
+    '"usage":{"input_tokens":5,"output_tokens":2}}\n\n'
+)
+
+
+class EmptyResponseRetryTest(EnvIsolationTestBase):
+    """A 200 whose body never opened a text block is a retryable transport fault.
+
+    Live combo gateways do this: the upstream streams thinking deltas and then
+    closes without ever emitting text. Recorded as a success, the empty string
+    fails the caller's validation and can kill a whole pipeline step.
+    """
+
+    def _run(self, handler):
+        env = _pinned_provider_env("anthropic", ANTHROPIC_API_KEY="k")
+        with patch.dict(os.environ, env, clear=False):
+            os.environ.pop("GESAKU_PROVIDER", None)
+            original = llm.get_client()
+            llm.set_client(_mock_client(handler))
+            with patch("time.sleep"):  # keep the backoff out of the test
+                try:
+                    return llm.call_llm("p", model_key="writer", timeout=5)
+                finally:
+                    llm.set_client(original)
+
+    def test_empty_then_good_is_retried(self):
+        calls = []
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(1)
+            body = _EMPTY_SSE if len(calls) == 1 else _TEXT_SSE
+            return httpx.Response(200, headers={"content-type": "text/event-stream"}, text=body)
+        self.assertEqual(self._run(handler), "hello")
+        self.assertEqual(len(calls), 2)
+
+    def test_all_empty_raises_after_retries(self):
+        calls = []
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(1)
+            return httpx.Response(200, headers={"content-type": "text/event-stream"}, text=_EMPTY_SSE)
+        with self.assertRaises(llm.EmptyResponseError):
+            self._run(handler)
+        self.assertEqual(len(calls), llm.LLM_MAX_TRANSPORT_ATTEMPTS)
+
+    def test_empty_with_end_turn_is_also_retried(self):
+        # Live combos also return an empty body WITH a normal stop_reason; that
+        # is still a no-op generation, not a successful empty answer.
+        calls = []
+        empty_but_done = (
+            'event: message_delta\n'
+            'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},'
+            '"usage":{"input_tokens":5,"output_tokens":0}}\n\n'
+        )
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(1)
+            body = empty_but_done if len(calls) == 1 else _TEXT_SSE
+            return httpx.Response(200, headers={"content-type": "text/event-stream"}, text=body)
+        self.assertEqual(self._run(handler), "hello")
+        self.assertEqual(len(calls), 2)
+
+    def test_truncated_empty_keeps_truncation_semantics(self):
+        # A max_tokens stop is NOT an empty-response fault: it must still raise
+        # TruncationError so callers can retry with a bigger budget.
+        sse = (
+            'event: message_delta\n'
+            'data: {"type":"message_delta","delta":{"stop_reason":"max_tokens"},'
+            '"usage":{"input_tokens":5,"output_tokens":0}}\n\n'
+        )
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, headers={"content-type": "text/event-stream"}, text=sse)
+        with self.assertRaises(llm.TruncationError):
+            self._run(handler)
 
 
 if __name__ == "__main__":

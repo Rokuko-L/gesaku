@@ -86,6 +86,30 @@ def save_json_atomic(data, path: Path):
         raise e
 
 
+def retire_shadowing_sidecar(path: Path) -> None:
+    """Delete a pre-rename sidecar that shadows eval-score lookups.
+
+    Eval-score lookups glob `*_chNN.json` and take the last sorted match. Two
+    sidecars used to live under that exact name and shadowed the real eval file
+    for any project written before their renames: `retrieval_chNN.json` (now
+    `_telemetry`) and `continuity_chNN.json` (the open pass, now `_open`).
+    Passing the new path removes the old one, which is telemetry we own.
+    """
+    stem = path.name
+    for suffix in ("_telemetry.json", "_open.json", "_closed.json"):
+        if stem.endswith(suffix):
+            stem = stem[: -len(suffix)]
+            break
+    legacy = path.with_name(f"{stem}.json")
+    if legacy.name == path.name or not legacy.exists():
+        return
+    try:
+        legacy.unlink()
+        print(f"WARN: removed legacy sidecar {legacy.name}", file=sys.stderr)
+    except OSError as e:
+        print(f"WARN: could not remove legacy sidecar {legacy.name}: {e}", file=sys.stderr)
+
+
 def save_registry(data: dict, path: Path):
     """Atomically write registry JSON (thin wrapper over save_json_atomic)."""
     save_json_atomic(data, path)

@@ -362,7 +362,10 @@ _PLANT_TAG_RE = re.compile(
     # commas and dashes. It used to be `[^'"\]]+`, which silently dropped every
     # tag whose description contained a possessive — "Baal II's soul",
     # "Lily's hands" — hiding 23 of v4's 42 plant tags.
-    r"""\[(Plant|Harvest)\s*:\s*([A-Za-z0-9_\-]+)\s*[-:]\s*([^\[\]]+?)\s*\]""",
+    # Slugs accept apostrophes (curly and straight) and dots: real outlines use
+    # them ("the_king's_migraine", "slug.with.dots"), and a narrower class made
+    # the leak scanner blind to exactly those tags.
+    r"""\[(Plant|Harvest)\s*:\s*([^\s:\[\]]+)\s*[-:]\s*([^\[\]]+?)\s*\]""",
     re.IGNORECASE,
 )
 
@@ -409,6 +412,16 @@ def chapter_sections(outline_text: str) -> dict:
     if current_ch is not None:
         sections[current_ch] = "\n".join(current_lines)
     return sections
+
+
+def scan_plant_tag_marks(text: str) -> list[str]:
+    """Verbatim `[Plant: …]` / `[Harvest: …]` marks in arbitrary text.
+
+    For leak checks (prose must never contain planning tags). Uses the same
+    `_PLANT_TAG_RE` owner as the parser, so a scanner cannot drift from the
+    format it is looking for.
+    """
+    return [m.group(0) for m in _PLANT_TAG_RE.finditer(text or "")]
 
 
 def parse_plant_tags(outline_text: str) -> tuple[list[dict], list[dict]]:

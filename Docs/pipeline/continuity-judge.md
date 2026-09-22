@@ -14,7 +14,7 @@ Runs fail-soft from `on_chapter_kept`.
 | `unknown_entity` | **low** | Noisy by design — warn-only recall list |
 | `location` | low | Place-like tokens missing from world bible |
 | `canon` | medium | Conservative negation vs public canon; false negatives OK |
-| `plant` | medium | `[Plant:]` / `[Harvest:]` tags leaked into prose |
+| `plant` | medium | `[Plant:]` / `[Harvest:]` tags leaked into prose — scanned through `core.outline.scan_plant_tag_marks` (the tag-format owner), not a local regex |
 
 **`severity: structural` is reserved and unused by gates today.**
 
@@ -35,7 +35,9 @@ Tool-using judge via `core.llm.call_llm_tools`. Models live in
   - unparseable / stripped / transport → `error`; CLI still writes a sidecar
 - Sealed-derived findings are `author_only`; `merged` is author-scope audit
   data, **not writer fuel**
-- Output: `eval_logs/continuity_chNN.json` (atomic)
+- Output: `eval_logs/continuity_chNN_open.json` (atomic). The `_open` suffix
+  keeps it out of the `*_chNN.json` eval-score glob; a bare `continuity_chNN.json`
+  would shadow the real eval sidecar the same way the pre-rename retrieval file did.
 - Hook: closed pass on keep; **open pass CLI-only until Phase 6**
 
 ### Stability probe

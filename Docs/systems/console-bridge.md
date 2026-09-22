@@ -110,7 +110,8 @@ an attacker endpoint — or spawn and kill runs.
 process env *over* the file — a manual `.env` edit is invisible until
 restart. Settings POST writes the file *and* process env; it is a full-state
 write for keys present in the payload. Agentic tool budget is clamped 0–200
-on read and write (`judge_tool_budget()`).
+on read (`judge_tool_budget()`); on write an out-of-range value is
+**rejected** with 400 rather than clamped.
 
 ## Frontend architecture
 

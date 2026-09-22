@@ -233,10 +233,12 @@ def _tool_structured_fields(step: dict) -> tuple[set[int], str]:
 
 
 def overlap_a_tool_targets(findings_a: list[dict], trace: list[dict]) -> float:
-    """Fraction of tool calls whose structured inputs touch Findings A.
+    """Fraction of real tool calls whose structured inputs touch Findings A.
 
     Prompt exclusion is not enforced — this post-hoc metric shows budget spent
-    re-investigating A. Matches on:
+    re-investigating A. Meta steps ((none)/(parse)/(transport)/(stripped)/
+    (transcript)) are excluded from the denominator: they are housekeeping, not
+    tool calls. Matches on:
       - chapter id equality (not substring; ch3 must not match 13)
       - distinctive claim/evidence tokens (len>=4, stopwords dropped) in query
     Non-blocking diagnostic. Does not use JSON-dump substring matching.
@@ -262,12 +264,9 @@ def overlap_a_tool_targets(findings_a: list[dict], trace: list[dict]) -> float:
                 hit = True
         if hit:
             hits += 1
-    return round(hits / max(len(trace), 1), 3)
+    real_tools = sum(
+        1 for step in trace
+        if (step.get("tool") or "") not in ("(none)", "(parse)", "(transport)", "(stripped)", "(transcript)")
+    )
+    return round(hits / max(real_tools, 1), 3)
 
-
-def json_dumps_safe(obj) -> str:
-    try:
-        import json
-        return json.dumps(obj, ensure_ascii=False, default=str)
-    except Exception:
-        return str(obj)

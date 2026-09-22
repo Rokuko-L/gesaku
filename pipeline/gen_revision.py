@@ -112,7 +112,7 @@ def main():
     retrieval.write_retrieval_telemetry(
         pack,
         ch_num,
-        paths.get_eval_logs_dir() / f"retrieval_ch{ch_num:02d}.json",
+        paths.get_eval_logs_dir() / f"retrieval_ch{ch_num:02d}_telemetry.json",
     )
     characters_block = pack.characters_block or characters
     world_block = pack.world_block or world
@@ -165,7 +165,11 @@ Write the FULL revised chapter now."""
         sys.exit(3)
     if prose.cut_reason(body) == "derail":
         print("NON_PROSE_DERAIL: revision interrupted by model output", file=sys.stderr)
-    body = prose.strip_non_prose(body).rstrip() + "\n"
+    body = prose.strip_non_prose(body)
+    body, removed = prose.strip_artifacts(body)
+    if removed:
+        print(f"ARTIFACTS: {len(removed)} removal(s): {removed}", file=sys.stderr)
+    body = body.rstrip() + "\n"
     out_path.write_text(body, encoding="utf-8")
     print(f"Saved to {out_path}", file=sys.stderr)
     print(f"Word count: {len(body.split())}", file=sys.stderr)

@@ -60,8 +60,18 @@ def md_to_latex(body):
             # Bold before italic (order matters for regex)
             s = re.sub(r'\*\*([^*]+)\*\*', r'\\textbf{\1}', s)
             s = re.sub(r'(?<!\*)\*([^*]+)\*(?!\*)', r'\\textit{\1}', s)
-            # Em dash: replace with comma-space (reads more naturally than a raw dash)
-            s = s.replace('\u2014', ', ')
+            # Same em dash treatment as the manuscript
+            # (pipeline/phases/export.py::_export_clean): a dash preceded by
+            # whitespace is a pause and becomes a comma, with the cleanups that
+            # collapse the runs the replacement leaves. Every other dash is a
+            # dialogue interrupt and becomes LaTeX's --- : pdflatex+T1 has no
+            # glyph for a raw U+2014, so none may survive this function.
+            if '\u2014' in s:
+                s = re.sub(r'(?<=\s)\u2014[ \t]*(?=\S)', ', ', s)
+                s = re.sub(r' {2,}', ' ', s)
+                s = re.sub(r' ?,\s*,', ',', s)
+                s = re.sub(r'(?<=\S)\s+,', ',', s)
+                s = s.replace('\u2014', '---')
             s = s.replace('\u2013', '--')
             s = s.replace('\u201c', '``')
             s = s.replace('\u201d', "''")
@@ -159,6 +169,9 @@ for path in chapter_files:
     # like v4's ch_20 ships its reasoning dump into the typeset book even
     # though manuscript.md was cleaned.
     text = prose.strip_non_prose(text)
+    text, removed = prose.strip_artifacts(text)
+    if removed:
+        print(f"  ARTIFACTS {path.name}: {removed}")
     if prose.looks_like_non_prose(text):
         print(f"WARNING: {path.name} has only {prose.prose_words(text)} words of "
               f"prose — it needs a redraft, not a typeset")

@@ -15,8 +15,16 @@ improvements (modify → evaluate → keep/discard).
 core/             Shared library — no pipeline-specific logic
 ├── paths.py        Project root/state resolution, folder+file path helpers
 │                   (incl. per-artifact sidecars), prompt loader, atomic JSON
-├── llm.py          Multi-provider client (call_llm: anthropic + openai
-│                   dialects, any compat endpoint) + response extraction
+├── llm.py          Single-shot client (call_llm) + response extraction.
+│                   Re-imports the base and tool-loop names so core.llm stays
+│                   the documented entry point
+├── llm_base.py     Client base: config tables, timeouts, provider/model
+│                   resolution, HTTP client, llm_events telemetry, SSE/JSON
+│                   response parsing. Imports no sibling llm module
+├── llm_toolwire.py Dialect wire layer for tools: schemas, request building,
+│                   JSON/SSE tool-turn parsing (streamed fragment accumulation)
+├── llm_tools.py    Bounded multi-turn tool loop (call_llm_tools / ToolLoopResult):
+│                   budget stop + harvest, transcript assembly, trace
 ├── json_repair.py  Healing JSON parser (parse_json_response), re-exported by
 │                   llm.py for the documented entry point
 ├── canon.py        Canon.md parse + chapter-scoped writer/judge views;
@@ -83,7 +91,7 @@ webui/            Operator console: server.py (FastAPI bridge, port 8600)
 
 Root entry points: run_pipeline.py (orchestrator CLI — sequences phases, owns
 the CLI), cli.py (`uv run gesaku` operator console), webui/server.py (FastAPI
-bridge), install_fonts.py, _utf8.py (UTF-8 enforcement shim)
+bridge), install_fonts.py, core/_utf8.py (UTF-8 enforcement shim)
 ```
 
 **Data flow:**

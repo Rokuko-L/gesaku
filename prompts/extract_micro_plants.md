@@ -13,6 +13,8 @@ TASK:
    small staged situation. It must be dramatized on the page, not merely
    mentioned in passing. Ordinary props (a cup, a door) are NOT candidates.
    Prefer details with sensory weight or stakes. Return [] if nothing qualifies.
+   One sentence, at most 280 characters — name the detail and the one concrete
+   way it could come back, nothing more.
 2. If any OPEN CALLBACK above is paid off in this chapter with a changed
    meaning or use (not a name-drop), list its id under harvested_ids.
    Do not mark something harvested just because the object appears again.

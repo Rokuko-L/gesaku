@@ -16,8 +16,8 @@ import re
 
 from core import canon as canon_mod
 from core import continuity_text
+from core import outline as outline_mod
 from core import paths
-from core.outline import parse_plant_tags
 
 
 def _load(path) -> str:
@@ -34,7 +34,6 @@ def run_closed_pass(chapter_num: int) -> dict:
 
     characters_text = _load(paths.get_characters_path())
     world_text = _load(paths.get_world_path())
-    outline_text = _load(paths.get_outline_path())
     canon_text = _load(paths.get_canon_path())
 
     prior_parts = []
@@ -50,6 +49,9 @@ def run_closed_pass(chapter_num: int) -> dict:
         sealed_facts = [f.fact for f in parsed.sealed_facts()]
     else:
         canon_view, sealed_terms, reveal, sealed_facts = "", [], None, []
+    # Reported size of the denylist as loaded; the scan below may zero its local
+    # copy, but the sidecar must not claim fewer terms were loaded than existed.
+    sealed_terms_loaded = len(sealed_terms)
 
     findings: list[dict] = []
     seq = 0
@@ -76,6 +78,9 @@ def run_closed_pass(chapter_num: int) -> dict:
     ):
         leak["chapters"] = [chapter_num]
         add(leak)
+    # What the scan actually consulted (0 when there is no sealed foundation,
+    # even though the denylist itself was non-empty — both facts are reported).
+    sealed_terms_checked = len(sealed_terms) + len(sealed_phrases)
 
     # 2. Unknown entities (LOW trust — noisy by design)
     known_blob = continuity_text.known_entity_blob(
@@ -136,10 +141,10 @@ def run_closed_pass(chapter_num: int) -> dict:
                         evidence=[neg.group(0)[:120], bullet[:120]],
                     ))
 
-    # 5. Plant/harvest tags leaked into prose (core.outline owns the format)
+    # 5. Plant/harvest tags leaked into prose. Scanning goes through the tag
+    # format owner (core.outline) so the pattern cannot drift from the parser's.
     try:
-        parse_plant_tags(outline_text) if outline_text else None
-        for mark in re.findall(r"\[(?:Plant|Harvest):[^\]]+\]", chapter_text):
+        for mark in outline_mod.scan_plant_tag_marks(chapter_text):
             add(continuity_text.make_finding(
                 kind="plant",
                 claim=f"Planning tag leaked into chapter prose: {mark}",
@@ -147,7 +152,6 @@ def run_closed_pass(chapter_num: int) -> dict:
                 evidence=[mark],
             ))
     except Exception as e:
-        import sys
         print(f"WARN: continuity plant-tag scan failed for ch{chapter_num}: {e}", file=sys.stderr)
 
     result = {
@@ -159,7 +163,8 @@ def run_closed_pass(chapter_num: int) -> dict:
             "by gates today — everything behaves as warn."
         ),
         "reveal_chapter": reveal,
-        "sealed_terms_checked": len(sealed_terms),
+        "sealed_terms_loaded": sealed_terms_loaded,
+        "sealed_terms_checked": sealed_terms_checked,
     }
     return result
 

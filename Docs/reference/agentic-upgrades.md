@@ -146,7 +146,7 @@ Keep `{placeholder}` conventions (`Docs/core/prompt-management.md`).
 ### Telemetry
 
 Append retrieval stats to the chapter's eval sidecar or a small
-`projects/<name>/eval_logs/retrieval_chNN.json`:
+`projects/<name>/eval_logs/retrieval_chNN_telemetry.json` (renamed at ship time — see Deferred):
 
 `{mode, query_terms, character_hits, world_hits, prompt_chars_before, prompt_chars_after}`
 
@@ -610,6 +610,10 @@ subagent review of the phase diff. Fix or defer findings in this doc.
 | 4 open | general-5 | **Fixed.** Models → `core/validation.py`; path guard; non-dict JSON; error sidecars; author_only seals; open-pass CLI-only until Phase 6. |
 | 5 webui | general-6 | **Fixed.** Duplicate Settings.jsx `agentic` key; budget clamp 0–200 on GET/POST/`judge_tool_budget()`; non-numeric budget → 400; unique `.env` tmp; console-bridge.md agentic rows; more boundary tests. |
 | 6 run | general-7 | **Partial / honest.** Proxy **is up** (docs were wrong — fixed in AGENTS). Open-pass smoke is MockLLM — **not** live validation. Entity regex `\s+` newline bug + stopwords fixed; evidence[] via `make_finding`. Telemetry `prompt_chars_*` = null until draft-time join; plan schema amended. Recommended default stays `dump`; `.env` `scoped` is verification override only. Live open-pass still unvalidated. |
+| 7 defects | four parallel general reviewers (llm / retrieval+continuity / wiring+webui / doc-drift) | **Fixed.** Streamed tool arguments were silently lost (Anthropic `input_json_delta` ignored; OpenAI fragments not merged by index) — both now accumulate. Harvest no longer appends a consecutive `user` turn. Retrieval telemetry renamed `retrieval_chNN_telemetry.json` (a bare `retrieval_chNN.json` shadowed `*_chNN.json` eval-score lookups). `core/retrieval.py` regex newline bug + name-dropping denylist fixed. Tool loop moved out of `core/llm.py`. Overlap denominator counts real tool calls; plant-tag scan uses the tag-format owner; error sidecar key set matches the success path; harvest emits telemetry and `prompt_chars`; preflight omits empty key headers; counts/docs corrected. |
+| 7b verification | two fresh general reviewers on the fix diff | **Fixed.** The fix introduced a circular import (tool modules imported back into `llm.py`): the client base now lives in `core/llm_base.py`; `llm.py` is 175 lines and every import order works. Multi-tool stream tests added — no test could previously catch two tool calls merging, and the no-`index` fallback did merge them. `continuity_open` sidecar renamed `_open.json` (it shadowed eval lookups the same way); `paths.retire_shadowing_sidecar` deletes the pre-rename file on the next write for both producers. Plant tags whose slug contains an apostrophe/dot are scanned again (84/84 on the real outline). Retrieval now filters multi-word schema labels instead of real names. `sealed_terms_loaded` vs `sealed_terms_checked` reported separately; fractional tool budget → 400; retry policy named once in `llm_base`. |
+| 7c re-verification | fresh general reviewer | **Holds (one gap fixed).** Import orders, two-tool separation, index-less fallbacks, tag recall, sidecar names, loaded/checked split, fractional budget, named retries, full gates: all verified. Gap: the pre-existing `continuity_chNN.json` artifact still shadowed `_latest_chapter_score` on the smoke project — `retire_shadowing_sidecar` now covers it (tested for both renames). |
+| 8 live run (v5, 24ch) | real writer_combo run + wire probes | **Fixed.** A 200 whose body never opened a text block (combo upstream streaming thinking only) was recorded as a *successful empty generation*; the empty string then failed the caller's validation and killed the step (`gen_genre_framework`, then `gen_characters`). `call_llm` now raises `EmptyResponseError` for a 200 with no text and no stop_reason and retries it like a transport fault (`LLM_MAX_TRANSPORT_ATTEMPTS`); `max_tokens` keeps its `TruncationError` path. Upstream cause was `ling-3.0-flash-fin-free` in the pool (removed by the operator). Also learned: this proxy runs 50-500s per large generation, so `GESAKU_TIMEOUT_STANDARD=3600` / `GESAKU_TIMEOUT_LONG=7200` are required for a full run. |
 
 **Deferred:**
 - Phase 4a automatic open-pass on keep — **still CLI-only**; live open-pass not validated (tool/model path flaky).
@@ -617,6 +621,13 @@ subagent review of the phase diff. Fix or defer findings in this doc.
 - Judge JSON self-correction retry on open-pass schema failure — warn-only empty B for now.
 - Push 6 “default flip” — **not done**; keep recommended `dump` until live A/B.
 - Shipped JSON key is `wire_stop_reason` (plan host field name: `stop_reason`).
+- Retrieval telemetry sidecar is `retrieval_chNN_telemetry.json` (the plan's bare
+  `retrieval_chNN.json` collided with the `*_chNN.json` eval-score glob).
+- Tool loop ships in `core/llm_tools.py` (loop) + `core/llm_toolwire.py` (wire),
+  over a shared `core/llm_base.py` client layer; `core/llm.py` (175 lines)
+  re-imports them. The plan's `core/paths.py` change was not needed.
+- Frontend mirrors the default tool budget (`?? 12`) instead of reading it from the
+  backend; the clamp range 0–200 is still declared in more than one place.
 
 **Shipped telemetry schema (authoritative):**
 `RetrievalPack.to_telemetry()` → mode, query_terms, character_hits, world_hits,

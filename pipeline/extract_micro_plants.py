@@ -19,7 +19,7 @@ load_dotenv()
 from core import llm, paths, textstats  # noqa: E402
 from core import micro_plants as mp  # noqa: E402
 from core.llm import call_llm  # noqa: E402
-from core.validation import MicroPlantExtract, OutputValidationError, parse_validated  # noqa: E402
+from core.validation import MicroPlantExtract, parse_validated  # noqa: E402
 
 
 def _excerpt(chapter_text: str) -> str:
@@ -80,11 +80,37 @@ def extract_for_chapter(chapter: int, reextract: bool = False) -> int:
         print(f"micro-plants: giving up on ch{chapter:02d}: {last_err}", file=sys.stderr)
         return 0
 
-    try:
-        parsed = parse_validated(MicroPlantExtract, raw, context=f"micro-plants ch{chapter}")
-    except OutputValidationError as e:
-        print(f"micro-plants: schema fail ch{chapter:02d}: {e.feedback}", file=sys.stderr)
-        return 0
+    for attempt in range(1, 4):
+        try:
+            parsed = parse_validated(MicroPlantExtract, raw, context=f"micro-plants ch{chapter}")
+            break
+        except ValueError as e:
+            # OutputValidationError carries .feedback; a JSONDecodeError from a
+            # response the repair pass could not heal carries only its message.
+            # Both are fail-soft here, but the second deserves its own retry
+            # instead of crashing the subprocess on an uncaught decode error.
+            feedback = getattr(e, "feedback", str(e))
+            print(f"micro-plants: schema fail ch{chapter:02d} attempt {attempt}/3: {feedback}",
+                  file=sys.stderr)
+            if attempt == 3:
+                return 0
+            prompt += (
+                f"\n\nERROR ON ATTEMPT {attempt}: {feedback}\n"
+                "Return ONLY the JSON object, and keep each text value under "
+                "280 characters."
+            )
+            try:
+                raw = call_llm(
+                    prompt=prompt,
+                    system="You extract concrete callback candidates from novel chapters. JSON only.",
+                    model_key="judge",
+                    max_tokens=800,
+                    temperature=0.1,
+                    timeout_role="short",
+                )
+            except Exception as e:
+                print(f"micro-plants: self-correction call failed: {e}", file=sys.stderr)
+                return 0
 
     data = mp.mark_harvested(data, chapter, parsed.harvested_ids)
     data = mp.add_plants(

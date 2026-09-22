@@ -15,7 +15,7 @@ import sys
 from core import novel_tex as novel_tex_module
 from core import paths
 from core import prose
-from core.llm import call_llm
+from core.llm import call_llm, llm_timeout
 
 from pipeline.pipeline_infra import (
     _chapter_num_key, banner, best_novel_checkpoint, count_chapter_files,
@@ -28,6 +28,16 @@ from pipeline.pipeline_infra import (
 # ---------------------------------------------------------------------------
 # PHASE 4 — EXPORT
 # ---------------------------------------------------------------------------
+
+
+def _tex_generation_timeout() -> int:
+    """Budget for one LLM LaTeX pass, derived from the call budgets it wraps.
+
+    `gen_novel_tex.py` makes its own writer/judge calls, so the subprocess cap
+    has to exceed the per-call budget with room for the prompt build and the
+    retry — not be a literal that happens to be shorter than the call.
+    """
+    return max(timeout_for("long"), 2 * llm_timeout("standard"))
 
 
 
@@ -112,17 +122,41 @@ def run_export(state: dict, skip_epub: bool = False) -> dict:
                timeout=max(timeout_for("short"),
                            -(-n_ch_arc // 4) * timeout_for("short") // 2 + 60))
 
-    # 3. Pre-export cleanup: strip AI-tell formatting patterns for the EXPORTED
-    #    deliverables only — the canonical chapter files are never mutated.
-    #    (build_tex.py applies the same em-dash treatment for the PDF.)
-    _EM_DASH_RE = re.compile(r'\u2014')                          # unicode em dash
+    # 3. Pre-export cleanup for the EXPORTED deliverables only — the canonical
+    #    chapter files are never mutated. Since drafts are artifact-stripped at
+    #    save time (core.prose.strip_artifacts), this pass only matters for
+    #    projects drafted before that guard existed; it keeps them shippable.
+    #
+    #    Em dash handling is deliberately spread over four steps, and the order
+    #    matters. A dash with whitespace on BOTH sides is a pause and becomes a
+    #    comma; a dash with no space before it is a dialogue interrupt
+    #    ("Catch me if you—") and keeps its dash. The lookbehind cannot consume
+    #    the leading space, so `_SPACE_COMMA_RE` is what stops `Wait — no`
+    #    shipping as `Wait , no`; the other two clean the runs the replacement
+    #    leaves. History: a blanket `\u2014` → `", "` turned interrupts into
+    #    commas, and a spaced-only lookaround still emitted `Wait ,  no`.
+    _EM_DASH_RE = re.compile(r"(?<=\s)\u2014[ \t]*(?=\S)")
+    _DOUBLE_SPACE_RE = re.compile(r" {2,}")
+    _DOUBLE_COMMA_RE = re.compile(r" ?,\s*,")
+    _SPACE_COMMA_RE = re.compile(r"(?<=\S)\s+,")
     _BOLD_RE    = re.compile(r'\*\*(.+?)\*\*')                   # **bold** → plain
+    _removed_chapters: list[str] = []
 
-    def _export_clean(text: str) -> str:
-        # Strip non-prose before the markdown formatting pass, so projects
-        # drafted before the guard existed still ship a clean manuscript.
+    def _export_clean(text: str, label: str = "") -> str:
+        # Strip non-prose and artifacts, so projects drafted before those
+        # guards existed still ship a clean manuscript. The canonical chapter
+        # files are never touched here.
         text = prose.strip_non_prose(text)
-        return _BOLD_RE.sub(r'\1', _EM_DASH_RE.sub(', ', text))
+        text, removed = prose.strip_artifacts(text)
+        if removed:
+            # The report names what left the manuscript; without it a legacy
+            # chapter is silently rewritten on the way out.
+            _removed_chapters.append(f"{label or 'chapter'}: {'; '.join(removed)}")
+        text = _BOLD_RE.sub(r'\1', text)
+        text = _EM_DASH_RE.sub(', ', text)
+        text = _DOUBLE_SPACE_RE.sub(" ", text)
+        text = _DOUBLE_COMMA_RE.sub(",", text)
+        return _SPACE_COMMA_RE.sub(",", text)
 
     # 4. Concatenate chapters into manuscript.md (written into project dir)
     step("Building manuscript.md...")
@@ -144,7 +178,7 @@ def run_export(state: dict, skip_epub: bool = False) -> dict:
         if prose.looks_like_non_prose(raw):
             step(f"WARNING: {ch_file.name} has only {prose.prose_words(raw)} words of "
                  f"prose after stripping — it needs a redraft, not an export")
-        text = _export_clean(raw)
+        text = _export_clean(raw, label=ch_file.name)
         if text:
             parts.append(text)
 
@@ -152,6 +186,9 @@ def run_export(state: dict, skip_epub: bool = False) -> dict:
         manuscript.write_text("\n\n---\n\n".join(parts) + "\n", encoding="utf-8")
         word_count = sum(len(p.split()) for p in parts)
         step(f"Manuscript: {len(parts)} chapters, {word_count} words")
+        if _removed_chapters:
+            step(f"NOTE: artifact cleanup changed {len(_removed_chapters)} chapter(s):\n  "
+                 + "\n  ".join(_removed_chapters))
     else:
         step("WARNING: no chapter files found for manuscript")
 
@@ -171,9 +208,11 @@ def run_export(state: dict, skip_epub: bool = False) -> dict:
         )
         if not tex_valid:
             step("novel.tex not found, empty, or incomplete (no \\end{document}) — generating via LLM...")
+            # Generating \LaTeX for a whole novel is a long call, not a short
+            # one: at the 300s short budget it timed out and burned a retry.
             for tex_attempt in range(3):
                 try:
-                    uv_run("pipeline/gen_novel_tex.py", timeout=timeout_for("short"))
+                    uv_run("pipeline/gen_novel_tex.py", timeout=_tex_generation_timeout())
                     if novel_tex.exists() and novel_tex.stat().st_size >= 100 and "\\end{document}" in novel_tex.read_text(encoding="utf-8"):
                         break
                 except Exception as e:

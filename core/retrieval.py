@@ -30,8 +30,10 @@ MAX_WORLD_SECTIONS = 4
 FULLTEXT_HIT_RATIO = 0.8
 
 # Title Case or ALL-CAPS name runs (registry headings often shout names).
+# `[ \t]+` — never `\s+` (newlines must not glue a chapter title to the next
+# sentence into a fake entity). Same rule as core.continuity_text.
 PROPER_NOUN_RE = re.compile(
-    r"\b([A-Z]{2,}(?:\s+[A-Z]{2,})*|[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b"
+    r"\b([A-Z]{2,}(?:[ \t]+[A-Z]{2,})*|[A-Z][a-z]+(?:[ \t]+[A-Z][a-z]+)*)\b"
 )
 HEADING_LINE_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
 MD_NOISE_RE = re.compile(r"[*_`\"]+")
@@ -252,11 +254,18 @@ def _join_sections(picked: list[tuple[str, str]]) -> str:
     return "\n\n".join(block for _, block in picked).strip()
 
 
-def _clean_hit_label(label: str) -> str:
-    """Fallback markers are telemetry, not section hit names."""
-    if label.startswith("(fallback"):
-        return ""
-    return label
+# Outline/orientation schema labels, not story entities. Multi-word labels only,
+# so a character legitimately named "Try" or "High" is not dropped from query
+# terms (the old single-token denylist did exactly that).
+SCHEMA_LABELS = frozenset(
+    p.strip().lower() for p in """scene stakes|emotional arc|orientation facts|
+    chapter question|try-fail cycle|high reflection|location|summary|plants|
+    scene|stakes|arc""".split("|") if p.strip()
+)
+
+
+def _is_schema_label(term: str) -> bool:
+    return term.strip().lower() in SCHEMA_LABELS
 
 
 def build_retrieval_pack(
@@ -277,13 +286,9 @@ def build_retrieval_pack(
         *(extra_texts or []),
         extra=list(orientation_facts or []),
     )
-    # Drop schema/outline chrome that is not a story entity.
-    noise = {
-        "ch", "the", "ms", "try", "location", "high", "summary", "plants",
-        "orientation", "facts", "scene", "stakes", "emotional", "arc",
-        "chapter", "question", "cycle", "fail", "is", "like",
-    }
-    terms = [t for t in terms if t.lower() not in noise]
+    # Drop schema/outline chrome that is not a story entity. Multi-word labels
+    # only; a bare capitalized word is left alone so real names survive.
+    terms = [t for t in terms if not _is_schema_label(t)]
 
     if mode != "scoped":
         return RetrievalPack(
@@ -352,6 +357,7 @@ def write_retrieval_telemetry(pack: RetrievalPack, chapter_num: int, path) -> No
         data = pack.to_telemetry()
         data["chapter"] = chapter_num
         paths_mod.save_json_atomic(data, path)
+        paths_mod.retire_shadowing_sidecar(path)
     except Exception as e:
         import sys
         print(f"WARN: retrieval telemetry failed for ch{chapter_num}: {e}", file=sys.stderr)

@@ -134,6 +134,57 @@ class TestOverlapMetric(unittest.TestCase):
     def test_overlap_on_empty_a(self):
         self.assertEqual(ct.overlap_a_tool_targets([], [{"tool": "t", "input": {"q": "x"}}]), 0.0)
 
+    def test_overlap_denominator_counts_real_tools_only(self):
+        # One hit among one real tool call + three housekeeping steps = 1.0, not 0.25.
+        findings_a = [{
+            "id": "A1",
+            "claim": "Mateo laugh delayed",
+            "chapters": [3],
+            "evidence": ["Mateo"],
+        }]
+        trace = [
+            {"tool": "search_prior_chapters", "input": {"query": "Mateo laugh"}, "ok": True},
+            {"tool": "(none)", "input": {}, "ok": False},
+            {"tool": "(parse)", "input": {}, "ok": False},
+            {"tool": "(transcript)", "input": {}, "ok": True},
+        ]
+        self.assertEqual(ct.overlap_a_tool_targets(findings_a, trace), 1.0)
+
+    def test_plant_tag_marks_use_parser_pattern(self):
+        from core import outline as outline_mod
+        # Recall pin: an apostrophe slug is a real on-disk shape that the
+        # parser's old narrow slug class (and therefore the scanner) missed.
+        marks = outline_mod.scan_plant_tag_marks(
+            'Text [Plant: the_brother\'s_question - "the question he cannot ask"] more.'
+        )
+        self.assertEqual(len(marks), 1)
+        self.assertIn("the_brother's_question", marks[0])
+
+    def test_closed_pass_reports_loaded_and_checked_terms(self):
+        from core import canon as canon_mod
+        from core import paths
+        from pipeline import continuity_closed
+        root = paths.get_root_dir()
+        sample = root / "projects" / "smoke_4ch"
+        if not (sample / "state.json").exists() and not (sample / "characters.md").exists():
+            self.skipTest("no smoke_4ch project")
+        orig = paths._project_name
+        try:
+            paths.set_project_name("smoke_4ch")
+            result = continuity_closed.run_closed_pass(1)
+            # A missing sealed foundation silences the scan locally, but the
+            # sidecar must still report the denylist that was loaded, and
+            # separately how many terms the scan actually consulted.
+            canon_text = paths.get_canon_path().read_text(encoding="utf-8")
+            parsed = canon_mod.parse_canon(canon_text) if canon_text else None
+            sealed_facts = parsed.sealed_facts() if parsed is not None else []
+            expected_loaded = len(canon_mod.sealed_denylist_terms(parsed)) if parsed is not None else 0
+            expected_checked = expected_loaded if sealed_facts else 0
+            self.assertEqual(result["sealed_terms_loaded"], expected_loaded)
+            self.assertEqual(result["sealed_terms_checked"], expected_checked)
+        finally:
+            paths._project_name = orig
+
 
 class TestClosedPassOffline(unittest.TestCase):
     def test_run_closed_pass_on_fixture_project(self):

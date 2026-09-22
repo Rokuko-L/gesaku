@@ -185,10 +185,29 @@ def parse_validated(model_cls: type[BaseModel], text: str, context: str = "") ->
 
 
 class MicroPlantCandidate(BaseModel):
-    """One concrete prose detail that could pay off in a later chapter."""
+    """One concrete prose detail that could pay off in a later chapter.
 
-    text: str = Field(min_length=1, max_length=240)
+    `text` is truncated rather than rejected: the extractor writes vivid
+    run-ons well past the cap in practice, and failing the whole extract threw
+    away every other plant in the same response.
+    """
+
+    text: str = Field(min_length=1, max_length=600)
     kind: str = Field(default="object", max_length=24)
+
+    @field_validator("text", mode="before")
+    @classmethod
+    def _truncate_overlong(cls, v):
+        if isinstance(v, str) and len(v) > 600:
+            head = v[:600]
+            # Cut on the last word boundary when one is near enough to be
+            # useful; otherwise take the whole window rather than gutting the
+            # value to the first stray space.
+            boundary = head.rsplit(" ", 1)[0].rstrip(",;:")
+            if len(boundary) >= 400:
+                head = boundary
+            return head[:599] + "…"
+        return v
 
 
 class MicroPlantExtract(BaseModel):

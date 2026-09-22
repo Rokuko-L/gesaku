@@ -209,6 +209,32 @@ class TestSectionSelect(unittest.TestCase):
         self.assertIn("query_terms", tel)
         self.assertIn("character_fallback", tel)
 
+    def test_legacy_sidecars_are_retired(self):
+        # A pre-rename sidecar matched the `*_chNN.json` eval glob and shadowed
+        # the real eval file; writing the new name must retire it. Both renamed
+        # producers are covered (retrieval `_telemetry`, open pass `_open`).
+        import tempfile
+        from core import paths as paths_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            for new_name, legacy_name in (
+                ("retrieval_ch01_telemetry.json", "retrieval_ch01.json"),
+                ("continuity_ch01_open.json", "continuity_ch01.json"),
+            ):
+                legacy = Path(tmp) / legacy_name
+                legacy.write_text("{}", encoding="utf-8")
+                paths_mod.retire_shadowing_sidecar(Path(tmp) / new_name)
+                self.assertFalse(legacy.exists(), legacy_name)
+
+    def test_retire_ignores_unrenamed_names(self):
+        # A current name must never be deleted by its own cleanup.
+        import tempfile
+        from core import paths as paths_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            current = Path(tmp) / "continuity_ch01_closed.json"
+            current.write_text("{}", encoding="utf-8")
+            paths_mod.retire_shadowing_sidecar(current)
+            self.assertTrue(current.exists())
+
     def test_heading_name_candidates(self):
         names = retrieval._heading_name_candidates('**1. THE NARRATOR: DANIEL "DANNY" VEY**')
         joined = " ".join(names).upper()

@@ -103,6 +103,21 @@ class TestAgenticSettings(unittest.TestCase):
             settings_mod.settings_commit(body)
         self.assertEqual(ctx.exception.status_code, 400)
 
+    def test_post_rejects_fractional_budget(self):
+        # A JSON number float must be rejected, not silently truncated:
+        # 12.7 -> 12 changes intent and 0.5 -> 0 disables the tool loop.
+        from fastapi import HTTPException
+        body = settings_mod.SettingsPayload(agentic={"judgeToolBudget": 12.7})
+        with self.assertRaises(HTTPException) as ctx:
+            settings_mod.settings_commit(body)
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_post_accepts_integral_float_budget(self):
+        settings_mod.settings_commit(
+            settings_mod.SettingsPayload(agentic={"judgeToolBudget": 12.0})
+        )
+        self.assertEqual(os.environ.get("GESAKU_JUDGE_TOOL_BUDGET"), "12")
+
     def test_post_budget_boundaries(self):
         settings_mod.settings_commit(
             settings_mod.SettingsPayload(agentic={"judgeToolBudget": 0})

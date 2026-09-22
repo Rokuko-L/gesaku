@@ -17,7 +17,7 @@ from core import paths
 import os
 
 from core.genre import load_genre
-from core.llm import llm_timeout
+from core.llm import REFINEMENT_ATTEMPTS, REFINEMENT_BLOCK_SIZE, llm_timeout
 from core.outline import (
     extract_outline_debts, validate_plants_harvests, validate_premise_beats,
 )
@@ -28,6 +28,29 @@ from pipeline.pipeline_infra import (
     git_reset_hard, load_state, log_result, parse_lore_score, parse_score,
     resolve_chapters_total, save_state, step, timeout_for, uv_run,
 )
+
+
+def _refinement_subprocess_cap(state: dict) -> int:
+    """Subprocess cap for gen_outline_part2, derived the same way as part 1.
+
+    That pass refines `REFINEMENT_BLOCK_SIZE` chapters per writer call, up to
+    `REFINEMENT_ATTEMPTS` calls per block, at the standard budget. At the
+    default budgets that is 900 s per block, so the `xlong` floor covers up to
+    40 chapters (24 chapters -> 3 blocks -> 2700 s, floor wins; 41 -> 4500 s,
+    the product wins). A long book at v5's 3000 s per-call budget scales to
+    90 000 s at 100 chapters.
+
+    The block size is read from the shared constant, not from
+    `GESAKU_OUTLINE_BLOCK_SIZE`: unlike `gen_outline`, this generator has no
+    env-var block size, so reading one here would size the cap for blocks the
+    script will never form.
+    """
+    total = resolve_chapters_total(state)
+    n_blocks = max(1, -(-total // max(REFINEMENT_BLOCK_SIZE, 1)))
+    return max(
+        timeout_for("xlong"),
+        n_blocks * REFINEMENT_ATTEMPTS * llm_timeout("standard"),
+    )
 
 
 def _outline_subprocess_cap(state: dict) -> int:
@@ -211,11 +234,8 @@ def run_foundation(state: dict) -> dict:
             step("Outline part 2 exists — skipping regen (checkpoint)")
         else:
             step("Generating outline (part 2 — foreshadowing)...")
-            n_blocks = max(1, -(-resolve_chapters_total(state) // 10))
             uv_run("foundation/gen_outline_part2.py",
-                   timeout=max(timeout_for("standard"),
-                               n_blocks * llm_timeout("standard")))
-
+                   timeout=_refinement_subprocess_cap(state))
         step("Sanitizing chapter titles...")
         uv_run("pipeline/sanitize_outline_titles.py", timeout=timeout_for("short"))
 

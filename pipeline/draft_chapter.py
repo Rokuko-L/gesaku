@@ -284,7 +284,7 @@ between beats should be a natural prose transition, not a labeled divider.
     retrieval.write_retrieval_telemetry(
         pack,
         chapter_num,
-        paths.get_eval_logs_dir() / f"retrieval_ch{chapter_num:02d}.json",
+        paths.get_eval_logs_dir() / f"retrieval_ch{chapter_num:02d}_telemetry.json",
     )
     # Degrade to source bibles if pack is empty; placeholder only when source is empty.
     world_block = pack.world_block or world or "(world bible unavailable)"
@@ -426,7 +426,11 @@ Write the chapter now. Full text, beginning to end.
         sys.exit(3)
     if prose.cut_reason(body) == "derail":
         print("NON_PROSE_DERAIL: draft interrupted by model output", file=sys.stderr)
-    body = prose.strip_non_prose(body).rstrip() + "\n"
+    body = prose.strip_non_prose(body)
+    body, removed = prose.strip_artifacts(body)
+    if removed:
+        print(f"ARTIFACTS: {len(removed)} removal(s): {removed}", file=sys.stderr)
+    body = body.rstrip() + "\n"
     out_path.write_text(body, encoding="utf-8")
     print(f"Saved to {out_path}", file=sys.stderr)
     print(f"Word count: {len(body.split())}", file=sys.stderr)

@@ -60,6 +60,8 @@ class ContinuityTools:
             return self._search(_load(paths.get_canon_path()), inp.get("query") or inp.get("q") or "")
         if name == "read_chapter":
             n = int(inp.get("chapter") or inp.get("n") or 0)
+            if n < 1:
+                return f"ERROR: chapter must be >= 1 (got {n})"
             p = _safe_project_path(chapters_dir / f"ch_{n:02d}.md")
             return _load(p)[:20000]
         if name == "search_prior_chapters":
@@ -281,7 +283,8 @@ def main() -> int:
     try:
         result = run_open_pass(ch, stability=stability)
     except Exception as e:
-        # Always leave an auditable sidecar — never a bare traceback only.
+        # Always leave an auditable sidecar — never a bare traceback only. The
+        # key set matches the success path so consumers never KeyError on it.
         result = {
             "chapter": ch,
             "findings_a": [],
@@ -293,15 +296,29 @@ def main() -> int:
             "budget": judge_tool_budget(),
             "trace": [],
             "overlap_a_tool_targets": 0.0,
+            "model": "",
+            "provider": "",
             "verdict_error": str(e)[:300],
+            "notes": "",
+            "trust_note": "",
+            "merged_scope": "author-scope audit data — not writer fuel",
             "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
-        out_path = paths.get_eval_logs_dir() / f"continuity_ch{ch:02d}.json"
+        if stability:
+            result["stability"] = {
+                "kind": "single_run_snapshot",
+                "overlap_a_tool_targets": 0.0,
+                "agent_stop": "error",
+                "n_findings_b": 0,
+            }
+        out_path = paths.get_eval_logs_dir() / f"continuity_ch{ch:02d}_open.json"
         paths.save_json_atomic(result, out_path)
+        paths.retire_shadowing_sidecar(out_path)
         print(f"continuity_open ch{ch:02d}: agent_stop=error ({e}) -> {out_path}", file=sys.stderr)
         return 0
-    out_path = paths.get_eval_logs_dir() / f"continuity_ch{ch:02d}.json"
+    out_path = paths.get_eval_logs_dir() / f"continuity_ch{ch:02d}_open.json"
     paths.save_json_atomic(result, out_path)
+    paths.retire_shadowing_sidecar(out_path)
     print(
         f"continuity_open ch{ch:02d}: stop={result['agent_stop']} "
         f"tools={result['tool_calls_used']}/{result['budget']} "

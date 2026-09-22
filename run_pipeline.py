@@ -351,7 +351,7 @@ Examples:
         help="Run only a specific phase")
     parser.add_argument(
         "--max-cycles", type=int, default=None,
-        help=f"Maximum revision cycles (deprecated synonym for --revision-cycles)")
+        help="Maximum revision cycles (deprecated synonym for --revision-cycles)")
     parser.add_argument(
         "--revision-cycles", type=int, default=6,
         help="Number of revision cycles (default: 6)")

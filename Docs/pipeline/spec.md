@@ -146,7 +146,20 @@ Loop:
   5. gen_outline_part2.py → outline.md part 2 (adds per-chapter
                            `[Plant:]`/`[Harvest:]` tags; it does NOT write a
                            ledger — the ledger is rebuilt at export, see
-                           "Plants & harvests" below)
+                           "Plants & harvests" below). Refinement is
+                           **per-block**: a block that fails its
+                           `REFINEMENT_ATTEMPTS` writer calls keeps its
+                           unpolished chapters, the outline is still written,
+                           and the script then exits non-zero **without
+                           writing the `.outline_part2.done` marker** — the
+                           phase aborts and a resume re-runs the polish, rather
+                           than recording an unrefined outline as finished.
+                           Blocks with no source chapters are skipped (part 1
+                           writes the Detailed section in blocks, so a
+                           truncated part 1 reaches here with the tail absent).
+                           The phase derives the subprocess cap from
+                           `blocks × REFINEMENT_ATTEMPTS × standard budget`
+                           (`foundation._refinement_subprocess_cap`).
   6. Voice discovery: write 5 trial passages in different registers,
      select best, fill voice.md Part 2 with exemplars + anti-exemplars
   7. Define MYSTERY.md (the central secret the reader discovers)
@@ -488,20 +501,33 @@ PHASE 3b: OPUS REVIEW LOOP (deep, prose-level refinement)
      is restored alongside so the plant store still describes the prose on
      disk — or dropped when the peak predates the store.
   1. Normalize chapter titles (all # level, consistent format)
-  2. typeset/build_tex.py → chapters_content.tex
-  3. Edit typeset/novel.tex:
+  2. Build manuscript.md: strip non-prose, then strip artifacts, then flatten
+     markdown. `_export_clean` exists for projects drafted before the artifact
+     guard (it runs at every save site now) and stays **presentation-only**:
+     bold is unwrapped, and an em dash **preceded by whitespace** (< `Wait — no`
+     or `Wait —no`) becomes a comma. The lookbehind anchors on that leading
+     space but cannot consume it, so a `(?<=\S)\s+,` cleanup is what keeps
+     `Wait , no` from shipping; the double-space and double-comma cleanups fold
+     the other runs. A dash with **no** preceding space is a dialogue interrupt
+     ("Catch me if you—") and keeps its dash — in the markdown that means a raw
+     U+2014 stays, which is correct there. `typeset/build_tex.py` applies the
+     same pause rule and maps every surviving U+2014 to `---`, since pdflatex+T1
+     has no glyph for the raw character. When the pass drops anything, the run
+     log names the chapters it changed.
+  3. typeset/build_tex.py → chapters_content.tex
+  4. Edit typeset/novel.tex:
      - Set title, author name
      - Choose epigraph (from novel text, NOT a spoiler)
      - Set end-page text
-  4. tectonic novel.tex → novel.pdf
-  5. typeset/build_epub.py → novel.epub
+  5. tectonic novel.tex → novel.pdf
+  6. typeset/build_epub.py → novel.epub
      EPUB 3, structured as mimetype (first, STORED) + container.xml +
      content.opf + nav.xhtml + toc.ncx + one XHTML per chapter. Pure stdlib,
      so it needs no toolchain and is attempted unconditionally; a failure
      warns and continues (a book without an e-book edition is still a book).
      Skip with `--no-epub`. The identifier is a UUIDv5 of project+title, so
      re-exporting does not mint a new book identity.
-  6. Git commit: "export: manuscript, outline, arc summary, PDF[, EPUB]"
+  7. Git commit: "export: manuscript, outline, arc summary, PDF[, EPUB]"
 ```
 
 ---
@@ -697,7 +723,13 @@ Separate from outline-tag debts (`state["debts"]` / `[Plant: slug]`).
   leaves the previous store intact.
 - Extract asks the judge for **at most 1** concrete callback candidate
   (object / phrase / promise / injury) and which open callback ids were paid off
-  with changed meaning.
+  with changed meaning. `MicroPlantCandidate.text` truncates at 600 characters
+  rather than failing: the judge writes ~300-character plants in practice, and
+  v5 lost the extract on 22 of 24 chapters to that one over-length field.
+  A schema failure is **retried twice with its feedback appended**, the same
+  self-correction shape the judge paths use; only then is the chapter skipped.
+  The retry catches every `ValueError` — an unhealed `JSONDecodeError` used to
+  escape the `OutputValidationError` handler and crash the subprocess.
 - Store: `projects/<name>/open_callbacks.json` via `core/micro_plants.py`
   (atomic writes; max 8 open; expire after 12 chapters; near-dup filter).
 - **The extractor sees the whole chapter.** It used to send only the first 400

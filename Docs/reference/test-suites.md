@@ -9,19 +9,19 @@ uv run python -m unittest discover -s tests -p "test_*.py"
 `tests/` is the offline suite. A test that needs a real LLM belongs in the
 E2E layer, not here.
 
-## `unittest` modules (275 tests)
+## `unittest` modules (360 tests)
 
 | Suite | Tests | Covers |
 |---|---|---|
 | `tests/test_refactor_smoke.py` | 21 | pipeline invariants: genre owns chapter count, best-novel peak tracking, foundation checkpoint skip, named timeout budgets, tolerance policy, LLM-output schemas, prompt loading, `run_tool` timeout semantics, callback/chapter coupling |
 | `tests/test_canon_scoping.py` | 20 | sealed foundation views, As-of chapter filter, denylist terms, fail-closed malformed tags |
-| `tests/test_micro_plants.py` | 22 | micro-plant store: add/harvest/expire, near-dup + plant↔harvest clustering, and the lifecycle guards (a payoff before its own plant is refused, an expired plant can still be harvested, `expire_stale` honours the stored `window`, idempotent marking) |
+| `tests/test_micro_plants.py` | 27 | micro-plant store: add/harvest/expire, near-dup + plant↔harvest clustering, the lifecycle guards (a payoff before its own plant is refused, an expired plant can still be harvested, `expire_stale` honours the stored `window`, idempotent marking), and the extract contract: an over-long plant truncates instead of failing the response, an unbroken token still validates, and a schema failure retries with feedback before giving up softly |
 | `tests/test_plant_tags.py` | 18 | the single owner of the `[Plant:]`/`[Harvest:]` tag format: every tag shape, wrapping quotes vs possessives, the preamble/roadmap split, parser↔validator↔debt agreement, and debt delivery to the drafter |
 | `tests/test_hygiene_names.py` | 14 | required-character derivation: the pronoun "I" and power-tier tokens excluded, word-boundary registry matching, canon terminology ("the Law", "Law III") excluded, single-letter names kept, and the floor-at-1 decision on real data |
-| `tests/test_prose_integrity.py` | 12 | the prose guard: the real ch_20 derail cut to a fragment, notes trailers in all four heading dresses, the bare-"Notes" false positive, and first-person deliberation left alone |
+| `tests/test_prose_integrity.py` | 23 | the prose guard: the real ch_20 derail cut to a fragment, notes trailers in all four heading dresses, the bare-"Notes" false positive, first-person deliberation left alone, and the v5 artifacts — `## BEAT`/`**Beat 2**` headings dropped, all four foreign-script words removed, orphaned punctuation tidied, the chapter's own title kept even at line 1, and the nine prose sentences an earlier pattern deleted whole (`Part 2 of my plan was to wait.`, `Scene 4 was the worst of them.`, …) now surviving |
 | `tests/test_ledger_payload.py` | 11 | ledger rows: no row called `matched` without both ends, orphans not reported as paid, span from earliest plant to latest payoff, `settled` from the finish state |
 | `tests/test_attribution.py` | 11 | the attribution pass with a stubbed judge: prompt contents, ordering/invented chapters refused, unusable output degrading to no attribution, short answers padded |
-| `tests/test_provider_llm.py` | 14 | wire format per dialect over `httpx.MockTransport` (URL, auth, payload, truncation parity) |
+| `tests/test_provider_llm.py` | 18 | wire format per dialect over `httpx.MockTransport` (URL, auth, payload, truncation parity, empty-200 retry — with and without a stop reason) |
 | `tests/test_scoring_guards.py` | 13 | keep/discard guards through the real foundation loop |
 | `tests/test_utils.py` | 12 | path helpers, project state, atomic registry writes |
 | `tests/test_llm_telemetry.py` | 11 | `llm_events.jsonl` emission + usage/stop-reason extraction from SSE streams and both dialects' key names |
@@ -29,15 +29,15 @@ E2E layer, not here.
 | `tests/test_declared_plants.py` | 8 | a declared payoff↔plant link beats token inference, survives unrelated wording, still obeys ordering, and reads back off the outline bullet |
 | `tests/test_mock_llm.py` | 8 | mock harness + validation-retry integration |
 | `tests/test_retrieval.py` | 16 | host-scoped packs: mode, terms, parent→child sections, sealed-pack, fallback flags, named budgets |
-| `tests/test_llm_tools.py` | 16 | tool substrate: dialect payloads, SSE/JSON parse, budget harvest, transport retry, stripped gateway, preflight, named budget=12 |
-| `tests/test_continuity_closed.py` | 15 | closed continuity: trust map, seal policy (no frame noise), overlap structured match, smoke |
+| `tests/test_llm_tools.py` | 27 | tool substrate: dialect payloads, streamed fragment accumulation incl. two-tool interleaving and index-less frames (Anthropic `input_json_delta`, OpenAI `tool_calls`), budget harvest shape, transport retry, stripped gateway, budget 0, executor errors, preflight, named budget=12 |
+| `tests/test_continuity_closed.py` | 19 | closed continuity: trust map, seal policy (no frame noise), overlap structured match + denominator, tag scan (incl. apostrophe slugs), loaded-vs-checked reporting, smoke |
 | `tests/test_continuity_open.py` | 6 | open-pass mock loop, budget stop, path escape (sibling prefix), overlap |
 | `tests/test_epub_export.py` | 7 | EPUB build + structural validation (zip layout, OPF/spine/nav/NCX targets, escaping, stable identifier) and the export/CLI wiring |
 | `tests/test_multi_project.py` | 6 | project-dir/state isolation, registry atomicity, path-traversal guard, from-scratch cleanup |
-| `tests/test_run_manager.py` | 6 | bridge liveness: dead pid is not our run, stale `run.json` is dropped, tree-kill guards |
+| `tests/test_run_manager.py` | 8 | bridge liveness: dead pid is not our run, stale `run.json` is dropped, tree-kill guards |
 | `tests/test_utils_stress.py` | 6 | concurrency + traversal edge cases |
-| `tests/test_webui_server.py` | 5 | bridge import smoke, `norm_phase`, `_mask`, `llm_event_view` (+ producer-source guard) |
-| `tests/test_webui_settings_agentic.py` | 5 | Settings `agentic` knobs: GET defaults/env, POST .env write, invalid mode/budget rejected |
+| `tests/test_webui_server.py` | 13 | bridge import smoke, `norm_phase`, `_mask`, `llm_event_view` (+ producer-source guard) |
+| `tests/test_webui_settings_agentic.py` | 12 | Settings `agentic` knobs: GET defaults/env, POST .env write, invalid mode/budget rejected (string and fractional float) |
 | `tests/test_export_restore.py` | 4 | the export peak restore: extra chapters dropped, plant store restored, orphan store dropped |
 | `tests/test_gatekeepers.py` | 4 | outline gatekeepers execute for real — drift verdicts block/pass, short books skip without LLM calls |
 | `tests/test_path_contamination.py` | 4 | cross-project leakage, root cleanliness, registry placement |

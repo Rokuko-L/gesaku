@@ -24,10 +24,8 @@ def probe_tool_path(model_key: str = "judge") -> tuple[bool, str]:
 
     Returns (ok, message). Detects gateways that strip or flatten tool_use.
     """
-    from core.llm import (
-        _resolve_base_url, _resolve_model, _build_tool_request,
-        resolve_provider, _parse_tool_turn_from_response, get_client,
-    )
+    from core.llm import _resolve_base_url, _resolve_model, resolve_provider, get_client
+    from core.llm_tools import _build_tool_request, _parse_tool_turn_from_response
     provider = resolve_provider(model_key)
     model = _resolve_model(provider, model_key)
     base = _resolve_base_url(provider, model_key)
@@ -97,17 +95,21 @@ def sanity_check(args):
     # 3. LLM proxy reachable + model name known. Fail fast: a doomed
     # launch otherwise costs 10+ minutes before the first call errors.
     try:
-        from core.llm import _resolve_model, _resolve_base_url
+        from core.llm import KEY_ENV_VARS, _resolve_model, _resolve_base_url
         model = _resolve_model(provider, "writer")
+        # Omit an empty key/version header entirely: an empty x-api-key can trip
+        # a gateway 401 and mask the model-name 404 this check exists to find.
+        headers = {"content-type": "application/json"}
+        if provider == "anthropic":
+            api_key = os.environ.get(KEY_ENV_VARS["anthropic"], "")
+            if api_key:
+                headers["x-api-key"] = api_key
+            headers["anthropic-version"] = "2023-06-01"
         try:
             probe = httpx.post(
                 f"{_resolve_base_url(provider, 'writer')}"
                 f"{'/v1/messages' if provider == 'anthropic' else '/chat/completions'}",
-                headers={
-                    "content-type": "application/json",
-                    **({"x-api-key": os.getenv("ANTHROPIC_API_KEY", ""),
-                        "anthropic-version": "2023-06-01"} if provider == "anthropic" else {}),
-                },
+                headers=headers,
                 json={"model": model, "max_tokens": 1,
                       "messages": [{"role": "user", "content": "ping"}]},
                 timeout=timeout_for("probe"),

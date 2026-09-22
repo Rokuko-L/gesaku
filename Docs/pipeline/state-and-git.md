@@ -55,13 +55,31 @@ env vars instead of a code change per stage.
 | `xlong` | 3600 s | foundation generation blocks |
 
 **Derived caps.** A flat budget can expire *mid-retry* even when every
-individual LLM call stayed inside its own budget. `gen_outline` retries the
-roadmap up to `GESAKU_OUTLINE_ROADMAP_ATTEMPTS` (default 6) times and each
-block up to 3 times, all at `llm_timeout("long")` — 5400 s worst case, above
-the 3600 s `xlong` backstop. `foundation._outline_subprocess_cap()` therefore
-computes the cap as `max(timeout_for("xlong"), (roadmap_attempts +
-n_blocks x block_attempts) x llm_timeout("long"))`. The outer cap is only a
-backstop: a genuinely hung call is bounded by its own per-call LLM timeout.
+individual LLM call stayed inside its own budget. Three caps are computed from
+the calls they wrap rather than written as literals:
+
+- `gen_outline` retries the roadmap up to `GESAKU_OUTLINE_ROADMAP_ATTEMPTS`
+  (default 6) times and each block up to 3 times, all at `llm_timeout("long")`
+  — 5400 s worst case, above the 3600 s `xlong` backstop.
+  `foundation._outline_subprocess_cap()` therefore computes the cap as
+  `max(timeout_for("xlong"), (roadmap_attempts + n_blocks x block_attempts) x
+  llm_timeout("long"))`.
+- `gen_outline_part2` refines one block of `core.llm.REFINEMENT_BLOCK_SIZE`
+  chapters at a time, up to `core.llm.REFINEMENT_ATTEMPTS` writer calls each,
+  so `foundation._refinement_subprocess_cap()` computes
+  `max(timeout_for("xlong"), n_blocks x REFINEMENT_ATTEMPTS x
+  llm_timeout("standard"))` — 3600 s at default budgets, 9000 s at v5's
+  3000 s per-call budget. The page-1 cap alone
+  (`max(standard, n_blocks x standard)`) expired inside the first block and
+  left the rest of the outline unrefined. Both block size and attempts come
+  from the shared library, so the generator and the phase cannot drift.
+- `gen_novel_tex` makes its own writer/judge calls, so
+  `export._tex_generation_timeout()` is
+  `max(timeout_for("long"), 2 x llm_timeout("standard"))`. It ran at the
+  `short` budget, which cannot fit one LaTeX pass, let alone a retry.
+
+The outer cap is only a backstop: a genuinely hung call is bounded by its own
+per-call LLM timeout.
 
 `run_tool` honours `check=True` on timeout: with `check=False` it returns
 `rc=-1` for graceful handling, but with `check=True` (i.e. every `uv_run`)

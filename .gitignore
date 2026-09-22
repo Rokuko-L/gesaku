@@ -1,5 +1,6 @@
 .env
 projects/
+logs/
 __pycache__/
 *.py[cod]
 .pytest_cache/

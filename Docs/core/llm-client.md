@@ -72,18 +72,32 @@ before — four separate "raise the timeout" commits during one production run.
 | Symbol | Purpose |
 |---|---|
 | `call_llm(prompt, system, model_key, max_tokens, temperature, beta_context, timeout, timeout_role, raise_on_truncation)` | POST to the resolved provider endpoint with retries (5 attempts, exponential backoff; 4xx auth errors fail fast). |
-| `call_llm_tools(messages, tools, executor, *, budget=None, ...)` | Multi-turn tool loop. `executor(name, input_dict)` is host-owned. Returns `ToolLoopResult`. Budget default **12** (`DEFAULT_TOOL_BUDGET`); pipeline owner `pipeline_infra.judge_tool_budget()` / `GESAKU_JUDGE_TOOL_BUDGET`. Transport retries do not reset budget. `agent_stop`: `end_turn` \| `budget_exhausted` \| `max_tokens` \| `error`. |
-| `ToolLoopResult` | `text`, `stop_reason`, `agent_stop`, `tool_calls_used`, `budget`, `trace[]`, tokens, provider/model. |
 | `llm_timeout(role)` | Resolve a named budget (`short`/`standard`/`long`/`xlong`), env-overridable. |
 | `resolve_provider(model_key)` | Dialect resolution (see precedence above). |
 | `DEFAULT_MODELS` | Role → model per provider, used when the env var is unset. |
 | `ProviderError` | Missing/invalid provider config; message names the env var. |
 | `TruncationError` | Raised when the normalized stop reason is `max_tokens` (unless `raise_on_truncation=False`). Callers retry with larger budgets. |
+| `EmptyResponseError` | Raised when a 200 carried no text and was not a truncation. Retried inside `call_llm`; see Retry Conventions. |
+| `REFINEMENT_ATTEMPTS` | Writer calls per outline-refinement block. `foundation` derives `gen_outline_part2`'s subprocess cap from it, so the two cannot drift. |
 | `extract_text_from_response` / `extract_text_and_stop_reason` | Take `dialect=`; handle JSON, SSE, and dict responses for both shapes. |
 | `set_client(client)` | Test seam — install an `httpx.Client` (e.g. `MockTransport`). |
 | `parse_json_response(text) -> dict \| list` | **Healing parser** — see below. |
+
+The client is split by concern (module-size rule): `core/llm_base.py` (config,
+timeouts, provider/model resolution, client, telemetry, wire parsing),
+`core/llm.py` (`call_llm` plus re-exports), `core/llm_tools.py` (the loop) and
+`core/llm_toolwire.py` (tool dialect schemas/parsing). `llm.py` imports the
+others — never the reverse — so `llm.call_llm_tools` / `llm.ToolLoopResult`
+remain the documented entry points and every import order works. Transport retry
+policy is named once (`llm_base.LLM_MAX_TRANSPORT_ATTEMPTS` /
+`LLM_BACKOFF_BASE_SECONDS`).
+
+| Symbol | Purpose |
+|---|---|
+| `call_llm_tools(messages, tools, executor, *, budget=None, ...)` | Multi-turn tool loop. `executor(name, input_dict)` is host-owned. Returns `ToolLoopResult`. Budget default **12** (`DEFAULT_TOOL_BUDGET`); pipeline owner `pipeline_infra.judge_tool_budget()` / `GESAKU_JUDGE_TOOL_BUDGET`. Transport retries do not reset budget. `agent_stop`: `end_turn` \| `budget_exhausted` \| `max_tokens` \| `error`. |
+| `ToolLoopResult` | `text`, `stop_reason`, `agent_stop`, `tool_calls_used`, `budget`, `trace[]`, tokens, provider/model. |
 | `DEFAULT_TOOL_BUDGET` | **12** — committed default for tool loops. |
-| `call_llm_tools(...)` / `ToolLoopResult` | Multi-turn tool loop + result. See pipeline_infra `judge_tool_budget` / `GESAKU_JUDGE_TOOL_BUDGET`. Preflight: `pipeline.preflight.probe_tool_path`. |
+| `probe_tool_path()` (`pipeline.preflight`) | One real tool call to detect gateways that strip tool blocks. |
 
 ## Tool loop (`call_llm_tools`)
 
@@ -100,7 +114,8 @@ Rules:
 - `executor(name, input_dict) -> str|dict` is host-owned and read-only at call sites we ship.
 - Budget: `budget=None` → `DEFAULT_TOOL_BUDGET` (12). Pipeline named owner: `pipeline_infra.judge_tool_budget()`.
 - Transport retries do **not** reset the tool budget.
-- When budget is exhausted mid-turn, remaining tool calls are not executed; `agent_stop=budget_exhausted`.
+- Streamed responses accumulate fragments by block index: Anthropic tool arguments arrive as `input_json_delta` fragments and OpenAI ones as split `tool_calls[].function.arguments` strings. Neither is treated as a whole call.
+- When budget is exhausted mid-turn, remaining tool calls are not executed; `agent_stop=budget_exhausted`, and one final tool-free harvest POST asks for the verdict. The harvest note is merged into the pending user turn — consecutive same-role turns are invalid on strict Anthropic-dialect endpoints.
 - `agent_stop` is wire-level (`end_turn`/`budget_exhausted`/`max_tokens`/`error`). Continuity maps `leads_exhausted` from its verdict schema.
 - Offline mock: `MockLLM().install_tools([{\"text\",\"tool_calls\"}, ...])`.
 
@@ -128,6 +143,13 @@ that is `validation.py`'s job.
 - Transport failures: handled inside `call_llm`.
 - Truncation: callers catch `TruncationError` and re-ask with a larger
   `max_tokens` (see `draft_chapter.py`, `evaluate.call_judge_json`).
+- **Empty 200**: a combo-pool gateway intermittently answers `200` with a body
+  that never opened a text block — thinking-only, or an empty stream. That is a
+  transport fault, not a generation, so `call_llm` raises `EmptyResponseError`
+  and retries like one. The test is `not text.strip() and stop_reason !=
+  "max_tokens"`: a *normal* stop reason does not make an empty answer valid
+  (that false negative killed a `gen_canon` step), and a `max_tokens` stop keeps
+  its `TruncationError` semantics so callers still retry with a bigger budget.
 - Syntax errors + schema violations: callers catch and feed the error text
   back as a "fix your previous response" prompt (self-correction).
 

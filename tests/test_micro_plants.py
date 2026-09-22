@@ -168,6 +168,36 @@ class ValidationTest(unittest.TestCase):
         with self.assertRaises(OutputValidationError):
             parse_validated(MicroPlantExtract, '{"new_plants": "nope"}')
 
+    def test_an_overlong_plant_is_truncated_not_rejected(self):
+        """v5's extractor wrote ~300-char plants against a 240 cap, so every
+        response failed and the store stayed empty for 22 of 24 chapters."""
+        text = ("Grimble's six tins of reverse-chronological incense — a budget "
+                "line item from the previous fiscal quarter that he insists on "
+                "documenting — ") * 8
+        self.assertGreater(len(text), 600)
+        parsed = parse_validated(MicroPlantExtract, json.dumps({
+            "new_plants": [{"text": text, "kind": "object"}],
+            "harvested_ids": ["keep-me"],
+        }))
+        kept = parsed.new_plants[0].text
+        self.assertLessEqual(len(kept), 600)
+        self.assertTrue(kept.rstrip().endswith("\u2026"))
+        # The rest of the response survives: one bad field no longer costs the
+        # whole extract.
+        self.assertEqual(["keep-me"], parsed.harvested_ids)
+
+    def test_an_unbroken_overlong_plant_still_validates(self):
+        """No space to break on is the degenerate case of the same bug."""
+        parsed = parse_validated(MicroPlantExtract, json.dumps({
+            "new_plants": [{"text": "x" * 900, "kind": "object"}],
+            "harvested_ids": [],
+        }))
+        self.assertLessEqual(len(parsed.new_plants[0].text), 600)
+
+    def test_an_empty_plant_text_is_still_rejected(self):
+        with self.assertRaises(OutputValidationError):
+            parse_validated(MicroPlantExtract, '{"new_plants": [{"text": ""}]}')
+
 
 class ExtractSoftFailTest(unittest.TestCase):
     def test_script_imports_without_llm(self):
@@ -175,6 +205,35 @@ class ExtractSoftFailTest(unittest.TestCase):
         mod = importlib.import_module("pipeline.extract_micro_plants")
         self.assertTrue(hasattr(mod, "extract_for_chapter"))
         self.assertTrue(hasattr(mod, "main"))
+
+    def test_a_schema_failure_retries_then_gives_up_softly(self):
+        """A bad response must not crash the subprocess: the phase calls this
+        fail-soft after every kept chapter, and v5 lost the extract to an
+        uncaught decode error."""
+        import importlib
+        from unittest import mock
+
+        mod = importlib.import_module("pipeline.extract_micro_plants")
+        with tempfile.TemporaryDirectory() as td:
+            chapters = Path(td) / "chapters"
+            chapters.mkdir()
+            (chapters / "ch_05.md").write_text("Prose. " * 200, encoding="utf-8")
+            calls = []
+
+            def fake_llm(**kw):
+                calls.append(kw["prompt"])
+                return "not json at all"
+
+            with mock.patch.object(mod.paths, "get_chapters_dir", return_value=chapters), \
+                 mock.patch.object(mod, "call_llm", side_effect=fake_llm), \
+                 mock.patch.object(mod.mp, "save_callbacks") as saved:
+                rc = mod.extract_for_chapter(5)
+
+        self.assertEqual(0, rc)                    # fail-soft, not an exception
+        self.assertEqual(3, len(calls))            # initial + two self-corrections
+        self.assertIn("ERROR ON ATTEMPT", calls[1])  # feedback was fed back
+        self.assertIn("under 280 characters", calls[1])
+        saved.assert_not_called()                  # nothing written on failure
 
 
 class StoreLifecycleTest(unittest.TestCase):
