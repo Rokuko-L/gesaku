@@ -282,15 +282,12 @@ changed meaning, not a name-drop. Leave it alone if it would be forced.
     _perspective = load_genre().get("perspective", "")
     if _perspective == "first_person":
         interlude_format_note = (
-            "If any scene is a third-person interlude (MC off-page, Focus is a side "
-            "character), wrap it in hard scene breaks: a line containing only `---` "
-            "before and after. Do not put first-person \"I\" inside an interlude. "
-            "Resume the MC's first person only after the closing break."
+            "If any scene is a third-person interlude (MC off-page), follow the "
+            "MANDATORY PERSPECTIVE interlude rules exactly."
         )
     else:
         interlude_format_note = (
-            "If Focus changes mid-chapter, separate the scenes with a hard scene "
-            "break (a line containing only `---`)."
+            "Separate Focus changes with a hard scene break (`---`)."
         )
 
     # Build structural guardrails (applied to EVERY chapter)

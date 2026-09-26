@@ -7,8 +7,6 @@ the restore branch (and the two ways it can ship the wrong thing) had no
 coverage at all.
 """
 import json
-import pathlib
-import re
 import subprocess
 import sys
 import tempfile
@@ -110,23 +108,17 @@ class ExportRestoreTest(unittest.TestCase):
 class EmDashTest(unittest.TestCase):
     """Export em-dash treatment — three production bugs, pinned.
 
-    The lookbehind anchors on the space but cannot consume it, so a ` ,`
-    survives one step and the comma cleanup owns it.
+    Calls `export_mod.clean_em_dashes` (the single owner). A private copy of
+    the regex chain would stay green while production drifts.
     """
-    _EM_DASH_RE = re.compile(r"(?<=\s)—[ \t]*(?=\S)")
-    _DOUBLE_SPACE_RE = re.compile(r" {2,}")
-    _DOUBLE_COMMA_RE = re.compile(r" ?,\s*,")
-    _SPACE_COMMA_RE = re.compile(r"(?<=\S)\s+,")
 
     def export_clean(self, text: str) -> str:
-        text = self._EM_DASH_RE.sub(", ", text)
-        text = self._DOUBLE_SPACE_RE.sub(" ", text)
-        text = self._DOUBLE_COMMA_RE.sub(",", text)
-        return self._SPACE_COMMA_RE.sub(",", text)
+        return export_mod.clean_em_dashes(text)
 
     def test_a_spaced_dash_becomes_a_tight_comma(self):
         self.assertEqual("Wait, no, stay.", self.export_clean("Wait — no, stay."))
         self.assertEqual("a, b", self.export_clean("a — b"))
+        self.assertEqual("two, dashes, here.", self.export_clean("two — dashes — here."))
 
     def test_no_space_before_comma_survives(self):
         for source in ("Wait — no", "a — b", "x —  y"):
@@ -142,7 +134,7 @@ class EmDashTest(unittest.TestCase):
         self.assertEqual("he paused, then ran.", self.export_clean("he paused, — then ran."))
 
     def test_the_pdf_path_has_no_raw_dash_left(self):
-        source = pathlib.Path("typeset/build_tex.py").read_text(encoding="utf-8")
+        source = Path("typeset/build_tex.py").read_text(encoding="utf-8")
         self.assertIn("'---'", source)
         self.assertNotIn("s.replace('—', ', ')", source)
 

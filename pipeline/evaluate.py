@@ -36,7 +36,7 @@ from pathlib import Path
 # Load .env file if present
 from dotenv import load_dotenv
 load_dotenv()
-from core.genre import load_genre
+from core.genre import load_genre, perspective_eval_rule, prose_mode_system_block
 from core import validation
 from pipeline.slop import slop_score
 from pipeline.orientation import check_orientation_facts
@@ -100,11 +100,9 @@ def call_judge(prompt, max_tokens=2000):
     system = genre_cfg["identity"]["evaluator_system"]
     perspective = genre_cfg.get("perspective", "")
     if perspective:
-        from core.genre import perspective_eval_rule
         system += perspective_eval_rule(perspective)
         system += (" Flag any violation under prose_quality or voice_adherence "
                    "with a specific quote of the offending passage.")
-    from core.genre import prose_mode_system_block
     prose_block = prose_mode_system_block(genre_cfg)
     if prose_block:
         system += (prose_block +

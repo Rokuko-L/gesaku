@@ -9,18 +9,15 @@ uv run python -m unittest discover -s tests -p "test_*.py"
 `tests/` is the offline suite. A test that needs a real LLM belongs in the
 E2E layer, not here.
 
-**Start with `tests/test_e2e_craft_guards.py`** if you want the *story* of the
-craft failures this pipeline has actually shipped (v4 Mira head-hop, v4 ch20
-derail + Revision Notes trailers, v5 "the plan can wait", v5 5.6k-word ch19).
-It walks outline → prose guard → narrator lock → refrain ban → length band as
-one path. The per-module suites below are regression locks for specific bugs —
-dense on purpose, not boilerplate.
+**Start with `tests/test_e2e_craft_guards.py`** for the narrator-lock / refrain
+/ length-band rules (the v4/v5 craft failures). The per-module suites below
+are regression locks for specific bugs — dense on purpose.
 
 ## `unittest` modules
 
 | Suite | Tests | Covers |
 |---|---|---|
-| `tests/test_e2e_craft_guards.py` | 15 | **Narrative e2e:** Focus vs narrator split (MC-locked first person, v4 ch19 Mira hop), prose guard (derail cut, Revision Notes trailer, beat headings), refrain ban ("the plan can wait", proper nouns spared), length band (v5 ch19 oversize) |
+| `tests/test_e2e_craft_guards.py` | 17 | Focus vs narrator split (MC-locked first person, v4 ch19 Mira hop, generator-template Focus parsing, dialogue/possessive skips, rival-alias leak), refrain ban ("the plan can wait", proper nouns spared), length band (v5 ch19 oversize, climax ceiling) |
 | `tests/test_refactor_smoke.py` | 21 | pipeline invariants: genre owns chapter count, best-novel peak tracking, foundation checkpoint skip, named timeout budgets, tolerance policy, LLM-output schemas, prompt loading, `run_tool` timeout semantics, callback/chapter coupling |
 | `tests/test_canon_scoping.py` | 20 | sealed foundation views, As-of chapter filter, denylist terms, fail-closed malformed tags |
 | `tests/test_micro_plants.py` | 27 | micro-plant store: add/harvest/expire, near-dup + plant↔harvest clustering, the lifecycle guards (a payoff before its own plant is refused, an expired plant can still be harvested, `expire_stale` honours the stored `window`, idempotent marking), and the extract contract: an over-long plant truncates instead of failing the response, an unbroken token still validates, and a schema failure retries with feedback before giving up softly |

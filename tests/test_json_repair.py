@@ -110,37 +110,5 @@ class EncodingHealingTest(unittest.TestCase):
             self.assertEqual("", evaluate.load_file(Path(tmp) / "nope.md"))
 
 
-def run_test(name, raw_input, expected_dict):
-    try:
-        parsed = llm.parse_json_response(raw_input)
-        # Check keys and structure
-        for k, v in expected_dict.items():
-            assert parsed.get(k) == v, f"Key '{k}' mismatch: expected {v}, got {parsed.get(k)}"
-        print(f"SUCCESS: {name}")
-        return True
-    except Exception as e:
-        print(f"FAILED: {name}")
-        print(f"   Input: {raw_input}")
-        print(f"   Error: {type(e).__name__}: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-
-
-def main():
-    print("Running JSON repair parser unit tests...\n")
-    success = True
-    for name, raw_input, expected in CASES:
-        success &= run_test(name, raw_input, expected)
-
-    print("\n-------------------------------------------")
-    if success:
-        print("ALL TESTS PASSED SUCCESSFULLY!")
-        sys.exit(0)
-    else:
-        print("SOME TESTS FAILED.")
-        sys.exit(1)
-
-
 if __name__ == "__main__":
-    main()
+    unittest.main()

@@ -29,6 +29,28 @@ from pipeline.pipeline_infra import (
 # PHASE 4 — EXPORT
 # ---------------------------------------------------------------------------
 
+# Em dash handling is deliberately spread over four steps, and the order
+# matters. A dash with whitespace on BOTH sides is a pause and becomes a
+# comma; a dash with no space before it is a dialogue interrupt
+# ("Catch me if you—") and keeps its dash. The lookbehind cannot consume
+# the leading space, so `_SPACE_COMMA_RE` is what stops `Wait — no`
+# shipping as `Wait , no`; the other two clean the runs the replacement
+# leaves. History: a blanket `\u2014` → `", "` turned interrupts into
+# commas, and a spaced-only lookaround still emitted `Wait ,  no`.
+_EM_DASH_RE = re.compile(r"(?<=\s)—[ \t]*(?=\S)")
+_DOUBLE_SPACE_RE = re.compile(r" {2,}")
+_DOUBLE_COMMA_RE = re.compile(r" ?,\s*,")
+_SPACE_COMMA_RE = re.compile(r"(?<=\S)\s+,")
+_BOLD_RE = re.compile(r'\*\*(.+?)\*\*')                   # **bold** → plain
+
+
+def clean_em_dashes(text: str) -> str:
+    """Export dash/comma cleanup. The single owner — tests call this, not a copy."""
+    text = _EM_DASH_RE.sub(', ', text)
+    text = _DOUBLE_SPACE_RE.sub(" ", text)
+    text = _DOUBLE_COMMA_RE.sub(",", text)
+    return _SPACE_COMMA_RE.sub(",", text)
+
 
 def _tex_generation_timeout() -> int:
     """Budget for one LLM LaTeX pass, derived from the call budgets it wraps.
@@ -135,11 +157,6 @@ def run_export(state: dict, skip_epub: bool = False) -> dict:
     #    shipping as `Wait , no`; the other two clean the runs the replacement
     #    leaves. History: a blanket `\u2014` → `", "` turned interrupts into
     #    commas, and a spaced-only lookaround still emitted `Wait ,  no`.
-    _EM_DASH_RE = re.compile(r"(?<=\s)\u2014[ \t]*(?=\S)")
-    _DOUBLE_SPACE_RE = re.compile(r" {2,}")
-    _DOUBLE_COMMA_RE = re.compile(r" ?,\s*,")
-    _SPACE_COMMA_RE = re.compile(r"(?<=\S)\s+,")
-    _BOLD_RE    = re.compile(r'\*\*(.+?)\*\*')                   # **bold** → plain
     _removed_chapters: list[str] = []
 
     def _export_clean(text: str, label: str = "") -> str:
@@ -152,11 +169,8 @@ def run_export(state: dict, skip_epub: bool = False) -> dict:
             # The report names what left the manuscript; without it a legacy
             # chapter is silently rewritten on the way out.
             _removed_chapters.append(f"{label or 'chapter'}: {'; '.join(removed)}")
-        text = _BOLD_RE.sub(r'\1', text)
-        text = _EM_DASH_RE.sub(', ', text)
-        text = _DOUBLE_SPACE_RE.sub(" ", text)
-        text = _DOUBLE_COMMA_RE.sub(",", text)
-        return _SPACE_COMMA_RE.sub(",", text)
+        text = _BOLD_RE.sub(r"\1", text)
+        return clean_em_dashes(text)
 
     # 4. Concatenate chapters into manuscript.md (written into project dir)
     step("Building manuscript.md...")

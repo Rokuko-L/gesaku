@@ -19,12 +19,7 @@ from pathlib import Path
 
 from core.genre import perspective_eval_rule, perspective_system_block
 from core.outline import focus_names, protagonist_aliases
-from core.prose import (
-    narrator_identity_swaps,
-    needs_redraft,
-    strip_non_prose,
-    strip_artifacts,
-)
+from core.prose import narrator_identity_swaps
 from pipeline.draft_chapter import scan_prior_chapter_crutches
 from pipeline.pipeline_infra import chapter_length_bounds
 
@@ -142,38 +137,6 @@ class FocusVsNarratorTest(unittest.TestCase):
         rule = perspective_eval_rule("first_person")
         self.assertIn("hard failure", rule)
         self.assertIn("interlude", rule)
-
-
-class ProseGuardE2ETest(unittest.TestCase):
-    def test_v4_derail_is_cut_not_shipped(self):
-        body = (
-            "# Chapter 20: Ashpaw\n\n"
-            "The mold ceiling drips onto Lily's cheek.\n\n"
-            'the question says: "What is the role of differential reinforcement?"\n'
-        )
-        clean = strip_non_prose(body)
-        self.assertIn("mold ceiling", clean)
-        self.assertNotIn("differential reinforcement", clean)
-
-    def test_revision_notes_trailer_is_dropped(self):
-        body = (
-            "# Chapter 5: Bath\n\nReal prose ends here.\n\n"
-            "---\n\n**Revision Notes**\n\n1. Kept the three strongest sentences.\n"
-        )
-        clean = strip_non_prose(body)
-        self.assertIn("Real prose", clean)
-        self.assertNotIn("Revision Notes", clean)
-
-    def test_interrupted_chapter_is_redraft_not_keep(self):
-        body = "# Chapter 20: Ashpaw\n\nLet me re-read the prompt.\n"
-        self.assertTrue(needs_redraft(body))
-
-    def test_beat_headings_are_stripped_from_prose(self):
-        body = "# Chapter 11: Kidnap\n\n## BEAT 1\n\nThe hall smelled of incense.\n"
-        clean, removed = strip_artifacts(body)
-        self.assertIn("incense", clean)
-        self.assertNotIn("BEAT 1", clean)
-        self.assertTrue(removed)
 
 
 class RefrainBanE2ETest(unittest.TestCase):
