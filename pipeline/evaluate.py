@@ -249,14 +249,8 @@ def evaluate_chapter(chapter_num):
         length_penalty = 0.0
         tolerance_min = int(target_words * 0.8)
         
-        is_climax = False
-        if chapter_num == chapter_count:
-            is_climax = True
-        else:
-            if "climax" in chapter_outline.lower() or "battle" in chapter_outline.lower() or "final" in chapter_outline.lower() or "coup" in chapter_outline.lower():
-                is_climax = True
-                
-        if is_climax:
+        from pipeline.pipeline_infra import is_climax_chapter
+        if is_climax_chapter(chapter_num, chapter_count, chapter_outline):
             tolerance_max = int(target_words * 1.55) # ~5,000 words ceiling
             print(f"  [INFO] Climax chapter detected: higher length ceiling allowed ({tolerance_max} words)", file=sys.stderr)
         else:

@@ -1,14 +1,9 @@
-"""End-to-end craft guards for the v4/v5 failure modes.
+"""Craft-guard locks for the v4/v5 failure modes.
 
-One thorough module instead of a pile of micro-cases. Each scenario is a
-real defect from `projects/sir the confortable v4` or `v5`:
-
-- v4 ch19 opened "I am Mira Bakersville" — first-person head hop
-- v4 ch20 was 93% prompt derail; five chapters carried **Revision Notes**
-- v5 ran "the plan can wait" 9 times and shipped 5.6k-word ch19
-
-These walk the *path* the pipeline uses (outline → prose guard → narrator
-lock → refrain ban → length band), not each helper in isolation.
+Covers the MC-locked narrator (v4 ch19 "I am Mira Bakersville"), the
+cross-chapter refrain ban (v5 "the plan can wait"), and the draft length
+band (v5 5.6k-word ch19). Prose-guard cases live in test_prose_integrity.py
+with the real fixtures.
 """
 
 from __future__ import annotations
@@ -105,6 +100,42 @@ class FocusVsNarratorTest(unittest.TestCase):
         allowed = protagonist_aliases(OUTLINE)
         spoken = '"I am Marbas, your general," the man said.'
         self.assertEqual(narrator_identity_swaps(spoken, allowed), [])
+        self.assertEqual(
+            narrator_identity_swaps("He said 'I am Mira Bakersville' and left.", allowed),
+            [],
+        )
+        self.assertEqual(
+            narrator_identity_swaps("He said “I am Mira Bakersville” and left.", allowed),
+            [],
+        )
+
+    def test_stray_quote_does_not_swallow_the_line(self):
+        allowed = protagonist_aliases(OUTLINE)
+        self.assertTrue(
+            narrator_identity_swaps('The board was 5" thick and I am Mira Bakersville.', allowed)
+        )
+        self.assertTrue(
+            narrator_identity_swaps('She said "hello. I am Mira Bakersville.', allowed)
+        )
+
+    def test_unicode_and_hyphen_names(self):
+        allowed = protagonist_aliases(OUTLINE)
+        self.assertTrue(narrator_identity_swaps("I am Łukasz Nowak.", allowed))
+        self.assertTrue(narrator_identity_swaps("I am Élise Moreau.", allowed))
+        self.assertTrue(narrator_identity_swaps("I am Lily-Ann the Destroyer.", allowed))
+        self.assertTrue(narrator_identity_swaps("I am Kael-Lily.", allowed))
+
+    def test_narrator_lock_blocks_force_keep(self):
+        # B-1: a score tax is not a keep-gate.
+        from pipeline.phases.common import narrator_lock_blocks
+        import json, tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "eval.json"
+            self.assertFalse(narrator_lock_blocks(str(p)))  # missing
+            p.write_text(json.dumps({"narrator_violations": []}), encoding="utf-8")
+            self.assertFalse(narrator_lock_blocks(str(p)))
+            p.write_text(json.dumps({"narrator_violations": ["I am Mira"]}), encoding="utf-8")
+            self.assertTrue(narrator_lock_blocks(str(p)))
 
     def test_possessives_and_contractions_are_not_swaps(self):
         allowed = protagonist_aliases(OUTLINE)

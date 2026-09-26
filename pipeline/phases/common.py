@@ -210,6 +210,24 @@ DEFAULT_NEAR_CLEAN_MESSAGE = (
 )
 
 
+def narrator_lock_blocks(eval_log_path) -> bool:
+    """True when the eval recorded narrator identity swaps (first_person hard fail).
+
+    A score tax is not a keep-gate: drafting must refuse keep / near-clean /
+    force-keep when this is true, or a single swap on a strong chapter ships.
+    """
+    if not eval_log_path:
+        return False
+    p = Path(eval_log_path)
+    if not p.exists():
+        return False
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    return bool(data.get("narrator_violations"))
+
+
 def build_eval_feedback(eval_log_path):
     """Build targeted retry feedback from a failed chapter eval JSON.
 

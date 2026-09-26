@@ -1,8 +1,7 @@
 """JSON-repair parser tests (core.llm.parse_json_response) + encoding healing.
 
-Offline and LLM-free: each case feeds a malformed judge payload and asserts the
-healed parse. Exposed as a TestCase so CI discovers it (the script-style
-`main()` below stays for running the file directly).
+Offline and LLM-free: each case feeds a malformed judge payload and asserts
+the healed parse. Also covers UTF-16 source self-heal in evaluate.load_file.
 """
 from core import llm
 import sys

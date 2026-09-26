@@ -68,7 +68,7 @@ Related: [../pipeline/spec.md](spec.md) for sealed foundation + retrofit.
    judge ever sees an outlier — see [spec.md](spec.md).
 3. **Orientation penalty** — up to −2.0 when ≥2 outline Orientation Facts
    aren't dramatized (synonym-aware matching).
-4. **Narrator penalty** — up to −2.0 (`0.75 × swaps`, first_person only).
+4. **Narrator penalty** — up to −6.0 (`2.0 × swaps`, cap 6.0, first_person only). A narrator swap also **blocks keep / near-clean / force-keep** in drafting (`narrator_lock_blocks`), not merely taxes the score.
    Mechanical: `prose.narrator_identity_swaps` flags "I am Mira Bakersville" /
    "my name is Corvo Quill" when the given name is outside the MC's
    Focus/alias set (`outline.protagonist_aliases`). v4 ch19 shipped a full

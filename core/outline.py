@@ -4,6 +4,7 @@ import re
 import sys
 
 from core.paths import get_outline_path
+from core.prose import TITLE_WORDS
 
 
 def normalize_chapter_heading(text: str, chapter_num: int) -> str:
@@ -542,6 +543,7 @@ _LIST_MARKER = re.compile(r"^(?:[-*•]|\d+[.)])\s+")
 _FOCUS_JUNK = {
     "then", "and", "or", "alternating", "dip", "brief", "present", "on-page",
     "off-page", "interlude", "scene", "focus", "pov", "the", "a", "an",
+    "of", "in", "on", "at", "to", "for", "with", "from", "by", "de", "van",
 }
 
 
@@ -594,7 +596,7 @@ def _split_focus_people(label: str) -> list[dict]:
         # Given name = first title-cased token that is not a role word.
         given = ""
         for t in tokens:
-            if t[:1].isupper() and t.lower() not in {"captain", "king", "queen", "general", "nanny", "doctor", "dr", "sir", "lady", "lord"}:
+            if t[:1].isupper() and t.lower() not in TITLE_WORDS:
                 given = t
                 break
         if not given and tokens:
@@ -633,13 +635,8 @@ def protagonist_aliases(outline_text: str) -> set[str]:
                 continue
             for t in p["tokens"]:
                 aliases.add(t.lower())
-                # Hyphenated compounds contribute their parts too.
-                if "-" in t:
-                    aliases.update(part.lower() for part in t.split("-") if part)
             for a in p["aliases"]:
                 for t in a.replace("/", " ").replace("|", " ").split():
                     if t and t.lower() not in _FOCUS_JUNK:
                         aliases.add(t.lower())
-                        if "-" in t:
-                            aliases.update(part.lower() for part in t.split("-") if part)
     return aliases

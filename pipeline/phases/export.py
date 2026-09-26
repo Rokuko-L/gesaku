@@ -10,7 +10,6 @@ sys.path.insert(0, str(_Path(__file__).resolve().parent.parent.parent))
 
 import re
 import shutil
-import sys
 
 from core import novel_tex as novel_tex_module
 from core import paths
@@ -149,14 +148,6 @@ def run_export(state: dict, skip_epub: bool = False) -> dict:
     #    save time (core.prose.strip_artifacts), this pass only matters for
     #    projects drafted before that guard existed; it keeps them shippable.
     #
-    #    Em dash handling is deliberately spread over four steps, and the order
-    #    matters. A dash with whitespace on BOTH sides is a pause and becomes a
-    #    comma; a dash with no space before it is a dialogue interrupt
-    #    ("Catch me if you—") and keeps its dash. The lookbehind cannot consume
-    #    the leading space, so `_SPACE_COMMA_RE` is what stops `Wait — no`
-    #    shipping as `Wait , no`; the other two clean the runs the replacement
-    #    leaves. History: a blanket `\u2014` → `", "` turned interrupts into
-    #    commas, and a spaced-only lookaround still emitted `Wait ,  no`.
     _removed_chapters: list[str] = []
 
     def _export_clean(text: str, label: str = "") -> str:

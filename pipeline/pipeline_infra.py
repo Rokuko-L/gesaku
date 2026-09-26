@@ -280,7 +280,7 @@ def is_climax_chapter(chapter_num: int, chapter_count: int, outline_text: str = 
     if chapter_count and chapter_num == chapter_count:
         return True
     text = (outline_text or "").lower()
-    return any(k in text for k in ("climax", "battle", "final", "coup"))
+    return bool(re.search(r"\b(?:climax|battle|final|coup)\b", text))
 
 
 def max_chapter_attempts() -> int:

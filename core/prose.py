@@ -380,21 +380,22 @@ def needs_redraft(text: str, min_words: int = MIN_CHAPTER_WORDS) -> bool:
 # --- 5. narrator lock (first_person is MC-locked) ---------------------------
 # "I am Mira Bakersville" mid-book (v4 ch19) is a narrator swap, not voice.
 # Detect self-identification that names someone other than the MC/aliases.
-_I_AM_NAME = re.compile(
-    r"\b(?i:I\s+am)\s+([A-Z][\w'’\-]+(?:\s+[A-Z][\w'’\-]+)*)",
-)
-_I_AM_CONTRACTION = re.compile(
-    r"\b(?i:I['’]m)\s+([A-Z][\w'’\-]+(?:\s+[A-Z][\w'’\-]+)*)",
-)
+# Name words are Unicode letters (not ASCII [A-Z]) so Lukasz / Elise / Ursula
+# are visible; the first character must still be uppercase.
+_NAME_WORD = r"[^\W\d_][\w'\u2019\-]*"
+_NAME = rf"{_NAME_WORD}(?:\s+{_NAME_WORD})*"
+_I_AM_NAME = re.compile(rf"\b(?i:I\s+am)\s+({_NAME})")
+_I_AM_CONTRACTION = re.compile(rf"\b(?i:I['\u2019]m)\s+({_NAME})")
 _MY_NAME_IS = re.compile(
-    r"\b(?i:my\s+name\s+is|call\s+me)\s+([A-Z][\w'’\-]+(?:\s+[A-Z][\w'’\-]+)*)",
+    rf"\b(?i:my\s+name\s+is|call\s+me)\s+({_NAME})",
 )
-# "seventeen", "the Render of Ash", a job title — not a person name.
+# Leading determiners only. Job titles are _TITLE_WORDS' job; a lowercase
+# opener never reaches the name capture because of the uppercase check below.
 _NOT_A_NAME = re.compile(
     r"^(?:a|an|the|this|that|so|not|still|just|here|there|now)\b",
     re.IGNORECASE,
 )
-_TITLE_WORDS = {
+TITLE_WORDS = {
     "captain", "king", "queen", "general", "nanny", "doctor", "dr", "sir",
     "lady", "lord", "master", "agent", "prince", "princess",
 }
@@ -406,24 +407,70 @@ def _name_tokens(name: str) -> list[str]:
         if not t or _NOT_A_NAME.match(t):
             continue
         # Possessives ("Baal's") and trailing junk are not name tokens.
-        t = re.sub(r"[’']s$", "", t, flags=re.IGNORECASE)
-        if t and t.lower() not in _TITLE_WORDS:
+        t = re.sub(r"['\u2019]s$", "", t, flags=re.IGNORECASE)
+        if t and t.lower() not in TITLE_WORDS:
             out.append(t)
     return out
 
 
+_QUOTE_PAIRS = (
+    ('"', '"'),
+    ("\u201c", "\u201d"),
+    ("'", "'"),
+    ("\u2018", "\u2019"),
+)
+
+
 def _in_quoted_span(text: str, start: int) -> bool:
-    """True when `start` sits inside dialogue quotes on its paragraph/line."""
-    para_start = text.rfind("\n", 0, start) + 1
-    para_end = text.find("\n", start)
-    if para_end < 0:
-        para_end = len(text)
-    para = text[para_start:para_end]
-    rel = start - para_start
-    double = para[:rel].count('"')
-    curly_open = para[:rel].count("“")
-    curly_close = para[:rel].count("”")
-    return (double % 2 == 1) or (curly_open > curly_close)
+    """True when `start` sits inside a well-formed quoted span on its line.
+
+    Stray inch marks and unclosed quotes do NOT open a span (they must not
+    swallow the rest of the line). Single-quote / curly-single dialogue is
+    a span, same as double.
+    """
+    line_start = text.rfind("\n", 0, start) + 1
+    line_end = text.find("\n", start)
+    if line_end < 0:
+        line_end = len(text)
+    line = text[line_start:line_end]
+    rel = start - line_start
+    i = 0
+    while i < rel:
+        ch = line[i]
+        closer = None
+        for o, c in _QUOTE_PAIRS:
+            if ch == o:
+                closer = c
+                break
+        if closer is None:
+            i += 1
+            continue
+        j = line.find(closer, i + 1)
+        if j < 0:
+            # Unclosed opener: not a span. Keep scanning.
+            i += 1
+            continue
+        if j >= rel:
+            return True
+        i = j + 1
+    return False
+
+
+def _leading_name(name: str) -> str:
+    """Leading Title-Case run of a self-id, allowing name particles.
+
+    "Mira Bakersville and I am looking" -> "Mira Bakersville"
+    "Baal the Second" -> "Baal the Second"
+    """
+    particles = {"of", "de", "van", "von", "da", "di", "del", "la", "le", "the"}
+    words = name.split()
+    out: list[str] = []
+    for i, w in enumerate(words):
+        if w[:1].isupper() or (out and w.lower() in particles):
+            out.append(w)
+        else:
+            break
+    return " ".join(out)
 
 
 def narrator_identity_swaps(text: str, allowed_names: set[str] | None = None) -> list[str]:
@@ -444,16 +491,20 @@ def narrator_identity_swaps(text: str, allowed_names: set[str] | None = None) ->
             if _in_quoted_span(text, m.start()):
                 continue
             name = m.group(1).strip()
+            if not name or not name[0].isupper():
+                continue  # "I am seventeen" / "I am so tired"
+            # "I am Not Lily" is negation, not identity — never launder it.
+            if _NOT_A_NAME.match(name):
+                continue
+            name = _leading_name(name)
             tokens = _name_tokens(name)
             if not tokens:
                 continue
-            # Given name (or any hyphen part) must be the MC. A shared
-            # surname ("Bakersville") must not launder a rival past the lock.
-            hit = tokens[0].lower()
-            parts = [p for p in re.split(r"[-\s]+", hit) if p]
-            if hit in allowed or any(p in allowed for p in parts):
+            # Given name only. A shared surname or a hyphen piece must not
+            # launder a rival past the lock ("I am Lily-Ann", "I am Kael-Lily").
+            if tokens[0].lower() in allowed:
                 continue
-            snippet = m.group(0)
+            snippet = f"{m.group(0)[: m.start(1) - m.start()]}{name}"
             if len(snippet) > 80:
                 snippet = snippet[:77] + "..."
             found.append(snippet)  # keep repeats — each costs the narrator penalty
