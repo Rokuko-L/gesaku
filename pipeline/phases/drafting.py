@@ -21,8 +21,10 @@ from core.genre import load_genre
 from core.outline import extract_outline_debts
 
 from pipeline.pipeline_infra import (
-    INFRA_MAX_ATTEMPTS, banner, chapter_threshold, count_words_in_chapters,
-    force_keep_margin, get_total_chapters, git_add_commit, log_result,
+    INFRA_MAX_ATTEMPTS, banner, chapter_length_bounds, chapter_threshold,
+    count_words_in_chapters,
+    force_keep_margin, get_total_chapters, git_add_commit, is_climax_chapter,
+    log_result,
     max_chapter_attempts, near_clean_margin, parse_score,
     resolve_chapters_total, run_tool, save_state, step, store_novel_score,
     timeout_for, uv_run,
@@ -87,12 +89,16 @@ def run_drafting(state: dict) -> dict:
     # a chapter is structurally broken — 100 bytes (~15 words) is not a draft).
     try:
         genre_cfg = load_genre()
-        est_words = genre_cfg["generation"]["outline"]["estimated_words"]
-        target_words = est_words // total
+        est_words = genre_cfg["generation"]["outline"]["estimated_words"] or 0
+        total_est = max(1, genre_cfg["generation"]["outline"]["estimated_chapters"] or 1)
+        target_words = (est_words // total_est) if est_words else 3200
     except (KeyError, ZeroDivisionError):
         target_words = 3200
-    min_words = int(target_words * 0.6)
-    step(f"Chapter target: ~{target_words} words (min acceptable draft: {min_words})")
+    min_words, max_words = chapter_length_bounds(
+        target_words, is_climax=False
+    )
+    # Per-chapter climax band is applied inside the loop (last chapter / outline).
+    step(f"Chapter target: ~{target_words} words (accept band: {min_words}-{max_words})")
 
     # Hard floor for force-keeping a failed chapter: below this we skip and record,
     # we do NOT ship sub-garbage as canon.
@@ -104,6 +110,18 @@ def run_drafting(state: dict) -> dict:
 
     for ch in range(start_chapter, total + 1):
         banner(f"Drafting Chapter {ch}/{total}", "-")
+        _outline_entry = ""
+        try:
+            from core.outline import extract_chapter_outline
+            _outline_entry = extract_chapter_outline(
+                (paths.get_outline_path().read_text(encoding="utf-8")
+                 if paths.get_outline_path().exists() else ""),
+                ch,
+            )
+        except Exception:
+            _outline_entry = ""
+        _climax = is_climax_chapter(ch, total, _outline_entry)
+        min_words, max_words = chapter_length_bounds(target_words, is_climax=_climax)
         drafted = False
         best_score = -1.0
         best_draft_content = None
@@ -117,6 +135,7 @@ def run_drafting(state: dict) -> dict:
             step(f"Attempt {attempt}/{max_attempts}")
             # Inner infra-retry loop: timeouts, empty files, and truncations don't burn quality attempts
             quality_attempt = False
+            length_fix_sent = False
             for infra in range(1, INFRA_MAX_ATTEMPTS + 1):
                 cmd = f"\"{sys.executable}\" pipeline/draft_chapter.py {ch}"
                 if retry_feedback:
@@ -141,21 +160,47 @@ def run_drafting(state: dict) -> dict:
                     # Chronic undershoot (observed: 15 consecutive Ch-1 drafts
                     # below the floor). Retry with explicit expansion numbers —
                     # a bare "too short" gives the writer nothing to act on.
-                    step(f"Chapter too short ({word_count}w < {min_words}w minimum), "
-                         f"retrying with expansion budget...")
-                    genre_cfg = load_genre()
-                    target = (genre_cfg["generation"]["outline"]["estimated_words"]
-                              // max(genre_cfg["generation"]["outline"]["estimated_chapters"], 1))
-                    shortfall = target - word_count
-                    retry_feedback = (
-                        f"LENGTH FIX REQUIRED: your previous draft was only {word_count} words; "
-                        f"the target is ~{target} words (shortfall: {shortfall}).\n"
-                        f"Do NOT add filler or summarize faster. Instead: expand EVERY scene beat "
-                        f"to full scene treatment — dramatize the beats you compressed, add sensory "
-                        f"detail, physical action, and real-time interiority per beat. "
-                        f"Aim for at least {min_words} words this time."
-                    )
-                    continue
+                    # After one expand retry, accept the draft so a persistently
+                    # short model cannot leave a hole in the manuscript (B6).
+                    if not length_fix_sent:
+                        step(f"Chapter too short ({word_count}w < {min_words}w minimum), "
+                             f"retrying with expansion budget...")
+                        genre_cfg = load_genre()
+                        target = (genre_cfg["generation"]["outline"]["estimated_words"]
+                                  // max(genre_cfg["generation"]["outline"]["estimated_chapters"], 1))
+                        shortfall = target - word_count
+                        retry_feedback = (
+                            f"LENGTH FIX REQUIRED: your previous draft was only {word_count} words; "
+                            f"the target is ~{target} words (shortfall: {shortfall}).\n"
+                            f"Do NOT add filler or summarize faster. Instead: expand EVERY scene beat "
+                            f"to full scene treatment — dramatize the beats you compressed, add sensory "
+                            f"detail, physical action, and real-time interiority per beat. "
+                            f"Aim for at least {min_words} words this time."
+                        )
+                        length_fix_sent = True
+                        continue
+                    step(f"Accepting short draft ({word_count}w) after expansion retry")
+                    quality_attempt = True
+                    break
+                if word_count > max_words:
+                    # v5 ch19 shipped at 5.6k against a ~3.5k target. Compress
+                    # before the judge ever sees it — but only once; after that
+                    # the length penalty at eval owns the call (no silent hole).
+                    if not length_fix_sent:
+                        step(f"Chapter too long ({word_count}w > {max_words}w maximum), "
+                             f"retrying with compression budget...")
+                        retry_feedback = (
+                            f"LENGTH FIX REQUIRED: your previous draft was {word_count} words; "
+                            f"the maximum acceptable is {max_words} words (target ~{target_words}).\n"
+                            f"Compress WITHOUT dropping any scene beat: cut recap, repeated "
+                            f"setup, and double-explained jokes. Keep every beat's decisive "
+                            f"action and the chapter ending. Land at or under {max_words} words."
+                        )
+                        length_fix_sent = True
+                        continue
+                    step(f"Accepting long draft ({word_count}w) after compression retry")
+                    quality_attempt = True
+                    break
 
                 quality_attempt = True
                 break

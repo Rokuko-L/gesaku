@@ -30,6 +30,7 @@ Gate overrides are read at call time via helpers (defaults above; env wins):
 |---|---|
 | `foundation_threshold()` | `GESAKU_FOUNDATION_THRESHOLD` |
 | `chapter_threshold()` | `GESAKU_CHAPTER_THRESHOLD` |
+| `chapter_length_bounds(target, is_climax)` | `GESAKU_CHAPTER_MIN_RATIO` / `GESAKU_CHAPTER_MAX_RATIO` (defaults 0.60 / 1.45; climax ceiling 1.55) |
 | `max_chapter_attempts()` | `GESAKU_MAX_CHAPTER_ATTEMPTS` |
 | `min_revision_cycles()` / `max_revision_cycles()` | `GESAKU_MIN_REVISION_CYCLES` / `GESAKU_MAX_REVISION_CYCLES` |
 | `plateau_delta()` | `GESAKU_PLATEAU_DELTA` |

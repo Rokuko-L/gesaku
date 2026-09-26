@@ -531,5 +531,115 @@ def extract_outline_debts(outline_text: str) -> list[str]:
     for p in plants:
         if p["slug"] not in harvested_slugs:
             debts.append(f"Ch {p['chapter']} Setup: {p['slug']} - \"{p['desc']}\"")
-            
+
     return debts
+
+
+_PAREN_ALIAS = re.compile(r"\(([^)]+)\)")
+_FOCUS_KEY = re.compile(r"^(?:Focus|POV)\s*:\s*(.+)$", re.IGNORECASE)
+_LIST_MARKER = re.compile(r"^(?:[-*•]|\d+[.)])\s+")
+# Junk that shows up inside Focus labels ("Wick (dip), then Lily", "Lily / Kael alternating").
+_FOCUS_JUNK = {
+    "then", "and", "or", "alternating", "dip", "brief", "present", "on-page",
+    "off-page", "interlude", "scene", "focus", "pov", "the", "a", "an",
+}
+
+
+def _focus_line_value(raw: str) -> str | None:
+    """Extract the name field from a Focus/POV line, any markdown dress."""
+    line = raw.strip()
+    if not line or line.startswith("#"):
+        return None
+    line = _LIST_MARKER.sub("", line)
+    line = line.replace("*", "").strip()
+    m = _FOCUS_KEY.match(line)
+    if not m:
+        return None
+    value = m.group(1).strip().strip("*").strip()
+    return value or None
+
+
+def focus_names(outline_text: str) -> list[str]:
+    """Every Focus/POV label in the outline, in order.
+
+    Accepts the generator template (`1. Focus: Lily`), bullets
+    (`- **Focus:** Lily`), and bare `**POV:** Lily`.
+    """
+    out: list[str] = []
+    for raw in (outline_text or "").splitlines():
+        value = _focus_line_value(raw)
+        if value:
+            out.append(value)
+    return out
+
+
+def _split_focus_people(label: str) -> list[dict]:
+    """Split a Focus label into person records.
+
+    `Lily Bakersville (Baal) / Kael` → two people; `Wick (dip), then Lily`
+    → two people. Each record: given name, all head tokens, paren aliases.
+    """
+    people: list[dict] = []
+    chunks = re.split(r"\s*(?:,|/|\||\bthen\b)\s*", label)
+    for chunk in chunks:
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        parens = [a for a in _PAREN_ALIAS.findall(chunk) if a.strip()]
+        head = _PAREN_ALIAS.sub(" ", chunk)
+        tokens = [t for t in re.split(r"\s+", head) if t]
+        tokens = [t for t in tokens if t.lower() not in _FOCUS_JUNK and t != "*"]
+        if not tokens:
+            continue
+        # Given name = first title-cased token that is not a role word.
+        given = ""
+        for t in tokens:
+            if t[:1].isupper() and t.lower() not in {"captain", "king", "queen", "general", "nanny", "doctor", "dr", "sir", "lady", "lord"}:
+                given = t
+                break
+        if not given and tokens:
+            given = tokens[0]
+        people.append({"given": given, "tokens": tokens, "aliases": parens})
+    return people
+
+
+def protagonist_aliases(outline_text: str) -> set[str]:
+    """Lowercase name tokens for the most common Focus person (the MC).
+
+    `Focus: Lily Bakersville (Baal)` yields lily / bakersville / baal so a
+    first-person lock accepts both the public name and the secret one.
+    Parenthetical aliases are taken only from labels whose person *is* the
+    MC — a rival's "(the Render of Ash)" must not whitelist that title.
+    """
+    labels = focus_names(outline_text)
+    if not labels:
+        return set()
+    freq: dict[str, int] = {}
+    per_label: list[list[dict]] = []
+    for label in labels:
+        people = _split_focus_people(label)
+        per_label.append(people)
+        for p in people:
+            g = p["given"].lower()
+            if g:
+                freq[g] = freq.get(g, 0) + 1
+    if not freq:
+        return set()
+    mc = max(freq, key=freq.get)
+    aliases: set[str] = set()
+    for people in per_label:
+        for p in people:
+            if p["given"].lower() != mc:
+                continue
+            for t in p["tokens"]:
+                aliases.add(t.lower())
+                # Hyphenated compounds contribute their parts too.
+                if "-" in t:
+                    aliases.update(part.lower() for part in t.split("-") if part)
+            for a in p["aliases"]:
+                for t in a.replace("/", " ").replace("|", " ").split():
+                    if t and t.lower() not in _FOCUS_JUNK:
+                        aliases.add(t.lower())
+                        if "-" in t:
+                            aliases.update(part.lower() for part in t.split("-") if part)
+    return aliases

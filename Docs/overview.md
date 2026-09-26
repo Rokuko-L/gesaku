@@ -37,13 +37,15 @@ core/             Shared library — no pipeline-specific logic
 │                   plant↔harvest clustering. A harvest may *declare* the
 │                   chapter that set it up; declared beats inferred, and the
 │                   cluster reports which it used
-├── outline.py      Outline text ops: chapter headings, premise beats, and the
-│                   single owner of the `[Plant: slug - "desc"]` tag format
-│                   (parse_plant_tags). Plants/harvests validation, debt
-│                   extraction, and open_debts_for_chapter
+├── outline.py      Outline text ops: chapter headings, premise beats, Focus
+│                   labels / protagonist aliases, and the single owner of the
+│                   `[Plant: slug - "desc"]` tag format (parse_plant_tags).
+│                   Plants/harvests validation, debt extraction, and
+│                   open_debts_for_chapter
 ├── prose.py        Prose guard: cuts an appended notes block or a derail into
-│                   prompt echo, and reports what survives. One module, all
-│                   write sites
+│                   prompt echo, and reports what survives. Also
+│                   narrator_identity_swaps (first_person is MC-locked).
+│                   One module, all write sites
 ├── textstats.py    Context windows (tail/head), repetition detection
 ├── novel_tex.py    Default LaTeX novel.tex template generation
 ├── genre.py        Genre config loader + validator (active_genre.json);

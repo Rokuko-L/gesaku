@@ -255,6 +255,11 @@ For each chapter in outline order:
      - Canon view as of this chapter (public foundation + core +
        prior As-of only — sealed visible_from>N facts withheld)
   2. draft_chapter.py → chapters/ch_NN.md
+     Length band before quality eval (`pipeline_infra.chapter_length_bounds`):
+     min = 0.60× target, max = 1.45× target (1.55× climax). Outside the band
+     the draft is discarded with expansion/compression feedback and retried
+     inside the same infra attempt — an outlier never reaches the judge.
+     Eval's own length *penalty* (80–125%) is a separate, softer signal.
   3. evaluate.py --chapter=NN  (judge sees the same chapter-scoped canon view)
   4. If score > 6.0 → keep, commit. If < 6.0 → discard, retry (max 5).
   5. Extract new canon entries from eval output → append to canon.md

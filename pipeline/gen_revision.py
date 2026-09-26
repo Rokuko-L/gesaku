@@ -14,7 +14,7 @@ from core import textstats
 import sys
 from pathlib import Path
 from dotenv import load_dotenv
-from core.genre import load_genre, prose_mode_system_block
+from core.genre import load_genre, perspective_system_block, prose_mode_system_block
 from core import paths
 from core import prose
 from core import retrieval
@@ -26,13 +26,7 @@ def call_writer(prompt, max_tokens=16000):
     system = genre_cfg["identity"]["revision_system"]
     perspective = genre_cfg.get("perspective", "")
     if perspective:
-        if perspective == "first_person":
-            system += ("\n\nMANDATORY PERSPECTIVE: Keep the chapter in STRICT FIRST-PERSON "
-                       "limited narration from the POV character ('I/me/my'). No third-person narration.")
-        else:
-            system += ("\n\nMANDATORY PERSPECTIVE: Keep the chapter in STRICT THIRD-PERSON "
-                       "limited narration anchored to the POV character ('he/she/they' or the "
-                       "character's name). Never switch to first-person narration.")
+        system += perspective_system_block(perspective)
     system += prose_mode_system_block(genre_cfg)
     return call_llm(prompt=prompt, system=system, model_key="writer", max_tokens=max_tokens, beta_context=True, timeout_role="standard", temperature=0.8, raise_on_truncation=True)
 

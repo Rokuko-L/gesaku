@@ -32,7 +32,7 @@ from core import plant_hygiene
 from core import prose
 from core import outline as outline_mod
 from core import textstats
-from core.genre import load_genre, prose_mode_system_block
+from core.genre import load_genre, perspective_system_block, prose_mode_system_block
 from core.llm import call_llm
 from core.paths import get_novel_title
 
@@ -45,16 +45,8 @@ def call_writer(prompt: str, max_tokens: int = 16000) -> str:
     genre_cfg = load_genre()
     system = genre_cfg["identity"]["revision_system"]
     perspective = genre_cfg.get("perspective", "")
-    if perspective == "first_person":
-        system += (
-            "\n\nMANDATORY PERSPECTIVE: Keep STRICT FIRST-PERSON limited narration "
-            "from the original POV character."
-        )
-    elif perspective == "third_person":
-        system += (
-            "\n\nMANDATORY PERSPECTIVE: Keep STRICT THIRD-PERSON limited narration "
-            "anchored to the original POV character."
-        )
+    if perspective:
+        system += perspective_system_block(perspective)
     system += prose_mode_system_block(genre_cfg)
     return call_llm(
         prompt=prompt,

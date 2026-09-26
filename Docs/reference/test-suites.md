@@ -9,10 +9,18 @@ uv run python -m unittest discover -s tests -p "test_*.py"
 `tests/` is the offline suite. A test that needs a real LLM belongs in the
 E2E layer, not here.
 
-## `unittest` modules (360 tests)
+**Start with `tests/test_e2e_craft_guards.py`** if you want the *story* of the
+craft failures this pipeline has actually shipped (v4 Mira head-hop, v4 ch20
+derail + Revision Notes trailers, v5 "the plan can wait", v5 5.6k-word ch19).
+It walks outline → prose guard → narrator lock → refrain ban → length band as
+one path. The per-module suites below are regression locks for specific bugs —
+dense on purpose, not boilerplate.
+
+## `unittest` modules
 
 | Suite | Tests | Covers |
 |---|---|---|
+| `tests/test_e2e_craft_guards.py` | 15 | **Narrative e2e:** Focus vs narrator split (MC-locked first person, v4 ch19 Mira hop), prose guard (derail cut, Revision Notes trailer, beat headings), refrain ban ("the plan can wait", proper nouns spared), length band (v5 ch19 oversize) |
 | `tests/test_refactor_smoke.py` | 21 | pipeline invariants: genre owns chapter count, best-novel peak tracking, foundation checkpoint skip, named timeout budgets, tolerance policy, LLM-output schemas, prompt loading, `run_tool` timeout semantics, callback/chapter coupling |
 | `tests/test_canon_scoping.py` | 20 | sealed foundation views, As-of chapter filter, denylist terms, fail-closed malformed tags |
 | `tests/test_micro_plants.py` | 27 | micro-plant store: add/harvest/expire, near-dup + plant↔harvest clustering, the lifecycle guards (a payoff before its own plant is refused, an expired plant can still be harvested, `expire_stale` honours the stored `window`, idempotent marking), and the extract contract: an over-long plant truncates instead of failing the response, an unbroken token still validates, and a schema failure retries with feedback before giving up softly |
@@ -38,16 +46,15 @@ E2E layer, not here.
 | `tests/test_utils_stress.py` | 6 | concurrency + traversal edge cases |
 | `tests/test_webui_server.py` | 13 | bridge import smoke, `norm_phase`, `_mask`, `llm_event_view` (+ producer-source guard) |
 | `tests/test_webui_settings_agentic.py` | 12 | Settings `agentic` knobs: GET defaults/env, POST .env write, invalid mode/budget rejected (string and fractional float) |
-| `tests/test_export_restore.py` | 4 | the export peak restore: extra chapters dropped, plant store restored, orphan store dropped |
+| `tests/test_export_restore.py` | 9 | the export peak restore (extra chapters dropped, plant store restored, orphan store dropped) + PDF em-dash treatment (three production bugs) |
 | `tests/test_gatekeepers.py` | 4 | outline gatekeepers execute for real — drift verdicts block/pass, short books skip without LLM calls |
 | `tests/test_path_contamination.py` | 4 | cross-project leakage, root cleanliness, registry placement |
 | `tests/test_retrofit_gate.py` | 4 | retrofit coverage block + non-blocking continuity report |
 | `tests/test_import_integrity.py` | 3 | AST-scans every import statement (incl. lazy function-level ones) resolves; enforces the `core <- foundation/pipeline` direction |
 | `tests/test_revert_behavior.py` | 3 | results.tsv best-commit lookup + both revert branches, against a throwaway git repo |
-| `tests/test_encoding_healing.py` | 2 | UTF-16/latin-1 self-heal |
 | `tests/test_static_analysis.py` | 2 | ruff F821/F811 gate + single entry-point `main()` per entry file |
 | `tests/test_tee_flush.py` | 2 | the Tee'd pipeline log is readable before close; a dead log handle cannot kill a run |
-| `tests/test_json_repair.py` | 1 | damaged-JSON healing layers (one subtest per malformed payload) |
+| `tests/test_json_repair.py` | 3 | damaged-JSON healing layers + UTF-16/latin-1 source self-heal in `evaluate.load_file` |
 
 Some of these files also keep a `main()` so they can be run directly; the
 `TestCase` is what CI discovers. `tests/` is scanned by

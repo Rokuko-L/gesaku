@@ -375,3 +375,86 @@ def needs_redraft(text: str, min_words: int = MIN_CHAPTER_WORDS) -> bool:
     keep. Nothing else is rejected on length.
     """
     return cut_reason(text) == "derail" and prose_words(text) < min_words
+
+
+# --- 5. narrator lock (first_person is MC-locked) ---------------------------
+# "I am Mira Bakersville" mid-book (v4 ch19) is a narrator swap, not voice.
+# Detect self-identification that names someone other than the MC/aliases.
+_I_AM_NAME = re.compile(
+    r"\b(?i:I\s+am)\s+([A-Z][\w'’\-]+(?:\s+[A-Z][\w'’\-]+)*)",
+)
+_I_AM_CONTRACTION = re.compile(
+    r"\b(?i:I['’]m)\s+([A-Z][\w'’\-]+(?:\s+[A-Z][\w'’\-]+)*)",
+)
+_MY_NAME_IS = re.compile(
+    r"\b(?i:my\s+name\s+is|call\s+me)\s+([A-Z][\w'’\-]+(?:\s+[A-Z][\w'’\-]+)*)",
+)
+# "seventeen", "the Render of Ash", a job title — not a person name.
+_NOT_A_NAME = re.compile(
+    r"^(?:a|an|the|this|that|so|not|still|just|here|there|now)\b",
+    re.IGNORECASE,
+)
+_TITLE_WORDS = {
+    "captain", "king", "queen", "general", "nanny", "doctor", "dr", "sir",
+    "lady", "lord", "master", "agent", "prince", "princess",
+}
+
+
+def _name_tokens(name: str) -> list[str]:
+    out = []
+    for t in re.split(r"\s+", name.strip()):
+        if not t or _NOT_A_NAME.match(t):
+            continue
+        # Possessives ("Baal's") and trailing junk are not name tokens.
+        t = re.sub(r"[’']s$", "", t, flags=re.IGNORECASE)
+        if t and t.lower() not in _TITLE_WORDS:
+            out.append(t)
+    return out
+
+
+def _in_quoted_span(text: str, start: int) -> bool:
+    """True when `start` sits inside dialogue quotes on its paragraph/line."""
+    para_start = text.rfind("\n", 0, start) + 1
+    para_end = text.find("\n", start)
+    if para_end < 0:
+        para_end = len(text)
+    para = text[para_start:para_end]
+    rel = start - para_start
+    double = para[:rel].count('"')
+    curly_open = para[:rel].count("“")
+    curly_close = para[:rel].count("”")
+    return (double % 2 == 1) or (curly_open > curly_close)
+
+
+def narrator_identity_swaps(text: str, allowed_names: set[str] | None = None) -> list[str]:
+    """Return narration self-ids outside the MC's names.
+
+    `allowed_names` is a lowercase set of the protagonist's names/aliases
+    ("lily", "bakersville", "baal"). Empty/None means the MC is unknown —
+    returns [] so an unparseable outline cannot poison every chapter.
+    Dialogue (quoted self-intro) is ignored: a guard saying "I am Marbas"
+    is not a narrator swap.
+    """
+    allowed = {n.lower() for n in (allowed_names or set())}
+    if not allowed:
+        return []
+    found: list[str] = []
+    for pattern in (_I_AM_NAME, _I_AM_CONTRACTION, _MY_NAME_IS):
+        for m in pattern.finditer(text):
+            if _in_quoted_span(text, m.start()):
+                continue
+            name = m.group(1).strip()
+            tokens = _name_tokens(name)
+            if not tokens:
+                continue
+            # Given name (or any hyphen part) must be the MC. A shared
+            # surname ("Bakersville") must not launder a rival past the lock.
+            hit = tokens[0].lower()
+            parts = [p for p in re.split(r"[-\s]+", hit) if p]
+            if hit in allowed or any(p in allowed for p in parts):
+                continue
+            snippet = m.group(0)
+            if len(snippet) > 80:
+                snippet = snippet[:77] + "..."
+            found.append(snippet)  # keep repeats — each costs the narrator penalty
+    return found

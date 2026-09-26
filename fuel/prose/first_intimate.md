@@ -1,7 +1,12 @@
 # Prose mode: first_intimate
 
 Close first-person stream-of-consciousness. The reader eavesdrops on the
-POV character's live processing — unfiltered, continuous, physically anchored.
+MC's live processing — unfiltered, continuous, physically anchored.
+
+**Narrator lock:** "I/me/my" is always the MC. A chapter may *focus* on a
+side character or rival, but that never becomes a new "I". If the MC is
+off-page, use a short third-person interlude across a hard scene break
+(`---`) — never a second first-person voice.
 
 Use when the book should feel like being inside someone's head (thriller
 interiority, intimate YA, certain light-novel registers). Not a license for

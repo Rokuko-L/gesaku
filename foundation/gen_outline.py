@@ -118,11 +118,19 @@ A major truth is sealed until chapter {reveal_chapter}. Before that chapter:
     perspective = genre_cfg.get("perspective", "")
     perspective_line = ""
     if perspective == "first_person":
-        perspective_line = ("MANDATORY PERSPECTIVE: The novel is FIRST-PERSON. Every chapter outline "
-                            "must name a POV character and the prose will be narrated by them in 'I/me/my'.")
+        perspective_line = (
+            "MANDATORY PERSPECTIVE: The novel is FIRST-PERSON, MC-LOCKED. "
+            "\"I/me/my\" is always the main character (MC). Every chapter outline "
+            "must name a Focus (who the scene is ABOUT — the MC or a side character) "
+            "and MC presence (on-page | off-page). Focus never changes the narrator. "
+            "When the MC is off-page, the chapter uses a short third-person interlude "
+            "across a hard scene break — not a second first-person narrator."
+        )
     elif perspective == "third_person":
-        perspective_line = ("MANDATORY PERSPECTIVE: The novel is THIRD-PERSON (close limited). Every "
-                            "chapter outline must name a POV character whose head the narration stays in.")
+        perspective_line = (
+            "MANDATORY PERSPECTIVE: The novel is THIRD-PERSON (close limited). Every "
+            "chapter outline must name a Focus character whose head the narration stays in."
+        )
     try:
         state = json.loads((paths.get_project_dir() / "state.json").read_text(encoding="utf-8"))
         title = state.get("title", "Untitled Novel")
@@ -268,7 +276,7 @@ Each chapter entry must start with "### Chapter N:".
                 if match:
                     match_text = match.group(0).strip()
                     # Ensure it is a detailed outline, not a leftover snippet
-                    if "POV:" in match_text or "Scene Beats:" in match_text:
+                    if "POV:" in match_text or "Focus:" in match_text or "Scene Beats:" in match_text:
                         detailed_outlines[ch] = match_text
 
     # If this is a retry, clear Block 1 (chapters 1-10) to force regeneration
@@ -330,14 +338,15 @@ PREVIOUS DETAILED OUTLINES (for local continuity):
 TASK:
 Write the detailed outlines for Chapters {start} through {end}.
 For EACH chapter in this range, you must output:
-1. POV: [Character name]
-2. Characters: [List of characters who appear in this chapter, comma-separated]
-3. Emotional Arc: [Emotional shift, e.g. Contentment -> Dread]
-4. Summary: [2-3 sentences of what happens]
-5. Orientation Facts: [A bulleted list of 2-4 concrete, statable facts the outline commits to reveal/establish in this chapter for orientation, e.g. relationships, setting details, background context. Especially critical for Chapter 1 and character introduction chapters]
-6. Scene Stakes: [One sentence describing what concrete external stakes are at play or could change by the end of this specific chapter]
-7. Scene Beats: A numbered list of EXACTLY {beats_per_chapter} sequential scene beats (no more, no less). Each beat MUST have a detailed paragraph (3-4 sentences) describing the events. Budget each beat to roughly {words_per_beat} words of prose — the whole chapter is only {wpc} words, so keep the beat count and per-beat depth matched to the word budget. Do not add extra beats beyond {beats_per_chapter}; if the story needs more, make the beats denser instead.
-8. Plants & Harvests: List of plants and harvests, tagged exactly as `[Plant: slug_name - "Description"]` or `[Harvest: slug_name - "Description"]`.
+1. Focus: [Character name this scene is ABOUT — may be the MC or a side character]
+2. MC presence: [on-page | off-page]  (first-person books only; use off-page only for brief interludes)
+3. Characters: [List of characters who appear in this chapter, comma-separated]
+4. Emotional Arc: [Emotional shift, e.g. Contentment -> Dread]
+5. Summary: [2-3 sentences of what happens]
+6. Orientation Facts: [A bulleted list of 2-4 concrete, statable facts the outline commits to reveal/establish in this chapter for orientation, e.g. relationships, setting details, background context. Especially critical for Chapter 1 and character introduction chapters]
+7. Scene Stakes: [One sentence describing what concrete external stakes are at play or could change by the end of this specific chapter]
+8. Scene Beats: A numbered list of EXACTLY {beats_per_chapter} sequential scene beats (no more, no less). Each beat MUST have a detailed paragraph (3-4 sentences) describing the events. Budget each beat to roughly {words_per_beat} words of prose — the whole chapter is only {wpc} words, so keep the beat count and per-beat depth matched to the word budget. Do not add extra beats beyond {beats_per_chapter}; if the story needs more, make the beats denser instead.
+9. Plants & Harvests: List of plants and harvests, tagged exactly as `[Plant: slug_name - "Description"]` or `[Harvest: slug_name - "Description"]`.
 
 CRITICAL RULES:
 - Use standard slug identifiers matching the Global Plot Threads Ledger where applicable (e.g. silver_locket, dead_king_secret).
@@ -348,6 +357,7 @@ CRITICAL RULES:
     - beat_label: scene description
   using these beat labels IN ORDER: {numbered_beats}
   Each bullet's scene description is 1-2 sentences. Put this section right after the "Emotional Arc" line and before the other fields. Then continue with the remaining fields (Summary, Scene Stakes, Scene Beats, Plants & Harvests).
+- B-PLOT BUDGET: a parallel subplot (ex-allies, rivals, off-stage villains) may appear in at most 2 consecutive chapters without the MC/Focus present. After that it must either collide with the MC's plot (interrupt, invade, force a choice) or drop. Do not let a B-plot run as a free-standing storyline across the middle of the book.
 {plant_guidance}
 """
         # Append retry feedback if editing Block 1

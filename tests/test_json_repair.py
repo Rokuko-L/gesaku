@@ -1,4 +1,4 @@
-"""JSON-repair parser tests (core.llm.parse_json_response).
+"""JSON-repair parser tests (core.llm.parse_json_response) + encoding healing.
 
 Offline and LLM-free: each case feeds a malformed judge payload and asserts the
 healed parse. Exposed as a TestCase so CI discovers it (the script-style
@@ -6,6 +6,7 @@ healed parse. Exposed as a TestCase so CI discovers it (the script-style
 """
 from core import llm
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -87,6 +88,26 @@ class JsonRepairTest(unittest.TestCase):
                 parsed = llm.parse_json_response(raw_input)
                 for k, v in expected.items():
                     self.assertEqual(v, parsed.get(k), f"key '{k}' mismatch")
+
+
+class EncodingHealingTest(unittest.TestCase):
+    """A UTF-16 source document must not kill a run (evaluate.load_file)."""
+
+    def test_utf16_file_is_healed_to_utf8(self):
+        import pipeline.evaluate as evaluate
+        text = "Hello, this is a UTF-16 encoded text to test self-healing."
+        with tempfile.TemporaryDirectory(prefix="gesaku_enc_") as tmp:
+            test_file = Path(tmp) / "utf16_dummy.md"
+            test_file.write_bytes(text.encode("utf-16"))
+            loaded = evaluate.load_file(test_file)
+            self.assertEqual(text, loaded.lstrip("﻿"))
+            healed = test_file.read_text(encoding="utf-8")
+            self.assertEqual(text, healed.lstrip("﻿"))
+
+    def test_missing_file_returns_empty(self):
+        import pipeline.evaluate as evaluate
+        with tempfile.TemporaryDirectory(prefix="gesaku_enc_") as tmp:
+            self.assertEqual("", evaluate.load_file(Path(tmp) / "nope.md"))
 
 
 def run_test(name, raw_input, expected_dict):

@@ -32,6 +32,7 @@ so the word goes and the chapter stays.
 | `prose_words(text)` | words surviving the cut |
 | `looks_like_non_prose(text)` | is the surviving prose short — **for reporting** |
 | `needs_redraft(text)` | was it *interrupted*, not merely short — **for rejecting** |
+| `narrator_identity_swaps(text, allowed_names)` | "I am X" / "my name is X" hits whose given name is not the MC |
 
 `looks_like_non_prose` is a length test (`MIN_CHAPTER_WORDS`). It is the right
 question for a warning — an existing chapter that is mostly not prose cannot be
@@ -48,6 +49,14 @@ undershoot path that retries with concrete expansion numbers. Rejection uses
 - Derail detection keys on **task machinery**, not prose style: references to
   the user, the prompt, the question, the answer choices, "as an AI". These
   novels are first person, so in-voice deliberation must not trip it.
+- **Narrator lock** (`narrator_identity_swaps`) is a separate, mechanical
+  check for first_person books: "I am Mira Bakersville" / "my name is Corvo
+  Quill" / "Call me Gareth" is a head hop, not voice. Only the *given name*
+  is matched against the MC's Focus/aliases — a shared surname must not
+  launder a rival past the lock. Ages and titles ("I am seventeen") are not
+  names. Used by `evaluate_chapter` as a scoring penalty; the drafter never
+  gets a second first-person narrator (off-MC scenes are third-person
+  interludes across a hard `---` break).
 - Weak reasoning-openers ("let me recall", "I should choose") count only as a
   **dense cluster** — three within 400 characters. A narrator may legitimately
   think one three times across a chapter.

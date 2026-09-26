@@ -4,6 +4,10 @@ First-person with a strong narrating personality. The teller is allowed to
 look back, joke, digress, and arrange scenes for effect — but still stays
 concrete and specific.
 
+**Narrator lock:** "I/me/my" is always the MC. Focus may sit on another
+character; the teller never changes. Off-MC scenes use a short third-person
+interlude across a hard scene break (`---`), not a rival's first person.
+
 Use for comic novels, memoir-shaped fiction, picaresques, and anything where
 the *voice* is the product (not live brain-eavesdropping).
 

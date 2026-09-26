@@ -253,6 +253,36 @@ def chapter_threshold() -> float:
     return _env_float("GESAKU_CHAPTER_THRESHOLD", CHAPTER_THRESHOLD)
 
 
+# Draft-acceptance word bounds relative to the per-chapter target. Eval has its
+# own penalty band (0.8-1.25x / 1.55x climax); these are the *retry* bounds so
+# a 5.6k-word chapter never reaches the judge in the first place.
+CHAPTER_MIN_RATIO = 0.60
+CHAPTER_MAX_RATIO = 1.45
+CLIMAX_MAX_RATIO = 1.55
+
+
+def chapter_length_bounds(target_words: int, is_climax: bool = False) -> tuple[int, int]:
+    """(min_words, max_words) a draft must hit before quality evaluation."""
+    if target_words <= 0:
+        return 1, 2
+    min_words = int(target_words * _env_float("GESAKU_CHAPTER_MIN_RATIO", CHAPTER_MIN_RATIO))
+    # Climax keeps its own ratio even when a global max override is set.
+    if is_climax:
+        max_ratio = _env_float("GESAKU_CLIMAX_MAX_RATIO", CLIMAX_MAX_RATIO)
+    else:
+        max_ratio = _env_float("GESAKU_CHAPTER_MAX_RATIO", CHAPTER_MAX_RATIO)
+    max_words = int(target_words * max_ratio)
+    return min_words, max(max_words, min_words + 1)
+
+
+def is_climax_chapter(chapter_num: int, chapter_count: int, outline_text: str = "") -> bool:
+    """True for the finale or a chapter whose outline signals climax/battle."""
+    if chapter_count and chapter_num == chapter_count:
+        return True
+    text = (outline_text or "").lower()
+    return any(k in text for k in ("climax", "battle", "final", "coup"))
+
+
 def max_chapter_attempts() -> int:
     return _env_int("GESAKU_MAX_CHAPTER_ATTEMPTS", MAX_CHAPTER_ATTEMPTS)
 

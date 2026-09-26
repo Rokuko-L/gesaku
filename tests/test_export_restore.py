@@ -7,6 +7,8 @@ the restore branch (and the two ways it can ship the wrong thing) had no
 coverage at all.
 """
 import json
+import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -103,6 +105,46 @@ class ExportRestoreTest(unittest.TestCase):
 
     def test_restore_reports_failure_for_an_unknown_commit(self):
         self.assertFalse(export_mod._restore_best_novel("deadbeef"))
+
+
+class EmDashTest(unittest.TestCase):
+    """Export em-dash treatment — three production bugs, pinned.
+
+    The lookbehind anchors on the space but cannot consume it, so a ` ,`
+    survives one step and the comma cleanup owns it.
+    """
+    _EM_DASH_RE = re.compile(r"(?<=\s)—[ \t]*(?=\S)")
+    _DOUBLE_SPACE_RE = re.compile(r" {2,}")
+    _DOUBLE_COMMA_RE = re.compile(r" ?,\s*,")
+    _SPACE_COMMA_RE = re.compile(r"(?<=\S)\s+,")
+
+    def export_clean(self, text: str) -> str:
+        text = self._EM_DASH_RE.sub(", ", text)
+        text = self._DOUBLE_SPACE_RE.sub(" ", text)
+        text = self._DOUBLE_COMMA_RE.sub(",", text)
+        return self._SPACE_COMMA_RE.sub(",", text)
+
+    def test_a_spaced_dash_becomes_a_tight_comma(self):
+        self.assertEqual("Wait, no, stay.", self.export_clean("Wait — no, stay."))
+        self.assertEqual("a, b", self.export_clean("a — b"))
+
+    def test_no_space_before_comma_survives(self):
+        for source in ("Wait — no", "a — b", "x —  y"):
+            out = self.export_clean(source)
+            self.assertNotIn(" ,", out, f"{source!r} -> {out!r}")
+            self.assertNotIn("  ", out, f"{source!r} -> {out!r}")
+
+    def test_an_interrupt_keeps_its_dash(self):
+        for source in ("Catch me if you—", "and then—nothing."):
+            self.assertEqual(source, self.export_clean(source))
+
+    def test_a_dash_after_an_existing_comma_does_not_double_it(self):
+        self.assertEqual("he paused, then ran.", self.export_clean("he paused, — then ran."))
+
+    def test_the_pdf_path_has_no_raw_dash_left(self):
+        source = pathlib.Path("typeset/build_tex.py").read_text(encoding="utf-8")
+        self.assertIn("'---'", source)
+        self.assertNotIn("s.replace('—', ', ')", source)
 
 
 if __name__ == "__main__":

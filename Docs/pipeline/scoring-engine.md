@@ -6,7 +6,7 @@ an **LLM judge score**.
 
 ```
 final_score = max(0, judge_overall_score - slop_penalty - length_penalty
-                      - orientation_penalty)
+                      - orientation_penalty - narrator_penalty)
 ```
 
 Module layout — the scoring engine is split by concern:
@@ -63,9 +63,16 @@ Related: [../pipeline/spec.md](spec.md) for sealed foundation + retrofit.
 1. **Slop penalty** — subtracted from raw judge score (`raw_judge_score`
    preserved in eval logs).
 2. **Length penalty** — ±3.0 scaled outside an 80%–125% window of target
-   words (climax/finale chapters get a 155% ceiling).
+   words (climax/finale chapters get a 155% ceiling). Drafting *retries*
+   outside `chapter_length_bounds()` (60%–145% / 155% climax) before the
+   judge ever sees an outlier — see [spec.md](spec.md).
 3. **Orientation penalty** — up to −2.0 when ≥2 outline Orientation Facts
    aren't dramatized (synonym-aware matching).
+4. **Narrator penalty** — up to −2.0 (`0.75 × swaps`, first_person only).
+   Mechanical: `prose.narrator_identity_swaps` flags "I am Mira Bakersville" /
+   "my name is Corvo Quill" when the given name is outside the MC's
+   Focus/alias set (`outline.protagonist_aliases`). v4 ch19 shipped a full
+   Mira first-person chapter; the judge scored its voice highly.
 
 ## From Score To Verdict
 

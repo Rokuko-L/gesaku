@@ -264,11 +264,27 @@ def build_eval_feedback(eval_log_path):
             "finish every outline beat, and end decisively. Compression beats expansion."
         )
 
+    narrator_penalty = float(data.get("narrator_penalty") or 0.0)
+    narrator_violations = data.get("narrator_violations") or []
+    if narrator_penalty > 0 or narrator_violations:
+        lines.append(
+            "NARRATOR LOCK: this book is first-person and 'I' is ONLY the main "
+            "character. The previous draft named someone else as 'I' (a side "
+            "character, rival, or parent). Fix every one of these — rewrite those "
+            "passages from the MC's voice, or if the MC is off-page use a short "
+            "third-person interlude across a hard '---' scene break. Never invent "
+            "a second first-person narrator."
+        )
+        for v in narrator_violations[:5]:
+            lines.append(f"  - offending: {v}")
+
     # Near-clean detection: the draft missed the keep bar by a hair with
     # negligible mechanical penalties (raw judge score high, tic/slop
     # penalties tiny). In this state a blind retry (draft deleted, fresh
     # generation) regresses — keep the draft instead (observed: ch20 6.4 ->
     # 3.32, 4.5, 3.24; ch13 6.25 -> 4.22).
+    # A narrator swap is never "negligible" — it is the hard failure the
+    # first_person lock exists to stop (v4 ch19).
     try:
         raw_score = float(data.get("raw_judge_score") or 0)
         adjusted_score = float(data.get("overall_score") or 0)
@@ -278,7 +294,8 @@ def build_eval_feedback(eval_log_path):
     tic_penalty = slop.get("prose_tic_penalty") or 0.0
     near_clean = (raw_score >= chapter_threshold()
                   and adjusted_score >= chapter_threshold() - near_clean_margin()
-                  and slop_penalty < 2.0 and tic_penalty < 1.0)
+                  and slop_penalty < 2.0 and tic_penalty < 1.0
+                  and narrator_penalty <= 0 and not narrator_violations)
 
     if not lines:
         # The judge found nothing wrong. A clean eval with empty feedback
