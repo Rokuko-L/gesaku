@@ -97,10 +97,24 @@ def _foundation_artifact_ok(path, min_chars: int = 500,
     if len(text) < min_chars:
         return False
     if require_chapters:
-        found = set(int(m) for m in re.findall(
-            r'###\s*\*?\*?\s*Ch(?:apter)?\b\s*\*?\*?\s*(\d+)',
-            text, re.IGNORECASE))
-        if len(found) < require_chapters:
+        # Count chapters the way the drafter will read them, NOT by counting
+        # headers anywhere in the file. The high-level roadmap carries a
+        # `### Chapter N: <slug>` line for every chapter in the book, so a
+        # whole-file scan sees 30 headers on an outline whose DETAILED section
+        # stops at 12 — the checkpoint then passed on a 12/30 outline, skipped
+        # regeneration, and the run died downstream in the refinement pass with
+        # a misleading "no source chapters" error. extract_chapter_outline is
+        # the authority: it scopes to ## DETAILED CHAPTER OUTLINES and raises
+        # on anything less than a real beats entry.
+        from core.outline import extract_chapter_outline
+        present = 0
+        for ch in range(1, require_chapters + 1):
+            try:
+                extract_chapter_outline(text, ch)
+            except ValueError:
+                continue
+            present += 1
+        if present < require_chapters:
             return False
     return True
 

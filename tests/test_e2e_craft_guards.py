@@ -564,5 +564,72 @@ class OutlineTokenBudgetTest(unittest.TestCase):
         self.assertIn("3. Scene type:", src)
 
 
+class OutlineCheckpointTest(unittest.TestCase):
+    """The outline checkpoint must not pass on a partial outline.
+
+    `_foundation_artifact_ok` counted `### Chapter N` headers anywhere in the
+    file. The high-level roadmap carries one such line per chapter in the book,
+    so a 12/30 DETAILED outline still showed 30 headers: the checkpoint passed,
+    regeneration was skipped, and the run died in the refinement pass with a
+    misleading "no source chapters" error.
+    """
+
+    PARTIAL = """# Book
+## HIGH-LEVEL ROADMAP
+### Chapter 1: first_slug
+### Chapter 2: second_slug
+### Chapter 3: third_slug
+
+## DETAILED CHAPTER OUTLINES
+### Chapter 1: Torch
+1. Focus: Lily
+4. Scene Beats:
+1. beat one
+### Chapter 2: Bath
+1. Focus: Lily
+4. Scene Beats:
+1. beat one
+"""
+
+    COMPLETE = """# Book
+## HIGH-LEVEL ROADMAP
+### Chapter 1: a
+### Chapter 2: b
+### Chapter 3: c
+
+## DETAILED CHAPTER OUTLINES
+### Chapter 1: Torch
+4. Scene Beats:
+1. beat one
+### Chapter 2: Bath
+4. Scene Beats:
+1. beat one
+### Chapter 3: Banquet
+4. Scene Beats:
+1. beat one
+"""
+
+    def _write(self, text):
+        import tempfile
+        tmp = tempfile.NamedTemporaryFile("w", suffix=".md", delete=False,
+                                          encoding="utf-8")
+        tmp.write(text)
+        tmp.close()
+        self.addCleanup(lambda: Path(tmp.name).unlink(missing_ok=True))
+        return Path(tmp.name)
+
+    def test_a_roadmap_only_tail_does_not_satisfy_the_checkpoint(self):
+        from pipeline.phases.foundation import _foundation_artifact_ok
+        p = self._write(self.PARTIAL)
+        self.assertFalse(_foundation_artifact_ok(p, min_chars=10,
+                                                 require_chapters=3))
+
+    def test_a_fully_outlined_book_passes(self):
+        from pipeline.phases.foundation import _foundation_artifact_ok
+        p = self._write(self.COMPLETE)
+        self.assertTrue(_foundation_artifact_ok(p, min_chars=10,
+                                                require_chapters=3))
+
+
 if __name__ == "__main__":
     unittest.main()
