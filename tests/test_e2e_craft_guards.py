@@ -8,12 +8,16 @@ with the real fixtures.
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
 from core.genre import perspective_eval_rule, perspective_system_block
-from core.outline import focus_names, protagonist_aliases
+from core.outline import (
+    cast_names_from_outline, focus_names, mc_aliases_for_project,
+    protagonist_aliases,
+)
 from core.prose import narrator_identity_swaps
 from pipeline.draft_chapter import scan_prior_chapter_crutches
 from pipeline.pipeline_infra import chapter_length_bounds
@@ -41,6 +45,26 @@ OUTLINE_TEMPLATE_STYLE = """### Chapter 1: Torch
 - **Focus:** **Lily** Bakersville (Baal)
 ### Chapter 3: Rival
 - Focus: Lily
+"""
+
+# Shape of a pre-Focus outline as it actually exists on disk in projects/: no
+# Focus/POV field, cast listed on a `**Characters:**` line, entry numbered.
+LEGACY_OUTLINE = """# THE DEMON LORD'S GUIDE
+## Chapter Outline
+### Ch 1: Crib of Contempt
+**2568 words**
+- **Characters:** Lily (narrator, protagonist), Maledictus, Alistair
+- **Emotional arc:** rage to cold calculation
+### Ch 2: Can I Cast This
+- **Characters:** Lily, Mira, Alistair
+### Ch 3: With Crayons
+- **Characters:** Mira, Lily
+"""
+
+LEGACY_CHARACTERS = """### **1. Princess Liliana "Lily" Celestia Lumengarde (Maledictus)**
+Some notes.
+### **2. King Alistair, the Hero of Dawn**
+More notes.
 """
 
 
@@ -169,6 +193,47 @@ class FocusVsNarratorTest(unittest.TestCase):
         self.assertIn("hard failure", rule)
         self.assertIn("interlude", rule)
 
+    def test_personification_is_not_a_narrator_swap(self):
+        # BLOCKER: each of these was flagged before the cast signal existed.
+        # The lock is a keep-gate, so a false positive costs a full
+        # discard-and-regenerate cycle — and can skip a chapter outright.
+        cast = {"lily", "mira", "alistair", "seraphina"}
+        for text in (
+            "I am Death, and I am very patient.",
+            "I am God,",
+            "I am Nobody, and nobody knows me.",
+            "I am Trouble with a capital T.",
+            "I am Everything you need and more.",
+            "I am Famine, and I am everywhere.",
+        ):
+            self.assertEqual(narrator_identity_swaps(text, {"lily"}, cast), [],
+                             text)
+
+    def test_a_casted_name_is_still_a_swap_under_personification_rules(self):
+        # The word list must not launder a real character: a book with a
+        # character actually named Death still catches the head-hop.
+        self.assertTrue(
+            narrator_identity_swaps("I am Death.", {"lily"}, {"death"})
+        )
+
+    def test_a_relation_to_the_mc_is_not_a_swap(self):
+        # "I am Lily's daughter" — the MC is the subject, so it passes.
+        cast = {"lily", "mira"}
+        self.assertEqual(
+            narrator_identity_swaps("I am Lily Bakersville's daughter.",
+                                    {"lily", "bakersville"}, cast),
+            [],
+        )
+
+    def test_a_relation_to_another_character_is_still_a_swap(self):
+        # "I am Mira's mother" names Mira as the object, and the narrator is
+        # not Mira — that is a head-hop, so it must still be caught.
+        cast = {"lily", "mira"}
+        self.assertTrue(
+            narrator_identity_swaps("I am Mira Bakersville's mother.",
+                                    {"lily"}, cast)
+        )
+
 
 class RefrainBanE2ETest(unittest.TestCase):
     def test_v5_plan_can_wait_is_banned(self):
@@ -214,12 +279,113 @@ class LengthBandE2ETest(unittest.TestCase):
 
     def test_climax_flag_is_wired_from_chapter_position(self):
         from pipeline.pipeline_infra import is_climax_chapter
-        self.assertTrue(is_climax_chapter(24, 24, "they fight"))
-        self.assertTrue(is_climax_chapter(12, 24, "the final coup at dawn"))
+        self.assertTrue(is_climax_chapter(24, 24, ""))
+        self.assertTrue(is_climax_chapter(12, 24, "**Scene type:** Climax"))
         self.assertFalse(is_climax_chapter(3, 24, "bath time"))
+
+    def test_climax_needs_a_label_not_a_prose_word(self):
+        # BLOCKER: the old regex matched any chapter whose beats happened to
+        # contain climax/battle/final/coup, handing ordinary chapters the
+        # 1.55x climax ceiling. A structural fact must come from a label.
+        from pipeline.pipeline_infra import is_climax_chapter
+        for prose in (
+            "1. They fight the final confrontation at dawn.",
+            "1. He finally managed to escape the bath.",
+            "The climax of her rage arrives without warning.",
+            "Scene Stakes: the battle for the throne is won here.",
+        ):
+            self.assertFalse(is_climax_chapter(3, 24, prose), prose)
 
     def test_zero_target_does_not_explode(self):
         self.assertEqual(chapter_length_bounds(0), (1, 2))
+
+
+class LegacyOutlineMCTest(unittest.TestCase):
+    """The lock must find the MC on an outline with no Focus field.
+
+    Every first-person project in projects/ predates the Focus field, and its
+    outline parses to zero Focus labels. An empty alias set silently disabled
+    the narrator lock for all of them, which is how a keep-gate shipped dead.
+    """
+
+    def test_legacy_outline_still_names_the_mc(self):
+        aliases = protagonist_aliases(LEGACY_OUTLINE)
+        self.assertIn("lily", aliases, aliases)
+
+    def test_registry_entry_one_supplies_the_reincarnate_name(self):
+        # The MC is "Lily" on the outline but narrates as Maledictus. The
+        # registry names both; without it every "I am Maledictus" is a swap.
+        aliases = mc_aliases_for_project(LEGACY_OUTLINE, LEGACY_CHARACTERS)
+        self.assertIn("lily", aliases, aliases)
+        self.assertIn("maledictus", aliases, aliases)
+        self.assertNotIn("alistair", aliases, aliases)
+
+    def test_cast_names_come_from_the_characters_line(self):
+        cast = cast_names_from_outline(LEGACY_OUTLINE)
+        self.assertEqual({"lily", "maledictus", "mira", "alistair"}, cast)
+
+    def test_focus_field_still_wins_over_the_registry(self):
+        aliases = mc_aliases_for_project(OUTLINE, LEGACY_CHARACTERS)
+        self.assertIn("baal", aliases, aliases)
+        self.assertNotIn("maledictus", aliases, aliases)
+
+    def test_a_truly_unparseable_outline_still_yields_nothing(self):
+        # Fail-open, but explicitly: no source, no lock, and the eval records
+        # narrator_lock_active=False so "unchecked" never reads as "clean".
+        self.assertEqual(mc_aliases_for_project("# Empty\n", ""), set())
+
+    def test_a_tie_breaks_to_the_first_listed_name(self):
+        # BLOCKER: with a perfectly alternating cast every given name ties, and
+        # `max(freq, key=freq.get)` let dict order silently decide who "I" is.
+        alternating = """### Chapter 1: A
+- **Focus:** Mira Bakersville
+### Chapter 2: B
+- **Focus:** Lily Bakersville
+### Chapter 3: C
+- **Focus:** Mira Bakersville
+### Chapter 4: D
+- **Focus:** Lily Bakersville
+"""
+        aliases = protagonist_aliases(alternating)
+        self.assertIn("mira", aliases, aliases)
+        self.assertNotIn("lily", aliases, aliases)
+
+
+class NarratorLockStateTest(unittest.TestCase):
+    """An inactive lock must be distinguishable from a satisfied one."""
+
+    def _log(self, tmp, payload):
+        p = Path(tmp) / "eval.json"
+        p.write_text(json.dumps(payload), encoding="utf-8")
+        return str(p)
+
+    def test_inactive_is_reported_when_the_mc_is_unknown(self):
+        from pipeline.phases.common import (
+            narrator_lock_blocks, narrator_lock_was_inactive,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._log(tmp, {"narrator_lock_active": False,
+                                   "narrator_violations": []})
+            self.assertTrue(narrator_lock_was_inactive(path))
+            self.assertFalse(narrator_lock_blocks(path))
+
+    def test_active_and_clean_is_not_inactive(self):
+        from pipeline.phases.common import (
+            narrator_lock_blocks, narrator_lock_was_inactive,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._log(tmp, {"narrator_lock_active": True,
+                                   "narrator_violations": []})
+            self.assertFalse(narrator_lock_was_inactive(path))
+            self.assertFalse(narrator_lock_blocks(path))
+
+    def test_a_log_without_the_flag_is_treated_as_unchecked(self):
+        # Absence is not a pass. An eval log predating the flag must not
+        # retroactively certify a chapter as narrator-checked.
+        from pipeline.phases.common import narrator_lock_was_inactive
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._log(tmp, {"narrator_violations": []})
+            self.assertTrue(narrator_lock_was_inactive(path))
 
 
 if __name__ == "__main__":

@@ -228,6 +228,28 @@ def narrator_lock_blocks(eval_log_path) -> bool:
     return bool(data.get("narrator_violations"))
 
 
+def narrator_lock_was_inactive(eval_log_path) -> bool:
+    """True when the narrator lock could not run because the MC is unidentifiable.
+
+    The eval records `narrator_lock_active`. When it is False the chapter was
+    never actually checked, which must not read as "checked and clean" — a
+    caller that treats silence as a pass is the exact failure this records.
+    """
+    if not eval_log_path:
+        return False
+    p = Path(eval_log_path)
+    if not p.exists():
+        return False
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    if "narrator_lock_active" not in data:
+        # An eval log written before the flag existed. Absence is not a pass.
+        return True
+    return not data.get("narrator_lock_active")
+
+
 def build_eval_feedback(eval_log_path):
     """Build targeted retry feedback from a failed chapter eval JSON.
 

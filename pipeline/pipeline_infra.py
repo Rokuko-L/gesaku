@@ -260,6 +260,22 @@ CHAPTER_MIN_RATIO = 0.60
 CHAPTER_MAX_RATIO = 1.45
 CLIMAX_MAX_RATIO = 1.55
 
+# An explicit structural label on a line of its own, e.g.
+#   **Scene type:** Climax
+#   Role: Finale
+#   - Climax
+# The key is required so a beat of prose containing "climax" or "finally"
+# does not earn the chapter a 1.55x length ceiling.
+_CLIMAX_LABEL = re.compile(
+    r"^\s*(?:[-*]\s*)?\**\s*[A-Za-z][\w \t]{0,28}?\s*\**\s*:\s*\**\s*"
+    r"(climax|finale|showdown|final confrontation)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+_CLIMAX_BARE_LABEL = re.compile(
+    r"^\s*(?:[-*]\s*|\*\*)?(?:CLIMAX|FINALE|SHOWDOWN)\**\b[^\n]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
 
 def chapter_length_bounds(target_words: int, is_climax: bool = False) -> tuple[int, int]:
     """(min_words, max_words) a draft must hit before quality evaluation."""
@@ -276,11 +292,17 @@ def chapter_length_bounds(target_words: int, is_climax: bool = False) -> tuple[i
 
 
 def is_climax_chapter(chapter_num: int, chapter_count: int, outline_text: str = "") -> bool:
-    """True for the finale or a chapter whose outline signals climax/battle."""
+    """True for the finale, or a chapter the outline labels as a climax.
+
+    Only an explicit field counts. An earlier version scanned the whole entry
+    for the words climax/battle/final/coup, so any beat containing "the final
+    confrontation" — or "finally" — silently earned the chapter a 1.55x length
+    ceiling. That is a prose-text guess at a structural fact.
+    """
     if chapter_count and chapter_num == chapter_count:
         return True
-    text = (outline_text or "").lower()
-    return bool(re.search(r"\b(?:climax|battle|final|coup)\b", text))
+    text = outline_text or ""
+    return bool(_CLIMAX_LABEL.search(text) or _CLIMAX_BARE_LABEL.search(text))
 
 
 def max_chapter_attempts() -> int:

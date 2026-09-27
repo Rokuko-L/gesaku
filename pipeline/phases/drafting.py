@@ -30,8 +30,8 @@ from pipeline.pipeline_infra import (
     timeout_for, uv_run,
 )
 from pipeline.phases.common import (
-    build_eval_feedback, narrator_lock_blocks, on_chapter_kept,
-    resync_canon_after_cycle, update_canon_from_eval,
+    build_eval_feedback, narrator_lock_blocks, narrator_lock_was_inactive,
+    on_chapter_kept, resync_canon_after_cycle, update_canon_from_eval,
 )
 
 
@@ -244,6 +244,13 @@ def run_drafting(state: dict) -> dict:
             if score >= chapter_gate:
                 narrator_blocked = narrator_lock_blocks(eval_log_path)
                 if not narrator_blocked:
+                    if narrator_lock_was_inactive(eval_log_path):
+                        # The chapter is keepable, but the MC was never
+                        # identifiable so nothing checked the narrator. Say so
+                        # once per chapter rather than shipping a silent pass.
+                        step(f"NARRATOR LOCK INACTIVE for Ch {ch}: protagonist not "
+                             f"identifiable from outline or character registry — "
+                             f"this chapter was NOT checked for identity swaps")
                     fb_path = paths.get_retry_feedback_path(ch)
                     fb_path.unlink(missing_ok=True)
                     commit_hash = git_add_commit(
@@ -360,20 +367,23 @@ def run_drafting(state: dict) -> dict:
                             best_attempt_num = attempt
                             step(f"Repaired Ch {ch} is new best fallback: {rep_score}")
 
-                # Remove the bad chapter file so next attempt starts fresh
+            # Remove the bad chapter file so the next attempt starts fresh.
+            # This runs on every non-kept attempt, not just the slop-repair
+            # path — the retry is a fresh generation, so the previous draft
+            # must not survive into it.
             if ch_file.exists() and not drafted:
-                    rel_path = f"chapters/ch_{ch:02d}.md"
-                    res = subprocess.run(
-                        shlex.split(f"git ls-files --error-unmatch {rel_path}"),
-                        cwd=str(paths.get_project_dir()),
-                        capture_output=True,
-                        text=True,
-                        shell=False
-                    )
-                    if res.returncode == 0:
-                        run_tool(f"git checkout -- {rel_path}", cwd=str(paths.get_project_dir()))
-                    else:
-                        ch_file.unlink(missing_ok=True)
+                rel_path = f"chapters/ch_{ch:02d}.md"
+                res = subprocess.run(
+                    shlex.split(f"git ls-files --error-unmatch {rel_path}"),
+                    cwd=str(paths.get_project_dir()),
+                    capture_output=True,
+                    text=True,
+                    shell=False
+                )
+                if res.returncode == 0:
+                    run_tool(f"git checkout -- {rel_path}", cwd=str(paths.get_project_dir()))
+                else:
+                    ch_file.unlink(missing_ok=True)
 
         if not drafted:
             force_worthy = (

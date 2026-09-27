@@ -32,7 +32,7 @@ so the word goes and the chapter stays.
 | `prose_words(text)` | words surviving the cut |
 | `looks_like_non_prose(text)` | is the surviving prose short — **for reporting** |
 | `needs_redraft(text)` | was it *interrupted*, not merely short — **for rejecting** |
-| `narrator_identity_swaps(text, allowed_names)` | "I am X" / "my name is X" hits whose given name is not the MC |
+| `narrator_identity_swaps(text, allowed_names, cast_names)` | "I am X" / "my name is X" hits whose given name is not the MC |
 
 `looks_like_non_prose` is a length test (`MIN_CHAPTER_WORDS`). It is the right
 question for a warning — an existing chapter that is mostly not prose cannot be
@@ -57,6 +57,23 @@ undershoot path that retries with concrete expansion numbers. Rejection uses
   names. Used by `evaluate_chapter` as a scoring penalty; the drafter never
   gets a second first-person narrator (off-MC scenes are third-person
   interludes across a hard `---` break).
+  - Because a swap is a **keep-gate** (`narrator_lock_blocks` refuses keep,
+    near-clean and force-keep), a false positive costs a full
+    discard-and-regenerate cycle and can skip a chapter. Three defences:
+    `cast_names` — a name the book actually casts is always a swap, whatever
+    the word looks like; `PERSONIFICATION_WORDS` / `PRONOUN_WORDS` — "I am
+    Death", "I am Trouble with a capital T"; and `_looks_like_self_id` — an
+    unknown capitalized word must have a name *shape* (surname, hyphenated
+    compound, kinship suffix) before it counts.
+  - The MC is resolved by `mc_aliases_for_project`, in descending trust:
+    `Focus:`/`POV:` labels, then character-registry entry #1 (which is the
+    protagonist by construction and carries a reincarnate's second name),
+    then the leading name of each outline `Characters:` line. The last two
+    exist because every project drafted before the `Focus` field parses to
+    zero Focus labels, and an empty alias set silently disables the lock.
+  - `narrator_lock_active` in the eval JSON records whether the lock actually
+    ran. `narrator_lock_was_inactive` treats an absent flag as *unchecked*, not
+    as a pass, so an unidentifiable MC is never reported as a clean chapter.
 - Weak reasoning-openers ("let me recall", "I should choose") count only as a
   **dense cluster** — three within 400 characters. A narrator may legitimately
   think one three times across a chapter.

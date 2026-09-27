@@ -407,10 +407,42 @@ def _name_tokens(name: str) -> list[str]:
         if not t or _NOT_A_NAME.match(t):
             continue
         # Possessives ("Baal's") and trailing junk are not name tokens.
-        t = re.sub(r"['\u2019]s$", "", t, flags=re.IGNORECASE)
+        t = re.sub(r"['’]s$", "", t, flags=re.IGNORECASE)
         if t and t.lower() not in TITLE_WORDS:
             out.append(t)
     return out
+
+
+# Words that are routinely capitalized in fiction but are not people. A
+# narrator who writes "I am Death" is personifying; treating that as an
+# identity swap is a false positive, and since the lock is a keep-gate each one
+# costs a full discard-and-regenerate cycle. This list is a backstop only —
+# `cast_names` is the real disambiguator — so an unfamiliar person name is
+# still judged on its shape and flagged.
+PERSONIFICATION_WORDS = {
+    # personified abstracts
+    "death", "god", "gods", "fate", "destiny", "time", "love", "war",
+    "peace", "chaos", "order", "pain", "fear", "hope", "despair", "grief",
+    "joy", "sorrow", "anger", "hatred", "madness", "luck", "fortune",
+    "hunger", "thirst", "silence", "darkness", "light", "shadow", "truth",
+    "lies", "memory", "memories", "justice", "mercy", "vengeance", "duty",
+    "courage", "pride", "shame", "guilt", "innocence", "youth", "age",
+    "trouble", "danger", "mischief", "misery", "ruin", "comfort", "hope",
+    # abstractions and inanimate things that take "I"
+    "nothing", "nobody", "someone", "somebody", "anybody", "everything",
+    "something", "anyone", "everyone",
+    # places and groups standing in for a people
+    "kingdom", "empire", "court", "crowd", "town", "city", "world",
+    "village", "castle", "palace", "throne", "crown", "sword", "blade",
+    "flame", "fire", "ice", "stone", "blood", "bone", "ash", "shadow",
+}
+PRONOUN_WORDS = {
+    "i", "me", "my", "mine", "myself", "you", "your", "yours", "yourself",
+    "yourselves", "he", "him", "his", "she", "her", "hers", "it", "its",
+    "we", "us", "our", "ours", "they", "them", "their", "theirs",
+    "this", "that", "these", "those", "who", "what", "which", "one", "ones",
+}
+
 
 
 _QUOTE_PAIRS = (
@@ -473,18 +505,32 @@ def _leading_name(name: str) -> str:
     return " ".join(out)
 
 
-def narrator_identity_swaps(text: str, allowed_names: set[str] | None = None) -> list[str]:
+def narrator_identity_swaps(
+    text: str,
+    allowed_names: set[str] | None = None,
+    cast_names: set[str] | None = None,
+) -> list[str]:
     """Return narration self-ids outside the MC's names.
 
     `allowed_names` is a lowercase set of the protagonist's names/aliases
     ("lily", "bakersville", "baal"). Empty/None means the MC is unknown —
     returns [] so an unparseable outline cannot poison every chapter.
+
+    `cast_names` is a lowercase set of every *other* character in the book.
+    It is the strongest disambiguator available: a self-id matching a named
+    cast member is a real narrator swap, while a capitalized word matching
+    nobody is almost certainly personification ("I am Death", "I am Trouble").
+    Without it, the closed PERSONIFICATION_WORDS list is the only defence and
+    an unfamiliar capitalized noun produces a false positive — which, now that
+    the lock is a keep-gate, costs a discard-and-regenerate cycle.
+
     Dialogue (quoted self-intro) is ignored: a guard saying "I am Marbas"
     is not a narrator swap.
     """
     allowed = {n.lower() for n in (allowed_names or set())}
     if not allowed:
         return []
+    others = {n.lower() for n in (cast_names or set())} - allowed
     found: list[str] = []
     for pattern in (_I_AM_NAME, _I_AM_CONTRACTION, _MY_NAME_IS):
         for m in pattern.finditer(text):
@@ -502,10 +548,51 @@ def narrator_identity_swaps(text: str, allowed_names: set[str] | None = None) ->
                 continue
             # Given name only. A shared surname or a hyphen piece must not
             # launder a rival past the lock ("I am Lily-Ann", "I am Kael-Lily").
-            if tokens[0].lower() in allowed:
+            given = tokens[0].lower()
+            if given in allowed:
+                continue
+            # The cast is authoritative: a named character claiming "I" is a
+            # swap, whatever the word looks like. A book with a character
+            # called Death is rare, and laundering a real head-hop to support
+            # a personification guess is the worse error.
+            if given in others:
+                pass
+            elif given in PRONOUN_WORDS or given in PERSONIFICATION_WORDS:
+                continue
+            elif not _looks_like_self_id(name, tokens):
+                # Unknown name in a shape that is not a self-introduction
+                # ("I am Trouble with a capital T").
                 continue
             snippet = f"{m.group(0)[: m.start(1) - m.start()]}{name}"
             if len(snippet) > 80:
                 snippet = snippet[:77] + "..."
             found.append(snippet)  # keep repeats — each costs the narrator penalty
     return found
+
+
+def _looks_like_self_id(name: str, tokens: list[str]) -> bool:
+    """Does this unknown capitalized self-id read as a name introduction?
+
+    Accepts a multi-token name ("Mira Bakersville"), a hyphenated compound
+    ("Kael-Lily", "Lily-Ann" — one token, but unmistakably a name and never
+    an English word), an all-caps name, or a kinship/identity suffix. That
+    keeps "I am Trouble with a capital T" and "I am Everything you need" out
+    while still catching "I am Mira Bakersville" in a book whose cast list
+    failed to parse.
+    """
+    if len(tokens) >= 2:
+        return True
+    if any(t.isupper() and len(t) > 1 for t in tokens):
+        return True
+    # Hyphenated compound: a name shape that survives tokenization as one word.
+    if any("-" in t for t in tokens):
+        return True
+    return bool(_KINSHIP_SUFFIX.search(name))
+
+
+_KINSHIP_SUFFIX = re.compile(
+    r"\b(?:son|daughter|mother|father|brother|sister|wife|husband|child|"
+    r"heir|heiress|widow|widower|cousin|nephew|niece|uncle|aunt|kin|"
+    r"reincarnation|incarnation|avatar|self)\b",
+    re.IGNORECASE,
+)

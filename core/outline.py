@@ -575,11 +575,115 @@ def focus_names(outline_text: str) -> list[str]:
     return out
 
 
+# Legacy outlines (pre-Focus) have no Focus/POV line at all. Their
+# `**Characters:**` line lists cast in prominence order, so the first name is
+# the best available MC signal. This is the fallback that keeps the narrator
+# lock alive on a project drafted before the Focus field existed.
+_CHARS_KEY = re.compile(r"^(?:Characters|Cast)\s*:\s*(.+)$", re.IGNORECASE)
+
+
+def _first_character_name(raw: str) -> str | None:
+    """Leading name of a `**Characters:**` list, any markdown dress.
+
+    `Maledictus (as the newborn Prince), Alistair, ...` -> `Maledictus`.
+    """
+    line = _LIST_MARKER.sub("", raw.strip()).replace("*", " ").strip()
+    m = _CHARS_KEY.match(line)
+    if not m:
+        return None
+    first = _split_cast_chunks(m.group(1))[0]
+    first = _PAREN_ALIAS.sub(" ", first).strip()
+    return first or None
+
+
+def lead_character_names(outline_text: str) -> list[str]:
+    """Leading name of every `Characters:`/`Cast:` line, in order."""
+    out: list[str] = []
+    for raw in (outline_text or "").splitlines():
+        name = _first_character_name(raw)
+        if name:
+            out.append(name)
+    return out
+
+
+# The character registry numbers its entries, and entry #1 is the protagonist by
+# construction — the generator writes the cast protagonist-first and every real
+# project agrees. Unlike the outline, the registry is a stable per-project file
+# that survives an outline rewrite, so it is the better source when both exist.
+_REGISTRY_ENTRY = re.compile(
+    r"^#{2,4}\s*(?:\*\*)?\s*(\d+)[.)]\s*(.+?)\s*(?:\*\*)?\s*$")
+
+
+def registry_lead_name(characters_md: str) -> str | None:
+    """Name of character entry #1 in a `characters.md` registry.
+
+    `Princess Liliana "Lily" Celestia Lumengarde (Maledictus)` -> every name
+    token, so a reincarnate MC is whitelisted under both identities.
+    """
+    for raw in (characters_md or "").splitlines():
+        m = _REGISTRY_ENTRY.match(raw.strip())
+        if m and m.group(1) == "1":
+            head = m.group(2)
+            # A section header, not a character ("## 2. SUPPORTING CHARACTERS").
+            people = _split_focus_people(head)
+            if not people:
+                continue
+            return head
+    return None
+
+
+def _pick_mc(freq: dict[str, int]) -> str:
+    """Most frequent person, breaking ties toward the first-listed name.
+
+    `max(freq, key=freq.get)` is insertion-ordered, so a perfectly alternating
+    protagonist/rival outline ties and dict order silently decides who "I" is.
+    The first name in an outline is the protagonist far more often than not, so
+    an earliest-first-seen person wins any tie. dict preserves insertion order,
+    so enumerating it is already first-seen order.
+    """
+    if not freq:
+        return ""
+    top = max(freq.values())
+    for name, count in freq.items():
+        if count == top:
+            return name
+    return ""
+
+
+def _strip_quotes(token: str) -> str:
+    """Drop surrounding quote marks from a name token.
+
+    `Liliana "Lily" Celestia` must yield a `lily` that can match prose, not
+    `"lily"` which can never appear in a sentence.
+    """
+    return token.strip("\"'“”‘’").strip()
+
+
+def _alias_set(people: list[dict]) -> set[str]:
+    """Lowercase name tokens + parenthetical aliases for person records."""
+    out: set[str] = set()
+    for p in people:
+        for t in p["tokens"]:
+            cleaned = _clean_name_token(t)
+            if cleaned and cleaned not in _FOCUS_JUNK:
+                out.add(cleaned)
+        for a in p["aliases"]:
+            for t in _strip_quotes(a).replace("/", " ").replace("|", " ").split():
+                cleaned = _clean_name_token(t)
+                if cleaned and cleaned not in _FOCUS_JUNK:
+                    out.add(cleaned)
+    return out
+
+
 def _split_focus_people(label: str) -> list[dict]:
     """Split a Focus label into person records.
 
     `Lily Bakersville (Baal) / Kael` → two people; `Wick (dip), then Lily`
     → two people. Each record: given name, all head tokens, paren aliases.
+
+    A nickname in straight or curly quotes is its own token, because the
+    registry writes `Liliana "Lily" Celestia` and a token of `"lily"` can
+    never match a word in the prose. Quotes are stripped from every token.
     """
     people: list[dict] = []
     chunks = re.split(r"\s*(?:,|/|\||\bthen\b)\s*", label)
@@ -590,7 +694,9 @@ def _split_focus_people(label: str) -> list[dict]:
         parens = [a for a in _PAREN_ALIAS.findall(chunk) if a.strip()]
         head = _PAREN_ALIAS.sub(" ", chunk)
         tokens = [t for t in re.split(r"\s+", head) if t]
-        tokens = [t for t in tokens if t.lower() not in _FOCUS_JUNK and t != "*"]
+        tokens = [_strip_quotes(t) for t in tokens]
+        tokens = [t for t in tokens
+                  if t and t.lower() not in _FOCUS_JUNK and t != "*"]
         if not tokens:
             continue
         # Given name = first title-cased token that is not a role word.
@@ -605,17 +711,114 @@ def _split_focus_people(label: str) -> list[dict]:
     return people
 
 
+def _split_cast_chunks(value: str) -> list[str]:
+    """Split a `Characters:` list on commas, ignoring commas inside parens.
+
+    `Lily (narrator, protagonist), Mira` is two people, not three — splitting
+    on the raw commas yields a chunk of `protagonist)` whose "given name" is
+    the word `protagonist`, poisoning the cast set.
+    """
+    parts: list[str] = []
+    depth = 0
+    buf: list[str] = []
+    for ch in value:
+        if ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth = max(0, depth - 1)
+        if ch == "," and depth == 0:
+            parts.append("".join(buf))
+            buf = []
+            continue
+        buf.append(ch)
+    parts.append("".join(buf))
+    return [p for p in parts if p.strip()]
+
+
+def cast_names_from_outline(outline_text: str) -> set[str]:
+    """Every lowercase given-name token in the outline's cast lists.
+
+    This is the narrator lock's negative control. A self-id matching a name
+    the book actually casts is a real narrator swap; a capitalized word matching
+    nobody is personification. Without the cast set the detector has to guess
+    from word shape alone, which is what produced "I am Death" false positives.
+    """
+    out: set[str] = set()
+    for raw in (outline_text or "").splitlines():
+        line = _LIST_MARKER.sub("", raw.strip()).replace("*", " ").strip()
+        m = _CHARS_KEY.match(line)
+        if not m:
+            continue
+        for chunk in _split_cast_chunks(m.group(1)):
+            people = _split_focus_people(chunk)
+            if not people:
+                continue
+            given = _clean_name_token(people[0]["given"])
+            if given and given not in _FOCUS_JUNK:
+                out.add(given)
+    return out
+
+
+def _clean_name_token(token: str) -> str:
+    """Normalize a cast token: strip quotes, possessives, and trailing punctuation.
+
+    A cast line written `Lily's mother` or `(Narrator):` otherwise contributes
+    `lily's` / `narrator:` to the cast set, which no word in prose can ever
+    match — the set's whole job is to be a lookup by exact given name.
+    """
+    t = _strip_quotes(token)
+    t = re.sub(r"['’]s$", "", t)
+    return t.strip(".,;:!?").strip().lower()
+
+
 def protagonist_aliases(outline_text: str) -> set[str]:
-    """Lowercase name tokens for the most common Focus person (the MC).
+    """Lowercase name tokens for the protagonist (the MC), from the outline.
 
     `Focus: Lily Bakersville (Baal)` yields lily / bakersville / baal so a
     first-person lock accepts both the public name and the secret one.
     Parenthetical aliases are taken only from labels whose person *is* the
     MC — a rival's "(the Render of Ash)" must not whitelist that title.
+
+    Falls back to the leading name of each `Characters:` line when the outline
+    has no Focus/POV field. Outlines drafted before the Focus field existed
+    parse to zero Focus labels, and an empty alias set silently disables the
+    narrator lock. Callers that have the character registry on hand should
+    prefer `mc_aliases_for_project`, which consults that too.
     """
+    return mc_aliases_for_project(outline_text)
+
+
+def mc_aliases_for_project(outline_text: str, characters_md: str = "") -> set[str]:
+    """MC alias set from every source available, in descending trust order.
+
+    1. `Focus:` / `POV:` labels — the explicit MC-lock field.
+    2. Character registry entry #1 — the protagonist, by construction.
+    3. Leading name of each outline `Characters:` line — prominence order.
+
+    An empty return means the protagonist could not be identified from any
+    source, and the caller must treat the narrator lock as unavailable rather
+    than as satisfied.
+    """
+    aliases = _protagonist_from_focus(outline_text)
+    if aliases:
+        return aliases
+    if characters_md:
+        head = registry_lead_name(characters_md)
+        if head:
+            people = _split_focus_people(head)
+            if people:
+                out = _alias_set(people)
+                if out:
+                    return out
+    return _protagonist_from_characters(outline_text)
+
+
+def _protagonist_from_focus(outline_text: str) -> set[str]:
+    """MC alias set from Focus/POV labels, or empty when there are none."""
     labels = focus_names(outline_text)
     if not labels:
         return set()
+
     freq: dict[str, int] = {}
     per_label: list[list[dict]] = []
     for label in labels:
@@ -625,18 +828,30 @@ def protagonist_aliases(outline_text: str) -> set[str]:
             g = p["given"].lower()
             if g:
                 freq[g] = freq.get(g, 0) + 1
-    if not freq:
+    mc = _pick_mc(freq)
+    if not mc:
         return set()
-    mc = max(freq, key=freq.get)
-    aliases: set[str] = set()
-    for people in per_label:
-        for p in people:
-            if p["given"].lower() != mc:
-                continue
-            for t in p["tokens"]:
-                aliases.add(t.lower())
-            for a in p["aliases"]:
-                for t in a.replace("/", " ").replace("|", " ").split():
-                    if t and t.lower() not in _FOCUS_JUNK:
-                        aliases.add(t.lower())
-    return aliases
+    # Only labels whose person IS the MC contribute — a rival's
+    # "(the Render of Ash)" must not whitelist that title for everyone.
+    return _alias_set([p for people in per_label for p in people
+                       if p["given"].lower() == mc])
+
+
+def _protagonist_from_characters(outline_text: str) -> set[str]:
+    """MC alias set from `Characters:` lines when no Focus field exists."""
+    freq: dict[str, int] = {}
+    first_seen: dict[str, list[dict]] = {}
+    for name in lead_character_names(outline_text):
+        people = _split_focus_people(name)
+        if not people:
+            continue
+        p = people[0]
+        g = p["given"].lower()
+        if not g:
+            continue
+        freq[g] = freq.get(g, 0) + 1
+        first_seen.setdefault(g, []).append(p)
+    mc = _pick_mc(freq)
+    if not mc:
+        return set()
+    return _alias_set(first_seen.get(mc, []))

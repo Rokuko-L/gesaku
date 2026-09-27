@@ -278,20 +278,32 @@ def evaluate_chapter(chapter_num):
         # (a full Mira first-person chapter) must not clear the keep bar.
         narrator_penalty = 0.0
         narrator_violations: list[str] = []
+        narrator_lock_active = False
         if genre_cfg.get("perspective") == "first_person":
-            from core.outline import protagonist_aliases
+            from core.outline import cast_names_from_outline, mc_aliases_for_project
             from core.prose import narrator_identity_swaps
             outline_text = ""
+            characters_text = ""
             try:
                 outline_text = paths.get_outline_path().read_text(encoding="utf-8")
             except OSError as e:
-                print(f"  [NARRATOR] outline unreadable ({e}); lock skipped", file=sys.stderr)
-            allowed = protagonist_aliases(outline_text)
+                print(f"  [NARRATOR] outline unreadable ({e})", file=sys.stderr)
+            try:
+                characters_text = paths.get_characters_path().read_text(encoding="utf-8")
+            except OSError:
+                pass
+            allowed = mc_aliases_for_project(outline_text, characters_text)
             if not allowed:
-                print("  [NARRATOR] no MC aliases parsed from outline; lock skipped",
-                      file=sys.stderr)
+                # An unidentifiable MC is not a satisfied lock. Record it so
+                # drafting can say the guard was off rather than reporting a
+                # clean chapter as if the narrator had been checked.
+                print("  [NARRATOR] MC UNIDENTIFIED from outline and character "
+                      "registry; lock INACTIVE this chapter", file=sys.stderr)
             else:
-                narrator_violations = narrator_identity_swaps(chapter_text, allowed)
+                narrator_lock_active = True
+                cast = cast_names_from_outline(outline_text)
+                narrator_violations = narrator_identity_swaps(
+                    chapter_text, allowed, cast)
                 if narrator_violations:
                     narrator_penalty = min(6.0, 2.0 * len(narrator_violations))
                     adjusted = max(0, adjusted - narrator_penalty)
@@ -299,6 +311,8 @@ def evaluate_chapter(chapter_num):
                           f"{narrator_violations[:3]} — penalty: -{narrator_penalty:.2f}",
                           file=sys.stderr)
             result["narrator_violations"] = narrator_violations
+            result["narrator_lock_active"] = narrator_lock_active
+            result["narrator_mc_aliases"] = sorted(allowed)
 
         print(f"  [LENGTH] {actual_words}/{target_words} words — penalty: -{length_penalty:.2f}", file=sys.stderr)
         result["length_penalty"] = length_penalty
