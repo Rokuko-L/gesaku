@@ -8,9 +8,11 @@ with the real fixtures.
 
 from __future__ import annotations
 
+import io
 import json
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 
 from core.genre import perspective_eval_rule, perspective_system_block
@@ -637,6 +639,60 @@ class OutlineCheckpointTest(unittest.TestCase):
         p = self._write(self.COMPLETE)
         self.assertTrue(_foundation_artifact_ok(p, min_chars=10,
                                                 require_chapters=3))
+
+
+class RoadmapRetryTest(unittest.TestCase):
+    """The roadmap retry loop must not accumulate feedback forever.
+
+    Each attempt appended its drift verdict onto `roadmap_prompt`, so attempt 5
+    carried attempts 1-4's critique: the prompt grew every retry, the same
+    complaint kept firing, and a drifting roadmap burned all 6 attempts (16 LLM
+    calls, ~1 hour) without converging. Only the latest feedback is useful.
+    """
+
+    def test_the_prompt_is_not_mutated_by_a_failed_attempt(self):
+        import inspect
+        from foundation import gen_outline
+        src = inspect.getsource(gen_outline)
+        # The accumulating form was `roadmap_prompt += (...)` inside the loop.
+        self.assertNotIn("roadmap_prompt +=", src)
+
+    def test_feedback_is_carried_into_the_next_attempt(self):
+        # It must still be used — a retry that ignores the judge would just
+        # repeat the same roadmap.
+        import inspect
+        from foundation import gen_outline
+        src = inspect.getsource(gen_outline)
+        self.assertIn("best_drift_feedback", src)
+        self.assertIn("attempt_prompt", src)
+
+
+class ProgressTest(unittest.TestCase):
+    """A long stage must announce itself while it is still running."""
+
+    def test_a_stage_emits_start_before_it_finishes(self):
+        from core.progress import emit, parse_line
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            emit("stage_start", stage="gen_outline")
+            # ... the stage would run here ...
+        events = [parse_line(l) for l in buf.getvalue().splitlines() if parse_line(l)]
+        self.assertEqual(events[0]["event"], "stage_start")
+        self.assertEqual(events[0]["stage"], "gen_outline")
+
+    def test_the_webui_renders_progress_as_a_step_line(self):
+        from webui.routes.stream import _format_progress
+        text = _format_progress({"ts": "2026-09-28T00:00:00", "event": "stage_start",
+                                 "stage": "gen_outline"})
+        self.assertIn("gen_outline", text)
+        self.assertIn("start", text)
+
+    def test_the_webui_flags_a_stage_error(self):
+        from webui.routes.stream import _format_progress
+        text = _format_progress({"ts": "2026-09-28T00:00:00",
+                                 "event": "stage_error", "stage": "gen_outline",
+                                 "elapsed_s": 12.0})
+        self.assertIn("error", text.lower())
 
 
 if __name__ == "__main__":

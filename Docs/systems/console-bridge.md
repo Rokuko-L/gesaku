@@ -41,6 +41,33 @@ API-shape mapping (snake_case → camelCase). Both `GET /api/llm-events` and the
 SSE `llm` frames go through it; when only one did, live rows rendered blank
 while the same call looked correct after a reload.
 
+### Progress events (`core/progress.py`)
+
+The log pane is only as good as what reaches the log. Two things made a run
+unobservable, and both are fixed at the source:
+
+- `run_tool` used `capture_output=True`, so a subprocess wrote nothing until
+  it exited. A 10-minute chapter draft looked identical to a hung run. It now
+  streams each line as it arrives, via a reader thread plus a queue — the
+  thread is required, because iterating `proc.stdout` blocks until a line
+  arrives and a *silent* child would never reach the timeout check.
+- Long stages announce themselves. `core.progress.emit` writes one parseable
+  line per event:
+
+  ```
+  #GESAKU: {"ts":"2026-09-27T23:01:35","event":"stage_start","stage":"gen_outline"}
+  ```
+
+  `stage_start` / `stage_done` (with `elapsed_s`) bracket every `uv_run`;
+  `chapter_start` / `chapter_done` bracket each chapter; retry events name the
+  attempt. `core.progress` owns the format rather than `pipeline/` because
+  `foundation/` cannot import `pipeline/` — with two emitters the webui would
+  silently lose half its events.
+
+  The SSE `log` frames render these through `_format_progress`, so the pane
+  shows `▶ start: gen_outline` the moment it begins. `parse_line` is the single
+  parser; consumers never regex the prefix themselves.
+
 CORS is restricted to the loopback origins the console is served from
 (`:5175` vite, `:8600` bridge). It was `allow_origins=["*"]`, which let any page
 the operator visited POST `/api/settings` — repointing `ANTHROPIC_BASE_URL` at

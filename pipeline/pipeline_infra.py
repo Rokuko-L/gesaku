@@ -18,10 +18,15 @@ import re
 import shlex
 import subprocess
 import sys
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
+from queue import Empty, Queue
 
 from dotenv import load_dotenv
+
+from core.progress import emit, stage_timer
 
 load_dotenv()
 
@@ -499,9 +504,91 @@ def step(text: str):
     ts = datetime.now().strftime("%H:%M:%S")
     print(f"  [{ts}] {text}")
 
+
+# Machine-readable progress. Free-text `step()` lines are for humans; this is
+# for the webui feed, a grep, and `tail -f`. `core.progress` owns the format so
+# foundation/ and pipeline/ emit identically — foundation/ cannot import
+# pipeline/, so the shared owner has to live in core/.
+progress = emit
+
+
+def step_event(text: str) -> None:
+    """A named step within the current stage, in the parseable format."""
+    emit("step", detail=text)
+
+def _stream_subprocess(cmd: str, timeout: int, effective_cwd: str) -> subprocess.CompletedProcess:
+    """Run a subprocess, mirroring its output live as each line arrives.
+
+    `capture_output=True` buffers until exit, so a 10-minute generation shows
+    nothing for 10 minutes and a caller cannot tell a slow run from a hung one.
+    That is exactly what a chapter draft or an outline block looks like, and it
+    is why the pipeline log could sit empty for the length of a whole stage.
+
+    A reader thread is required, not optional: iterating `proc.stdout` blocks
+    until a line arrives, so a child that is working but silent (a long LLM
+    call, `time.sleep`) would never reach the timeout check and would hang the
+    parent forever. The queue lets the main loop wait with a deadline.
+
+    The lines are both printed (so the run log and the webui SSE feed see them)
+    and collected (so callers that parse stdout still work).
+    """
+    proc = subprocess.Popen(
+        shlex.split(cmd), shell=False, stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
+        cwd=effective_cwd, bufsize=1,
+    )
+    collected: list[str] = []
+    queue: "Queue[str | None]" = Queue()
+
+    def _pump() -> None:
+        try:
+            assert proc.stdout is not None
+            for raw in proc.stdout:
+                queue.put(raw.rstrip("\n"))
+        except Exception:
+            pass
+        finally:
+            queue.put(None)
+
+    thread = threading.Thread(target=_pump, daemon=True)
+    thread.start()
+
+    deadline = time.monotonic() + timeout
+    eof = False
+    try:
+        while not eof:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                proc.kill()
+                thread.join(timeout=5)
+                raise subprocess.TimeoutExpired(
+                    cmd, timeout, output="\n".join(collected))
+            try:
+                line = queue.get(timeout=min(remaining, 1.0))
+            except Empty:
+                continue
+            if line is None:
+                eof = True
+                break
+            collected.append(line)
+            print(line, flush=True)
+        proc.wait(timeout=max(1.0, deadline - time.monotonic()))
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        raise
+    finally:
+        if proc.stdout is not None:
+            try:
+                proc.stdout.close()
+            except Exception:
+                pass
+    return subprocess.CompletedProcess(
+        cmd, returncode=proc.returncode, stdout="\n".join(collected), stderr="")
+
+
 def run_tool(cmd: str, timeout: int = 600, check: bool = False, cwd: str = None) -> subprocess.CompletedProcess:
     """
-    Run a tool as a subprocess, capturing output.
+    Run a tool as a subprocess, streaming its output as it is produced.
     Uses shell=False with shlex.split for argument safety.
     Returns CompletedProcess; never raises unless check=True.
     """
@@ -509,18 +596,12 @@ def run_tool(cmd: str, timeout: int = 600, check: bool = False, cwd: str = None)
     try:
         cmd_norm = cmd.replace("\\", "/")
         effective_cwd = cwd if cwd is not None else str(paths.get_root_dir())
-        result = subprocess.run(
-            shlex.split(cmd_norm), shell=False, capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=timeout, cwd=effective_cwd,
-        )
+        result = _stream_subprocess(cmd_norm, timeout, effective_cwd)
         if result.returncode != 0:
             print(f"    WARN: exit code {result.returncode}")
-        stderr_preview = (result.stderr or "")[:2000]
-        if stderr_preview:
-            print(f"    stderr: {stderr_preview}")
         if check and result.returncode != 0:
             raise subprocess.CalledProcessError(
-                result.returncode, cmd, result.stdout, result.stderr)
+                result.returncode, cmd, result.stdout, "")
         return result
     except subprocess.TimeoutExpired as e:
         print(f"    ERROR: timed out after {timeout}s")
@@ -530,11 +611,19 @@ def run_tool(cmd: str, timeout: int = 600, check: bool = False, cwd: str = None)
         # fabricated success-shaped result: rc=-1 with empty stdout used to
         # flow into parse_score() and surface as a bogus ValueError far from
         # the real cause.
-        return subprocess.CompletedProcess(cmd, returncode=-1, stdout="", stderr="TIMEOUT")
+        return subprocess.CompletedProcess(
+            cmd, returncode=-1, stdout=getattr(e, "output", "") or "", stderr="TIMEOUT")
 
 def uv_run(script: str, timeout: int = 600) -> subprocess.CompletedProcess:
-    """Shorthand for running a Python script from project root. Fails fast."""
-    return run_tool(f"\"{sys.executable}\" {script}", timeout=timeout, check=True)
+    """Shorthand for running a Python script from project root. Fails fast.
+
+    Brackets the call with parseable stage events, so a run log or the webui
+    feed shows which script is running and how long it took — including while
+    it is still running, which `step("RUN: ...")` alone could not do.
+    """
+    stage = Path(script).stem
+    with stage_timer(stage, timeout_s=timeout):
+        return run_tool(f"\"{sys.executable}\" {script}", timeout=timeout, check=True)
 
 def git_add_commit(message: str) -> str:
     """Stage all changes and commit. Returns short hash or empty string."""

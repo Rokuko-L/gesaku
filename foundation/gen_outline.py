@@ -20,6 +20,9 @@ from core import paths
 
 load_dotenv()
 
+from core.progress import emit as _emit
+
+
 def call_writer(prompt, max_tokens=None):
     # Local thinking-proxy outline blocks routinely need >600s.
     if max_tokens is None:
@@ -207,8 +210,25 @@ Each chapter entry must start with "### Chapter N:".
         best_drift_feedback = ""
         max_roadmap_attempts = int(os.getenv("GESAKU_OUTLINE_ROADMAP_ATTEMPTS", "6"))
         for attempt in range(1, max_roadmap_attempts + 1):
+            _emit("roadmap_attempt", attempt=attempt,
+                  max_attempts=max_roadmap_attempts)
+            # Each attempt starts from the ORIGINAL prompt. Accumulating every
+            # previous verdict into it made each retry longer than the last and
+            # kept re-asserting critique the model had already addressed, so a
+            # drifting roadmap burned all 6 attempts (16 LLM calls, ~1 hour)
+            # without converging. The latest feedback is the only useful signal.
+            attempt_prompt = (
+                roadmap_prompt if attempt == 1 or not best_drift_feedback
+                else roadmap_prompt + (
+                    f"\n\nYOUR PREVIOUS ATTEMPT HAD THIS PROBLEM:\n"
+                    f"{best_drift_feedback}\n"
+                    "Ensure that the proposed outline maintains a consistent "
+                    "tone, stakes register, and world/magic rules between "
+                    "Act 1 and Acts 2/3."
+                )
+            )
             try:
-                res = call_writer(roadmap_prompt, max_tokens=roadmap_max_tokens())
+                res = call_writer(attempt_prompt, max_tokens=roadmap_max_tokens())
             except TruncationError as e:
                 print(f"  WARN: Roadmap attempt {attempt} truncated ({e}), retrying...", file=sys.stderr)
                 continue
@@ -235,11 +255,6 @@ Each chapter entry must start with "### Chapter N:".
 
             print(f"  WARN: Roadmap attempt {attempt} failed tonal drift check:\n{feedback}", file=sys.stderr)
             best_drift_feedback = feedback
-            roadmap_prompt += (
-                f"\n\nERROR ON ATTEMPT {attempt}: {feedback}\n"
-                "Ensure that the proposed outline maintains a consistent tone, "
-                "stakes register, and world/magic rules between Act 1 and Acts 2/3."
-            )
 
         if not roadmap_content:
             if best_structurally_valid:
@@ -372,7 +387,10 @@ CRITICAL RULES:
         block_result = ""
         last_err = ""
         last_hygiene_leaks: list[str] = []
+        _emit("block_start", detail=f"chapters {start}-{end}")
         for attempt in range(1, 4):
+            _emit("block_attempt", detail=f"chapters {start}-{end}",
+                  attempt=attempt)
             try:
                 res = call_writer(block_prompt, max_tokens=outline_max_tokens(end - start + 1))
             except TruncationError as e:

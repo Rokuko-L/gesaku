@@ -19,6 +19,7 @@ from pathlib import Path
 from core import paths
 from core.genre import load_genre
 from core.outline import extract_outline_debts
+from core.progress import emit
 
 from pipeline.pipeline_infra import (
     INFRA_MAX_ATTEMPTS, banner, chapter_length_bounds, chapter_threshold,
@@ -122,6 +123,12 @@ def run_drafting(state: dict) -> dict:
             step(f"outline entry for ch{ch} unavailable ({e}); climax band from position only")
         _climax = is_climax_chapter(ch, total, _outline_entry)
         min_words, max_words = chapter_length_bounds(target_words, is_climax=_climax)
+        # A chapter is 2-5 minutes of drafting plus eval, which is long enough
+        # to look hung without a marker. Announce the band up front so a reader
+        # can see what the run is aiming for while it is still working.
+        emit("chapter_start", chapter=ch, chapters_total=total,
+             target_words=target_words, band=[min_words, max_words],
+             climax=_climax)
         drafted = False
         best_score = -1.0
         best_draft_content = None
@@ -425,6 +432,10 @@ def run_drafting(state: dict) -> dict:
                     skipped.append(ch)
                 state["skipped_chapters"] = skipped
                 save_state(state)
+        emit("chapter_done", chapter=ch, chapters_total=total,
+             drafted=drafted, score=best_score if not drafted else None,
+             best_score=round(best_score, 2) if best_score > 0 else None,
+             words=best_word_count if best_word_count else None)
 
     # All chapters drafted
     state["phase"] = "revision"

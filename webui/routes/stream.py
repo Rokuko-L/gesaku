@@ -15,6 +15,7 @@ from starlette.responses import StreamingResponse  # noqa: E402
 from deps import (  # noqa: E402
     llm_event_view, load_state, project_dir, run_manager, run_state_fields,
 )
+from core.progress import parse_line  # noqa: E402
 
 import asyncio
 import json
@@ -67,6 +68,49 @@ def _sse(event: str, data) -> str:
 _SEPARATOR_RE = re.compile(r"^\s*[=\-]{5,}\s*$")
 _STEP_RE = re.compile(r"^\s*\[\d{2}:\d{2}:\d{2}\]")
 
+# Parseable progress events (core.progress). A stage announces itself when it
+# starts, so a long silent stretch is visibly "gen_outline running" rather than
+# an unexplained gap — the exact ambiguity that made a 1-hour stall invisible.
+_STAGE_LABELS = {
+    "stage_start": "▶ start",
+    "stage_done": "✓ done",
+    "stage_error": "✗ error",
+}
+
+
+def _format_progress(obj: dict) -> str:
+    """Render one progress event as a human line for the log pane.
+
+    Kept deliberately short — the event already carries the structured fields
+    for anything that wants to consume them, and this is what a person reads.
+    """
+    kind = obj.get("event", "")
+    label = _STAGE_LABELS.get(kind, kind)
+    if kind in _STAGE_LABELS:
+        bits = [f"{obj.get('stage', '?')}"]
+        if kind == "stage_done" and "elapsed_s" in obj:
+            bits.append(f"{obj['elapsed_s']}s")
+        if obj.get("chapter") is not None:
+            bits.append(f"ch{obj['chapter']}")
+        return f"[{obj.get('ts', '')[11:19]}] {label}: " + " ".join(bits)
+    if kind == "chapter_start":
+        band = obj.get("band") or []
+        band_s = f" band={band[0]}-{band[1]}w" if len(band) == 2 else ""
+        return (f"[{obj.get('ts', '')[11:19]}] ▶ chapter {obj.get('chapter')}"
+                f"/{obj.get('chapters_total')} target={obj.get('target_words')}w"
+                f"{band_s}")
+    if kind == "chapter_done":
+        return (f"[{obj.get('ts', '')[11:19]}] ✓ chapter {obj.get('chapter')}"
+                f"/{obj.get('chapters_total')} drafted={obj.get('drafted')}"
+                f" words={obj.get('words')}")
+    if kind in ("retry", "block_attempt", "roadmap_attempt"):
+        detail = obj.get("detail") or ""
+        return (f"[{obj.get('ts', '')[11:19]}] ↻ {kind} "
+                f"attempt={obj.get('attempt')}"
+                f"/{obj.get('max_attempts', '?')} {detail}".rstrip())
+    detail = obj.get("detail") or obj.get("stage") or ""
+    return f"[{obj.get('ts', '')[11:19]}] {kind} {detail}".rstrip()
+
 
 def _line_level(text: str, prev_was_separator: bool = False) -> str:
     """Classify one pipeline stdout line: banner | step | warn | raw.
@@ -80,7 +124,7 @@ def _line_level(text: str, prev_was_separator: bool = False) -> str:
     lowered = stripped.lower()
     if any(tok in lowered for tok in
            ("error", "fatal", "traceback", "warning", "warn:", "failed",
-            "exception")):
+             "exception")):
         return "warn"
     if _STEP_RE.match(stripped):
         return "step"
@@ -148,6 +192,20 @@ async def stream(request: Request, project: str | None = Query(None)):
             if log_path is not None:
                 log_offset, lines = await asyncio.to_thread(_new_lines, log_path, log_offset)
                 for line in lines:
+                    obj = parse_line(line)
+                    if obj is not None:
+                        # A progress event renders as one readable line, so the
+                        # pane shows "gen_outline started" the moment it does
+                        # rather than after the stage finishes.
+                        text = _format_progress(obj)
+                        level = ("warn" if obj.get("event") == "stage_error"
+                                 else "step")
+                        frames.append(_sse("log", {
+                            "ts": obj.get("ts") or
+                                  datetime.now(timezone.utc).isoformat(),
+                            "level": level, "text": text,
+                        }))
+                        continue
                     frames.append(_sse("log", {
                         "ts": datetime.now(timezone.utc).isoformat(),
                         "level": _line_level(line, prev_sep), "text": line,
