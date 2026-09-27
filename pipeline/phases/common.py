@@ -228,12 +228,17 @@ def narrator_lock_blocks(eval_log_path) -> bool:
     return bool(data.get("narrator_violations"))
 
 
-def narrator_lock_was_inactive(eval_log_path) -> bool:
-    """True when the narrator lock could not run because the MC is unidentifiable.
+def narrator_lock_was_inactive(eval_log_path, first_person: bool = False) -> bool:
+    """True when the eval explicitly recorded that the narrator lock did not run.
 
-    The eval records `narrator_lock_active`. When it is False the chapter was
-    never actually checked, which must not read as "checked and clean" — a
-    caller that treats silence as a pass is the exact failure this records.
+    The eval writes `narrator_lock_active` only for a first_person book, and
+    only when the MC could not be identified. An ABSENT flag therefore means
+    "not a first-person chapter, or a log written before the flag existed" —
+    and both are out of scope here, so this returns False and never fires on a
+    third-person book.
+
+    Callers that must also treat a missing flag as a gap (drafting, on a
+    first-person run) pass `first_person=True`.
     """
     if not eval_log_path:
         return False
@@ -244,10 +249,10 @@ def narrator_lock_was_inactive(eval_log_path) -> bool:
         data = json.loads(p.read_text(encoding="utf-8"))
     except Exception:
         return False
-    if "narrator_lock_active" not in data:
-        # An eval log written before the flag existed. Absence is not a pass.
-        return True
-    return not data.get("narrator_lock_active")
+    if "narrator_lock_active" in data:
+        return not data.get("narrator_lock_active")
+    # An eval log written before the flag existed. Absence is not a pass.
+    return bool(first_person)
 
 
 def build_eval_feedback(eval_log_path):

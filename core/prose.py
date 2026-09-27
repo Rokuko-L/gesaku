@@ -428,6 +428,7 @@ PERSONIFICATION_WORDS = {
     "lies", "memory", "memories", "justice", "mercy", "vengeance", "duty",
     "courage", "pride", "shame", "guilt", "innocence", "youth", "age",
     "trouble", "danger", "mischief", "misery", "ruin", "comfort", "hope",
+    "famine", "plague", "reaper", "mist", "night", "winter", "dusk", "dawn",
     # abstractions and inanimate things that take "I"
     "nothing", "nobody", "someone", "somebody", "anybody", "everything",
     "something", "anyone", "everyone",
@@ -447,9 +448,14 @@ PRONOUN_WORDS = {
 
 _QUOTE_PAIRS = (
     ('"', '"'),
-    ("\u201c", "\u201d"),
+    ("“", "”"),
     ("'", "'"),
-    ("\u2018", "\u2019"),
+    ("‘", "’"),
+    # Markdown emphasis is how this pipeline's prose marks interiority and
+    # quoted speech, so `*I am Mira*, the guard muttered` is somebody else
+    # talking. Without it every italic aside is read as narration.
+    ("*", "*"),
+    ("_", "_"),
 )
 
 
@@ -457,8 +463,10 @@ def _in_quoted_span(text: str, start: int) -> bool:
     """True when `start` sits inside a well-formed quoted span on its line.
 
     Stray inch marks and unclosed quotes do NOT open a span (they must not
-    swallow the rest of the line). Single-quote / curly-single dialogue is
-    a span, same as double.
+    swallow the rest of the line). Single-quote / curly-single dialogue is a
+    span, same as double. Markdown `*italic*`, `**bold**` and `_em_` count as
+    spans too — the prose guard uses italics for interiority and for quoted
+    speech, so an unspanned one would be read as narration.
     """
     line_start = text.rfind("\n", 0, start) + 1
     line_end = text.find("\n", start)
@@ -469,22 +477,29 @@ def _in_quoted_span(text: str, start: int) -> bool:
     i = 0
     while i < rel:
         ch = line[i]
+        # A run of emphasis markers is one delimiter: `**` is bold, not two
+        # nested italic spans, and a doubled quote is a nested quote.
+        run = 1
+        while run < 3 and i + run < len(line) and ch == line[i + run]:
+            run += 1
+        marker = line[i:i + run]
         closer = None
         for o, c in _QUOTE_PAIRS:
-            if ch == o:
-                closer = c
+            if marker.startswith(o):
+                closer = c * run
                 break
         if closer is None:
             i += 1
             continue
-        j = line.find(closer, i + 1)
+        j = line.find(closer, i + run)
         if j < 0:
-            # Unclosed opener: not a span. Keep scanning.
+            # Unclosed opener: not a span — an inch mark in "5\" thick" must
+            # not swallow the rest of the line. Keep scanning.
             i += 1
             continue
         if j >= rel:
             return True
-        i = j + 1
+        i = j + run
     return False
 
 
@@ -551,17 +566,22 @@ def narrator_identity_swaps(
             given = tokens[0].lower()
             if given in allowed:
                 continue
-            # The cast is authoritative: a named character claiming "I" is a
-            # swap, whatever the word looks like. A book with a character
-            # called Death is rare, and laundering a real head-hop to support
-            # a personification guess is the worse error.
-            if given in others:
-                pass
-            elif given in PRONOUN_WORDS or given in PERSONIFICATION_WORDS:
+            if given in PRONOUN_WORDS:
                 continue
-            elif not _looks_like_self_id(name, tokens):
-                # Unknown name in a shape that is not a self-introduction
-                # ("I am Trouble with a capital T").
+            # A cast member claiming "I" is a swap whatever the word looks
+            # like — unless the cast entry is not a person. The cast comes
+            # from `Characters:` lines, which are full of role and place words
+            # ("Court", "Guards", "Cult"); letting those override the
+            # personification list would re-break "I am Shadow" on any book
+            # that lists a court among its cast.
+            is_place = _is_place_or_role(given) or _is_place_or_role(
+                given.split("-")[0])
+            in_cast = given in others and not is_place
+            if not in_cast and (is_place or given in PERSONIFICATION_WORDS):
+                continue
+            if not in_cast and not _looks_like_self_id(name, tokens):
+                # Unknown word without a name shape ("I am Trouble with a
+                # capital T", "I am absolutely certain").
                 continue
             snippet = f"{m.group(0)[: m.start(1) - m.start()]}{name}"
             if len(snippet) > 80:
@@ -571,28 +591,50 @@ def narrator_identity_swaps(
 
 
 def _looks_like_self_id(name: str, tokens: list[str]) -> bool:
-    """Does this unknown capitalized self-id read as a name introduction?
+    """Does this unknown capitalized self-id read as a person naming themselves?
 
-    Accepts a multi-token name ("Mira Bakersville"), a hyphenated compound
-    ("Kael-Lily", "Lily-Ann" — one token, but unmistakably a name and never
-    an English word), an all-caps name, or a kinship/identity suffix. That
-    keeps "I am Trouble with a capital T" and "I am Everything you need" out
-    while still catching "I am Mira Bakersville" in a book whose cast list
-    failed to parse.
+    A capitalized word is the signal. English does not capitalize an ordinary
+    word mid-sentence, so "I am Mira." names someone and "I am afraid" does
+    not. That is deliberately generous: a real head-hop is the more expensive
+    error here, because a false positive costs a discard-and-regenerate cycle.
+
+    Two things are rejected despite being capitalized:
+    - All-caps runs. "I'M GOING TO DIE AGAIN" is shouted interiority and the
+      narrator is still the MC; an earlier version flagged two real chapters
+      for shouting in italics.
+    - A capitalized word followed by a lowercase one, which is a sentence
+      flourish ("I am Truly, deeply wrong"). A hyphen or apostrophe is part of
+      the NAME, so "Kael-Lily" and "O'Brien" are exempt.
     """
-    if len(tokens) >= 2:
-        return True
-    if any(t.isupper() and len(t) > 1 for t in tokens):
-        return True
-    # Hyphenated compound: a name shape that survives tokenization as one word.
-    if any("-" in t for t in tokens):
-        return True
-    return bool(_KINSHIP_SUFFIX.search(name))
+    if not tokens or not tokens[0][:1].isupper():
+        return False
+    # All-caps is shouting, not naming: "I'M GOING TO DIE AGAIN" is the MC's
+    # own interiority in italics. An uppercased token is not a name shape.
+    if tokens[0].isupper() and len(tokens[0]) > 1:
+        return False
+    rest = name.split()[1:]
+    # A capitalized word followed by a lowercase one is a sentence flourish,
+    # not a name — "I am Truly, deeply wrong". A hyphen or apostrophe is part
+    # of the NAME, so "Kael-Lily" and "O'Brien" are exempt.
+    if rest and rest[0][:1].islower() and not any(
+            "-" in t or "'" in t or "’" in t for t in tokens):
+        return False
+    return True
 
 
-_KINSHIP_SUFFIX = re.compile(
-    r"\b(?:son|daughter|mother|father|brother|sister|wife|husband|child|"
-    r"heir|heiress|widow|widower|cousin|nephew|niece|uncle|aunt|kin|"
-    r"reincarnation|incarnation|avatar|self)\b",
-    re.IGNORECASE,
-)
+_PLACE_ROLE_WORDS = {
+    "court", "courts", "guards", "guard", "cult", "cultists", "palace",
+    "castle", "throne", "crown", "city", "town", "village", "kingdom",
+    "empire", "crowd", "crowds", "servants", "servant", "villagers",
+    "courtiers", "attendants", "maids", "page", "nurse", "nurses",
+    "footmen", "grooms", "sentry", "citizens", "wraiths", "noblewomen",
+    "courier", "messenger", "ensemble", "orchestra", "chorus",
+    # personification words that also survive as cast entries
+    "shadow", "famine", "plague", "mist", "winter", "summer", "autumn",
+    "spring", "reaper", "night", "morning", "dusk", "dawn", "winter",
+}
+
+
+def _is_place_or_role(token: str) -> bool:
+    """Is this cast entry a place or a group rather than a person?"""
+    return token in _PLACE_ROLE_WORDS

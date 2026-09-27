@@ -340,13 +340,14 @@ Write the detailed outlines for Chapters {start} through {end}.
 For EACH chapter in this range, you must output:
 1. Focus: [Character name this scene is ABOUT — may be the MC or a side character]
 2. MC presence: [on-page | off-page]  (first-person books only; use off-page only for brief interludes)
-3. Characters: [List of characters who appear in this chapter, comma-separated]
-4. Emotional Arc: [Emotional shift, e.g. Contentment -> Dread]
-5. Summary: [2-3 sentences of what happens]
-6. Orientation Facts: [A bulleted list of 2-4 concrete, statable facts the outline commits to reveal/establish in this chapter for orientation, e.g. relationships, setting details, background context. Especially critical for Chapter 1 and character introduction chapters]
-7. Scene Stakes: [One sentence describing what concrete external stakes are at play or could change by the end of this specific chapter]
-8. Scene Beats: A numbered list of EXACTLY {beats_per_chapter} sequential scene beats (no more, no less). Each beat MUST have a detailed paragraph (3-4 sentences) describing the events. Budget each beat to roughly {words_per_beat} words of prose — the whole chapter is only {wpc} words, so keep the beat count and per-beat depth matched to the word budget. Do not add extra beats beyond {beats_per_chapter}; if the story needs more, make the beats denser instead.
-9. Plants & Harvests: List of plants and harvests, tagged exactly as `[Plant: slug_name - "Description"]` or `[Harvest: slug_name - "Description"]`.
+3. Scene type: [setup | confrontation | climax | finale]  — exactly one word. The length budget keys off this: a climax or finale chapter is allowed ~1.55x the target words instead of ~1.45x, so it MUST be marked here and not left to be inferred from the beats.
+4. Characters: [List of characters who appear in this chapter, comma-separated]
+5. Emotional Arc: [Emotional shift, e.g. Contentment -> Dread]
+6. Summary: [2-3 sentences of what happens]
+7. Orientation Facts: [A bulleted list of 2-4 concrete, statable facts the outline commits to reveal/establish in this chapter for orientation, e.g. relationships, setting details, background context. Especially critical for Chapter 1 and character introduction chapters]
+8. Scene Stakes: [One sentence describing what concrete external stakes are at play or could change by the end of this specific chapter]
+9. Scene Beats: A numbered list of EXACTLY {beats_per_chapter} sequential scene beats (no more, no less). Each beat MUST have a detailed paragraph (3-4 sentences) describing the events. Budget each beat to roughly {words_per_beat} words of prose — the whole chapter is only {wpc} words, so keep the beat count and per-beat depth matched to the word budget. Do not add extra beats beyond {beats_per_chapter}; if the story needs more, make the beats denser instead.
+10. Plants & Harvests: List of plants and harvests, tagged exactly as `[Plant: slug_name - "Description"]` or `[Harvest: slug_name - "Description"]`.
 
 CRITICAL RULES:
 - Use standard slug identifiers matching the Global Plot Threads Ledger where applicable (e.g. silver_locket, dead_king_secret).

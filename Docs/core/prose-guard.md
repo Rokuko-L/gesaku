@@ -59,21 +59,32 @@ undershoot path that retries with concrete expansion numbers. Rejection uses
   interludes across a hard `---` break).
   - Because a swap is a **keep-gate** (`narrator_lock_blocks` refuses keep,
     near-clean and force-keep), a false positive costs a full
-    discard-and-regenerate cycle and can skip a chapter. Three defences:
-    `cast_names` — a name the book actually casts is always a swap, whatever
-    the word looks like; `PERSONIFICATION_WORDS` / `PRONOUN_WORDS` — "I am
-    Death", "I am Trouble with a capital T"; and `_looks_like_self_id` — an
-    unknown capitalized word must have a name *shape* (surname, hyphenated
-    compound, kinship suffix) before it counts.
-  - The MC is resolved by `mc_aliases_for_project`, in descending trust:
-    `Focus:`/`POV:` labels, then character-registry entry #1 (which is the
-    protagonist by construction and carries a reincarnate's second name),
-    then the leading name of each outline `Characters:` line. The last two
-    exist because every project drafted before the `Focus` field parses to
-    zero Focus labels, and an empty alias set silently disables the lock.
+    discard-and-regenerate cycle and can skip a chapter. Defences, in the
+    order they are applied:
+    - `PRONOUN_WORDS` / `PERSONIFICATION_WORDS` / `_PLACE_ROLE_WORDS` —
+      "I am Death", "I am afraid", "I am Trouble with a capital T", and
+      "I am Court of the Realm" (the cast is mined from `Characters:` lines,
+      which are full of role and place words, so a cast entry must not
+      override the personification list).
+    - `cast_names` — a name the book actually casts is a swap whatever the
+      word looks like.
+    - `_looks_like_self_id` — a capitalized token is a name. All-caps runs are
+      rejected (shouted interiority is still the MC), as is a capitalized word
+      immediately followed by a lowercase one.
+  - The MC is resolved by `mc_aliases_for_project`. The **outline is the
+    authority**: `Focus:`/`POV:` labels, then the leading name of each
+    `Characters:` line. The character registry is a weak source that may only
+    ADD to that set, and only when it names someone the outline already has —
+    it exists to supply a reincarnate's second identity, and entry #1 is a
+    convention that four of the registries in `projects/` break (a foil, a
+    love interest, a numbered profile subheading, a role label). A registry
+    that disagrees with the outline was wrong every time, so it cannot
+    overrule it.
   - `narrator_lock_active` in the eval JSON records whether the lock actually
-    ran. `narrator_lock_was_inactive` treats an absent flag as *unchecked*, not
-    as a pass, so an unidentifiable MC is never reported as a clean chapter.
+    ran. `narrator_lock_was_inactive(..., first_person=True)` treats an absent
+    flag as *unchecked* rather than as a pass, so an unidentifiable MC is never
+    reported as a clean chapter — while a third-person book, where the flag is
+    never written, stays quiet.
 - Weak reasoning-openers ("let me recall", "I should choose") count only as a
   **dense cluster** — three within 400 characters. A narrator may legitimately
   think one three times across a chapter.

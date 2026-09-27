@@ -606,40 +606,116 @@ def lead_character_names(outline_text: str) -> list[str]:
     return out
 
 
-# The character registry numbers its entries, and entry #1 is the protagonist by
-# construction — the generator writes the cast protagonist-first and every real
-# project agrees. Unlike the outline, the registry is a stable per-project file
-# that survives an outline rewrite, so it is the better source when both exist.
+# A numbered heading in a character registry. Entry #1 is *usually* the
+# protagonist, but that is a convention and not a guarantee: measured across the
+# registries in projects/, four break it — `sir the confortable` numbers its
+# per-character profile subheadings ("### 1. Core Motivations & Comedic
+# Flaws"), and `sir the confortable v4` / `FakeSaint` lead with a foil or the
+# love interest. So this source may only ever ADD names to a set that another
+# source already vouched for; it may never be the sole authority.
 _REGISTRY_ENTRY = re.compile(
-    r"^#{2,4}\s*(?:\*\*)?\s*(\d+)[.)]\s*(.+?)\s*(?:\*\*)?\s*$")
+    r"^#{2,4}\s*\**\s*(\d+)[.)]\s*(.+?)\s*\**\s*$")
+
+# Role and label words that are never a person's name. The registries write
+# "THE NARRATOR: DANIEL VEY" and "PROTAGONIST: PRINCESS ELARA", so without this
+# the resolved "given name" is `Narrator` and the real name is demoted to a
+# surname — which then fails to match "I am Daniel" in the prose.
+_ROLE_WORDS = {
+    "protagonist", "narrator", "main", "lead", "hero", "heroine", "pov",
+    "aka", "alias", "aka", "cast", "registry", "character", "characters",
+    "the", "a", "an", "of", "and", "or", "as",
+}
+
+
+def _is_role_phrase(text: str) -> bool:
+    """Is this heading a role/label line rather than a person?
+
+    `THE NARRATOR: DANIEL "DANNY" VEY` and `PROTAGONIST: LADY ELARA VON
+    HIMMEL` both name a person, but not in the leading token. The name after
+    the colon is the real one.
+    """
+    head, sep, tail = text.partition(":")
+    if sep and tail.strip():
+        # "NARRATOR: DANIEL VEY" -> the part after the colon is the person.
+        return True
+    words = [w for w in re.split(r"\s+", text.strip()) if w]
+    return all(w.lower().strip(".,") in _ROLE_WORDS for w in words)
 
 
 def registry_lead_name(characters_md: str) -> str | None:
     """Name of character entry #1 in a `characters.md` registry.
 
-    `Princess Liliana "Lily" Celestia Lumengarde (Maledictus)` -> every name
-    token, so a reincarnate MC is whitelisted under both identities.
+    Returns the part AFTER a `Role:` prefix when there is one, so a registry
+    headed "THE NARRATOR: DANIEL VEY" yields Daniel rather than Narrator.
+    Returns None when entry #1 is not a person (a profile subheading, a section
+    title) — the caller must then fall back to the outline rather than trust it.
     """
     for raw in (characters_md or "").splitlines():
         m = _REGISTRY_ENTRY.match(raw.strip())
-        if m and m.group(1) == "1":
-            head = m.group(2)
-            # A section header, not a character ("## 2. SUPPORTING CHARACTERS").
-            people = _split_focus_people(head)
-            if not people:
-                continue
-            return head
+        if not (m and m.group(1) == "1"):
+            continue
+        head = m.group(2)
+        people = _split_focus_people(head)
+        if not people:
+            continue
+        if _is_role_phrase(head):
+            tail = head.partition(":")[2].strip()
+            if tail:
+                return tail
+            return None
+        # A heading with no name-like token is a section title, not a person.
+        if not _has_name_token(people[0]):
+            continue
+        return head
     return None
+
+
+def _has_name_token(person: dict) -> bool:
+    """Does this record carry a token shaped like a person's name?
+
+    Section titles masquerade as registry entries — `sir the confortable`
+    numbers its per-character profile subheadings, so entry #1 is literally
+    "Core Motivations & Comedic Flaws". Capitalization alone does not separate
+    them ("Core" is as capitalized as "Lily"), so the discriminator is a
+    common-word list: a subheading is built almost entirely from ordinary
+    English, while a name is not. Requiring at least one token outside that
+    list rejects the subheading and still accepts `Liliana "Lily" Celestia
+    Lumengarde`, `Cecilia de Vaelis` and `Quill`.
+    """
+    for t in person.get("tokens", []):
+        if not _NAME_LIKE.fullmatch(t):
+            continue  # `&`, `**Corvo` — punctuation, not a name
+        if not _usable_name(_clean_name_token(t)):
+            continue
+        if _clean_name_token(t) not in _HEADING_WORDS:
+            return True
+    return False
+
+
+# A single word with no internal punctuation.
+_NAME_LIKE = re.compile(r"[^\W\d_][\w'’]*", re.UNICODE)
+
+# The vocabulary of a section heading, as opposed to a person's name. A
+# registry entry heading is a name when at least one word is outside this set.
+_HEADING_WORDS = {
+    "core", "motivations", "comedic", "flaws", "traits", "arc", "voice",
+    "summary", "overview", "notes", "description", "profile", "backstory",
+    "personality", "appearance", "relationships", "role", "roleplay",
+    "design", "development", "function", "purpose", "story", "plot",
+    "theme", "themes", "structure", "background", "details", "quirks",
+    "strengths", "weaknesses", "goals", "motivations", "flaws", "key",
+    "part", "chapter", "section", "introduction", "conclusion", "notes",
+}
 
 
 def _pick_mc(freq: dict[str, int]) -> str:
     """Most frequent person, breaking ties toward the first-listed name.
 
-    `max(freq, key=freq.get)` is insertion-ordered, so a perfectly alternating
-    protagonist/rival outline ties and dict order silently decides who "I" is.
-    The first name in an outline is the protagonist far more often than not, so
-    an earliest-first-seen person wins any tie. dict preserves insertion order,
-    so enumerating it is already first-seen order.
+    `max(freq, key=freq.get)` already returns the first-inserted key among
+    equals, and dict is insertion-ordered, so a tie resolves to whoever the
+    outline listed first. This is the explicit form of that, kept because the
+    tie behaviour is load-bearing (a protagonist/rival alternation ties
+    exactly) and the intent should be readable rather than incidental.
     """
     if not freq:
         return ""
@@ -660,19 +736,29 @@ def _strip_quotes(token: str) -> str:
 
 
 def _alias_set(people: list[dict]) -> set[str]:
-    """Lowercase name tokens + parenthetical aliases for person records."""
+    """Lowercase name tokens + parenthetical aliases for person records.
+
+    Role and label words are dropped. The registries write `THE NARRATOR:
+    DANIEL "DANNY" VEY` and `PROTAGONIST: PRINCESS ELARA`, and keeping
+    `narrator` would whitelist "I am the narrator" as the MC.
+    """
     out: set[str] = set()
     for p in people:
         for t in p["tokens"]:
             cleaned = _clean_name_token(t)
-            if cleaned and cleaned not in _FOCUS_JUNK:
+            if _usable_name(cleaned):
                 out.add(cleaned)
         for a in p["aliases"]:
             for t in _strip_quotes(a).replace("/", " ").replace("|", " ").split():
                 cleaned = _clean_name_token(t)
-                if cleaned and cleaned not in _FOCUS_JUNK:
+                if _usable_name(cleaned):
                     out.add(cleaned)
     return out
+
+
+def _usable_name(token: str) -> bool:
+    """Is this cleaned token usable as a name for the lock's lookup set?"""
+    return bool(token) and token not in _FOCUS_JUNK and token not in _ROLE_WORDS
 
 
 def _split_focus_people(label: str) -> list[dict]:
@@ -696,13 +782,20 @@ def _split_focus_people(label: str) -> list[dict]:
         tokens = [t for t in re.split(r"\s+", head) if t]
         tokens = [_strip_quotes(t) for t in tokens]
         tokens = [t for t in tokens
-                  if t and t.lower() not in _FOCUS_JUNK and t != "*"]
+                  if t and t.lower() not in _FOCUS_JUNK and t.strip("*_`")]
         if not tokens:
             continue
-        # Given name = first title-cased token that is not a role word.
+        # Given name = first token that can actually be a name. Role labels
+        # ("NARRATOR", "PROTAGONIST") and title words are skipped; an all-caps
+        # head is lowercased first so the check is case-insensitive, because
+        # the registries write entry #1 in shouty caps while the outline
+        # writes the same person in title case.
         given = ""
         for t in tokens:
-            if t[:1].isupper() and t.lower() not in TITLE_WORDS:
+            cleaned = _clean_name_token(t)
+            if not _usable_name(cleaned):
+                continue
+            if t[:1].isupper() and cleaned not in TITLE_WORDS:
                 given = t
                 break
         if not given and tokens:
@@ -760,15 +853,21 @@ def cast_names_from_outline(outline_text: str) -> set[str]:
 
 
 def _clean_name_token(token: str) -> str:
-    """Normalize a cast token: strip quotes, possessives, and trailing punctuation.
+    """Normalize a cast/registry token so it can match a word in prose.
 
-    A cast line written `Lily's mother` or `(Narrator):` otherwise contributes
-    `lily's` / `narrator:` to the cast set, which no word in prose can ever
-    match — the set's whole job is to be a lookup by exact given name.
+    Strips quotes, possessives, markdown emphasis, bracket noise and trailing
+    punctuation. A cast line written `Lily's mother`, `(Narrator):` or
+    `### 1. **Corvo Quill**` otherwise contributes `lily's`, `narrator:` or
+    `**corvo` to the lookup set — tokens no sentence can ever contain, which
+    silently widens the alias set with dead entries and can demote the real
+    name to a surname.
     """
     t = _strip_quotes(token)
     t = re.sub(r"['’]s$", "", t)
-    return t.strip(".,;:!?").strip().lower()
+    t = t.strip("*_`")
+    t = t.strip("()<>[]{}")
+    t = t.strip(".,;:!?&—–-")
+    return t.strip().lower()
 
 
 def protagonist_aliases(outline_text: str) -> set[str]:
@@ -789,28 +888,51 @@ def protagonist_aliases(outline_text: str) -> set[str]:
 
 
 def mc_aliases_for_project(outline_text: str, characters_md: str = "") -> set[str]:
-    """MC alias set from every source available, in descending trust order.
+    """MC alias set from every source available.
+
+    The outline is the authority. The character registry is a weak source that
+    may only ADD to it.
 
     1. `Focus:` / `POV:` labels — the explicit MC-lock field.
-    2. Character registry entry #1 — the protagonist, by construction.
-    3. Leading name of each outline `Characters:` line — prominence order.
+    2. Leading name of each outline `Characters:` line — prominence order.
+    3. Character registry entry #1 — **union, and only for extra identities.**
+
+    The registry exists to supply a name the outline cannot: a reincarnate MC
+    written `Liliana ... (Maledictus)` where the outline's lead name is just
+    "Lily". Entry #1 is a convention, and four registries in projects/ break
+    it — one numbers its per-character profile subheadings, two lead with a
+    foil or the love interest, and one puts a role label where the name should
+    be. So it is admitted only when it agrees with the outline on a person, and
+    only the names the outline did not already supply are taken: a foil who
+    shares no name with the MC contributes nothing, instead of silently
+    becoming a second "I".
 
     An empty return means the protagonist could not be identified from any
     source, and the caller must treat the narrator lock as unavailable rather
     than as satisfied.
     """
     aliases = _protagonist_from_focus(outline_text)
-    if aliases:
+    if not aliases:
+        aliases = _protagonist_from_characters(outline_text)
+    if not characters_md:
         return aliases
-    if characters_md:
-        head = registry_lead_name(characters_md)
-        if head:
-            people = _split_focus_people(head)
-            if people:
-                out = _alias_set(people)
-                if out:
-                    return out
-    return _protagonist_from_characters(outline_text)
+    head = registry_lead_name(characters_md)
+    if not head:
+        return aliases
+    people = _split_focus_people(head)
+    if not people:
+        return aliases
+    reg_names = _alias_set(people)
+    if not reg_names:
+        return aliases
+    # Agreement test: does the registry name someone the outline already has?
+    # Compare whole name sets, not the leading token — a registry writes
+    # "Princess Liliana ... (Maledictus)" where the outline says only "Lily",
+    # so the given names differ even though it is the same person. A foil who
+    # shares no name at all with the outline's MC contributes nothing.
+    if not reg_names & aliases:
+        return aliases
+    return aliases | reg_names
 
 
 def _protagonist_from_focus(outline_text: str) -> set[str]:

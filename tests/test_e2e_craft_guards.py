@@ -234,6 +234,59 @@ class FocusVsNarratorTest(unittest.TestCase):
                                     {"lily"}, cast)
         )
 
+    def test_shouted_interiority_is_not_a_narrator_swap(self):
+        # BLOCKER: the all-caps branch read any uppercased token as a name, so
+        # the MC's own shouting was flagged. Both lines are real: they come
+        # from NewestFakeSaint ch23/ch24, where the emphasis is the MC's
+        # interiority and the narrator never changes.
+        cast = {"seraphina", "elara"}
+        for text in (
+            "I'M GOING TO DIE AGAIN. NOT FROM A WITCH. FROM AWKWARDNESS.",
+            "I AM TERRIFIED. SHE SHOULD BE TERRIFIED.",
+            "I AM TRULY, DEEPLY, IRREPARABLY WRONG",
+        ):
+            self.assertEqual(narrator_identity_swaps(text, {"seraphina"}, cast),
+                             [], text)
+
+    def test_a_bare_given_name_is_still_a_swap(self):
+        # BLOCKER: a single-token name outside the cast set was not a "name
+        # shape", so a full head-hop written "I am Mira." shipped clean.
+        for text in ("I am Mira.", "I'm Mira.", "My name is Mira."):
+            self.assertTrue(narrator_identity_swaps(text, {"lily"}, set()), text)
+
+    def test_a_role_word_in_the_cast_cannot_launder_personification(self):
+        # BLOCKER: the cast is mined from `Characters:` lines, which are full
+        # of role and place words. Letting "Court" or "Cult" override the
+        # personification list re-broke exactly the case the cast was added to
+        # fix — on a book that happens to list a court among its cast.
+        cast = {"lily", "mira", "court", "guards", "cult", "palace"}
+        for text in ("I am Court of the Realm.", "I am Cult.",
+                     "I am Guards.", "I am Palace-born.",
+                     "I am Shadow of the Realm."):
+            self.assertEqual(narrator_identity_swaps(text, {"lily"}, cast), [],
+                             text)
+
+    def test_italic_and_bold_speech_is_not_narration(self):
+        # The prose guard marks interiority and quoted speech with markdown
+        # emphasis, so `*I am Mira*, the guard muttered` is somebody else
+        # talking — and an unspanned one reads as a swap.
+        cast = {"lily", "mira"}
+        for text in ("*I am Mira*, the guard muttered.",
+                     "*Internally: I am Mira Bakersville*",
+                     "**I am Mira Bakersville**",
+                     "_I am Mira_, she wrote."):
+            self.assertEqual(narrator_identity_swaps(text, {"lily"}, cast), [],
+                             text)
+
+    def test_a_stray_inch_mark_still_lets_later_narration_flag(self):
+        # "5\" thick" must not swallow the rest of the line.
+        cast = {"lily", "mira"}
+        self.assertTrue(narrator_identity_swaps(
+            'The board was 5" thick and I am Mira Bakersville.',
+            {"lily"}, cast))
+        self.assertTrue(narrator_identity_swaps(
+            'She said "hello. I am Mira Bakersville.', {"lily"}, cast))
+
 
 class RefrainBanE2ETest(unittest.TestCase):
     def test_v5_plan_can_wait_is_banned(self):
@@ -281,7 +334,17 @@ class LengthBandE2ETest(unittest.TestCase):
         from pipeline.pipeline_infra import is_climax_chapter
         self.assertTrue(is_climax_chapter(24, 24, ""))
         self.assertTrue(is_climax_chapter(12, 24, "**Scene type:** Climax"))
+        self.assertTrue(is_climax_chapter(12, 24, "3. Scene type: climax"))
+        self.assertFalse(is_climax_chapter(3, 24, "3. Scene type: setup"))
         self.assertFalse(is_climax_chapter(3, 24, "bath time"))
+
+    def test_the_generator_prompt_asks_for_a_scene_type(self):
+        # The label is the only climax signal, so the prompt that produces the
+        # outline has to request it — otherwise the 1.55x ceiling is dead for
+        # every non-finale chapter.
+        from pathlib import Path as _P
+        src = _P("foundation/gen_outline.py").read_text(encoding="utf-8")
+        self.assertIn("Scene type:", src)
 
     def test_climax_needs_a_label_not_a_prose_word(self):
         # BLOCKER: the old regex matched any chapter whose beats happened to
@@ -324,10 +387,56 @@ class LegacyOutlineMCTest(unittest.TestCase):
         cast = cast_names_from_outline(LEGACY_OUTLINE)
         self.assertEqual({"lily", "maledictus", "mira", "alistair"}, cast)
 
-    def test_focus_field_still_wins_over_the_registry(self):
+    def test_focus_field_wins_and_the_registry_only_adds(self):
+        # The registry is a weak source: it may only ADD a name the outline
+        # cannot supply (a reincarnate's second identity), never overrule the
+        # outline. Four registries in projects/ put a foil, a love interest or
+        # a profile subheading at entry #1, and every one of them was wrong.
         aliases = mc_aliases_for_project(OUTLINE, LEGACY_CHARACTERS)
         self.assertIn("baal", aliases, aliases)
-        self.assertNotIn("maledictus", aliases, aliases)
+        self.assertIn("lily", aliases, aliases)
+        # Additive, so the registry's second identity is present as well.
+        self.assertIn("maledictus", aliases, aliases)
+
+    def test_a_foil_at_registry_entry_one_cannot_overrule_the_outline(self):
+        # `sir the confortable v4` leads its registry with the foil, and
+        # `sir the confortable` numbers its profile subheadings. Neither may
+        # become the MC, or every correct self-id in the book is flagged.
+        foil_registry = (
+            "## Character Design: Foils\n### 1. **Corvo Quill**\nA foil.\n")
+        aliases = mc_aliases_for_project(OUTLINE, foil_registry)
+        self.assertIn("lily", aliases, aliases)
+        self.assertNotIn("corvo", aliases, aliases)
+
+    def test_a_profile_subheading_at_entry_one_is_rejected(self):
+        # `sir the confortable` numbers "### 1. Core Motivations & Comedic
+        # Flaws" — a section title that a naive entry-#1 read turns into the
+        # protagonist's name.
+        from core.outline import registry_lead_name
+        subheading = (
+            "## **PRINCESS LILIANA LUMENGARDE**\n"
+            "### **1. Core Motivations & Comedic Flaws**\n")
+        self.assertIsNone(registry_lead_name(subheading))
+
+    def test_a_role_prefix_yields_the_name_not_the_role(self):
+        # `THE NARRATOR: DANIEL "DANNY" VEY` and `PROTAGONIST: LADY ELARA`
+        # name a person in the second position. The role word must not become
+        # the MC's given name, or "I am the narrator" passes the lock.
+        from core.outline import registry_lead_name
+        self.assertEqual(
+            registry_lead_name('### 1. THE NARRATOR: DANIEL "DANNY" VEY\n'),
+            'DANIEL "DANNY" VEY',
+        )
+        self.assertEqual(
+            registry_lead_name("### 1. PROTAGONIST: MIRA VOSS\n"),
+            "MIRA VOSS",
+        )
+        # A registry naming the same MC as the outline contributes its extra
+        # tokens, and never contributes the role word.
+        outline = "### Chapter 1: Torch\n- **Focus:** Mira Voss\n"
+        aliases = mc_aliases_for_project(outline, "### 1. THE NARRATOR: MIRA VOSS\n")
+        self.assertIn("mira", aliases, aliases)
+        self.assertNotIn("narrator", aliases, aliases)
 
     def test_a_truly_unparseable_outline_still_yields_nothing(self):
         # Fail-open, but explicitly: no source, no lock, and the eval records
@@ -366,7 +475,7 @@ class NarratorLockStateTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = self._log(tmp, {"narrator_lock_active": False,
                                    "narrator_violations": []})
-            self.assertTrue(narrator_lock_was_inactive(path))
+            self.assertTrue(narrator_lock_was_inactive(path, first_person=True))
             self.assertFalse(narrator_lock_blocks(path))
 
     def test_active_and_clean_is_not_inactive(self):
@@ -376,16 +485,29 @@ class NarratorLockStateTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = self._log(tmp, {"narrator_lock_active": True,
                                    "narrator_violations": []})
-            self.assertFalse(narrator_lock_was_inactive(path))
+            self.assertFalse(narrator_lock_was_inactive(path, first_person=True))
             self.assertFalse(narrator_lock_blocks(path))
 
-    def test_a_log_without_the_flag_is_treated_as_unchecked(self):
+    def test_a_first_person_log_without_the_flag_is_unchecked(self):
         # Absence is not a pass. An eval log predating the flag must not
-        # retroactively certify a chapter as narrator-checked.
+        # retroactively certify a first-person chapter as narrator-checked.
         from pipeline.phases.common import narrator_lock_was_inactive
         with tempfile.TemporaryDirectory() as tmp:
             path = self._log(tmp, {"narrator_violations": []})
-            self.assertTrue(narrator_lock_was_inactive(path))
+            self.assertTrue(narrator_lock_was_inactive(path, first_person=True))
+
+    def test_a_third_person_log_is_not_reported(self):
+        # The eval only writes the flag for first_person books, so for a
+        # third_person one an absent flag means "not applicable". The default
+        # call must stay quiet — otherwise every kept chapter of every
+        # third-person book carries a bogus warning.
+        from pipeline.phases.common import narrator_lock_was_inactive
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._log(tmp, {"overall_score": 7.1, "slop": {}})
+            self.assertFalse(narrator_lock_was_inactive(path))
+            # On a first-person run the same log is a genuine gap: the flag is
+            # missing, so nothing certifies the chapter as narrator-checked.
+            self.assertTrue(narrator_lock_was_inactive(path, first_person=True))
 
 
 if __name__ == "__main__":

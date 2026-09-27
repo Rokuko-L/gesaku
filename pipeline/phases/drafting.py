@@ -244,9 +244,9 @@ def run_drafting(state: dict) -> dict:
             if score >= chapter_gate:
                 narrator_blocked = narrator_lock_blocks(eval_log_path)
                 if not narrator_blocked:
-                    if narrator_lock_was_inactive(eval_log_path):
-                        # The chapter is keepable, but the MC was never
-                        # identifiable so nothing checked the narrator. Say so
+                    if narrator_lock_was_inactive(eval_log_path, first_person=True):
+                        # First_person book, MC not identifiable from outline
+                        # or registry, so nothing checked the narrator. Say so
                         # once per chapter rather than shipping a silent pass.
                         step(f"NARRATOR LOCK INACTIVE for Ch {ch}: protagonist not "
                              f"identifiable from outline or character registry — "

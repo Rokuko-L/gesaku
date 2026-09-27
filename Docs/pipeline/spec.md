@@ -260,6 +260,9 @@ For each chapter in outline order:
      the draft is discarded with expansion/compression feedback and retried
      inside the same infra attempt — an outlier never reaches the judge.
      Eval's own length *penalty* (80–125%) is a separate, softer signal.
+     A chapter is climax only if it is the finale, or its outline carries an
+     explicit `Scene type: climax|finale` label (which `gen_outline` asks for).
+     A word like "climax" inside a beat is not a signal.
   3. evaluate.py --chapter=NN  (judge sees the same chapter-scoped canon view)
   4. If score > 6.0 → keep, commit. If < 6.0 → discard, retry (max 5).
   5. Extract new canon entries from eval output → append to canon.md

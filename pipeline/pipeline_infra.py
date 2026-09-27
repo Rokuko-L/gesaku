@@ -261,18 +261,20 @@ CHAPTER_MAX_RATIO = 1.45
 CLIMAX_MAX_RATIO = 1.55
 
 # An explicit structural label on a line of its own, e.g.
-#   **Scene type:** Climax
+#   3. Scene type: Climax
+#   **Scene type:** climax
 #   Role: Finale
 #   - Climax
 # The key is required so a beat of prose containing "climax" or "finally"
-# does not earn the chapter a 1.55x length ceiling.
+# does not earn the chapter a 1.55x length ceiling. The optional list marker
+# covers the numbered-field form that foundation/gen_outline.py emits.
 _CLIMAX_LABEL = re.compile(
-    r"^\s*(?:[-*]\s*)?\**\s*[A-Za-z][\w \t]{0,28}?\s*\**\s*:\s*\**\s*"
+    r"^\s*(?:[-*]\s*|\d+[.)]\s*)?\**\s*[A-Za-z][\w \t]{0,28}?\s*\**\s*:\s*\**\s*"
     r"(climax|finale|showdown|final confrontation)\b",
     re.IGNORECASE | re.MULTILINE,
 )
 _CLIMAX_BARE_LABEL = re.compile(
-    r"^\s*(?:[-*]\s*|\*\*)?(?:CLIMAX|FINALE|SHOWDOWN)\**\b[^\n]*$",
+    r"^\s*(?:[-*]\s*|\d+[.)]\s*|\*\*)?(?:CLIMAX|FINALE|SHOWDOWN)\**\b[^\n]*$",
     re.IGNORECASE | re.MULTILINE,
 )
 
