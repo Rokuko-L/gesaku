@@ -344,6 +344,17 @@ def get_max_tokens_with_thinking(max_tokens):
 OUTLINE_TOKENS_PER_CHAPTER = int(os.getenv("GESAKU_OUTLINE_TOKENS_PER_CH", "9000"))
 OUTLINE_MIN_TOKENS = 16000
 
+# The high-level roadmap is a single document covering the whole book: one line
+# per chapter plus the Global Plot Threads Ledger. It is not per-chapter, so it
+# cannot use the multiplier above — but it is just as verbose in practice, and a
+# 30-chapter roadmap was observed at 24,600 tokens against the 24,000 default.
+ROADMAP_TOKENS = int(os.getenv("GESAKU_OUTLINE_ROADMAP_TOKENS", "40000"))
+
+
+def roadmap_max_tokens() -> int:
+    """max_tokens for the one-shot high-level roadmap call."""
+    return ROADMAP_TOKENS
+
 
 def outline_max_tokens(block_chapters: int = 1) -> int:
     """max_tokens to hand `call_llm` for one outline call, by chapter count.

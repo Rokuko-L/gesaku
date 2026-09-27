@@ -4,7 +4,9 @@ import sys
 from pathlib import Path as _Path
 sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
 
-from core.llm import TruncationError, call_llm, outline_max_tokens
+from core.llm import (
+    TruncationError, call_llm, outline_max_tokens, roadmap_max_tokens,
+)
 from core.paths import format_prompt
 import argparse
 import os
@@ -206,7 +208,7 @@ Each chapter entry must start with "### Chapter N:".
         max_roadmap_attempts = int(os.getenv("GESAKU_OUTLINE_ROADMAP_ATTEMPTS", "6"))
         for attempt in range(1, max_roadmap_attempts + 1):
             try:
-                res = call_writer(roadmap_prompt)
+                res = call_writer(roadmap_prompt, max_tokens=roadmap_max_tokens())
             except TruncationError as e:
                 print(f"  WARN: Roadmap attempt {attempt} truncated ({e}), retrying...", file=sys.stderr)
                 continue

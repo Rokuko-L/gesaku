@@ -558,6 +558,14 @@ class OutlineTokenBudgetTest(unittest.TestCase):
             src = _P(f).read_text(encoding="utf-8")
             self.assertNotIn("get_max_tokens_with_thinking(16000)", src, f)
 
+    def test_a_roadmap_call_is_not_starved_by_the_block_default(self):
+        # The roadmap is ONE document for the whole book, so it cannot use the
+        # per-chapter multiplier — and it is just as verbose. A 30-chapter
+        # roadmap was cut off at 24,600 against the 24,000 default.
+        from core.llm import get_max_tokens_with_thinking, roadmap_max_tokens
+        cap = get_max_tokens_with_thinking(roadmap_max_tokens())
+        self.assertGreater(cap, 24600)
+
     def test_the_prompt_carries_a_scene_type_field(self):
         from pathlib import Path as _P
         src = _P("foundation/gen_outline.py").read_text(encoding="utf-8")
