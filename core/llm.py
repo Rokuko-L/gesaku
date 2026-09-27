@@ -25,6 +25,7 @@ from core.llm_base import (  # noqa: F401
     ProviderError, TruncationError, EmptyResponseError, llm_timeout, resolve_provider,
     extract_text_from_response, extract_text_and_stop_reason,
     get_max_tokens_with_thinking, get_client, set_client,
+    outline_max_tokens, OUTLINE_TOKENS_PER_CHAPTER, OUTLINE_MIN_TOKENS,
     _looks_like_reasoning_model, _REASONING_MODEL_RE, _warn_unused_trailing,
     _parse_response_json, _iter_sse_objects, _extract_sse_text_and_stop_reason,
     _usage_pair, _usage_from_sse, _response_telemetry, _is_sse_body,

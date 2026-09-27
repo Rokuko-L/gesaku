@@ -514,24 +514,49 @@ class OutlineTokenBudgetTest(unittest.TestCase):
     """A verbose outline block must not be truncated by the token cap.
 
     Blocks of 4 chapters have produced 12,777 and 36,717 tokens for the same
-    ask. The cap used to be a flat 16k (+8k thinking = 24k), so the verbose one
-    hit max_tokens, the whole 4-chapter block was discarded, and the outline
-    stalled at 12/30 chapters — a run that would then fail to draft.
+    ask, and a 10-chapter refinement block hit 34,857. The cap used to be a
+    flat 16k in BOTH generators, so a verbose block hit max_tokens, the whole
+    block was discarded, and the outline stalled at 12/30 chapters — a run that
+    then fails to draft.
     """
 
     def test_a_four_chapter_block_fits_the_worst_observed_output(self):
-        from foundation.gen_outline import outline_max_tokens
-        self.assertGreater(outline_max_tokens(4), 36717)
+        from core.llm import get_max_tokens_with_thinking, outline_max_tokens
+        cap = get_max_tokens_with_thinking(outline_max_tokens(4))
+        self.assertGreater(cap, 36717)
+
+    def test_a_refinement_block_fits_the_worst_observed_output(self):
+        from core.llm import (
+            REFINEMENT_BLOCK_SIZE, get_max_tokens_with_thinking,
+            outline_max_tokens,
+        )
+        cap = get_max_tokens_with_thinking(outline_max_tokens(REFINEMENT_BLOCK_SIZE))
+        self.assertGreater(cap, 34857)
 
     def test_the_cap_scales_with_block_size(self):
-        from foundation.gen_outline import outline_max_tokens
+        from core.llm import outline_max_tokens
         self.assertLess(outline_max_tokens(1), outline_max_tokens(4))
-        self.assertLess(outline_max_tokens(4), outline_max_tokens(8))
+        self.assertLess(outline_max_tokens(4), outline_max_tokens(10))
 
     def test_a_single_chapter_still_gets_the_floor(self):
-        from foundation.gen_outline import outline_max_tokens
+        from core.llm import outline_max_tokens
         # A 1-chapter retry must not be starved by a per-chapter multiplier.
-        self.assertGreaterEqual(outline_max_tokens(1), 24000)
+        self.assertGreaterEqual(outline_max_tokens(1), 16000)
+
+    def test_the_budget_does_not_double_count_the_thinking_reserve(self):
+        # call_llm applies get_max_tokens_with_thinking itself when it builds
+        # the payload. A helper that pre-wrapped its result would silently
+        # inflate the real cap by 8k, and would drift if that reserve changes.
+        import inspect
+        from core.llm_base import outline_max_tokens
+        src = inspect.getsource(outline_max_tokens)
+        self.assertNotIn("get_max_tokens_with_thinking", src.split('"""')[-1])
+
+    def test_neither_generator_hardcodes_the_old_flat_cap(self):
+        from pathlib import Path as _P
+        for f in ("foundation/gen_outline.py", "foundation/gen_outline_part2.py"):
+            src = _P(f).read_text(encoding="utf-8")
+            self.assertNotIn("get_max_tokens_with_thinking(16000)", src, f)
 
     def test_the_prompt_carries_a_scene_type_field(self):
         from pathlib import Path as _P

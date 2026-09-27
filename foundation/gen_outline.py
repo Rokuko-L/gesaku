@@ -4,7 +4,7 @@ import sys
 from pathlib import Path as _Path
 sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
 
-from core.llm import TruncationError, call_llm, get_max_tokens_with_thinking
+from core.llm import TruncationError, call_llm, outline_max_tokens
 from core.paths import format_prompt
 import argparse
 import os
@@ -23,21 +23,6 @@ def call_writer(prompt, max_tokens=None):
     if max_tokens is None:
         max_tokens = outline_max_tokens()
     return call_llm(prompt=prompt, model_key="writer", max_tokens=max_tokens, beta_context=True, timeout_role="long")
-
-# Output tokens per chapter in a detailed-outline block, measured across real
-# runs. The model's verbosity varies enormously for the same ask — blocks of 4
-# chapters have produced 12,777 and 36,717 tokens — so a fixed cap sized for a
-# terse block truncates a verbose one, and the whole block is discarded.
-# 9k/chapter is above the worst observed per-chapter rate with headroom for the
-# reasoning budget that get_max_tokens_with_thinking adds on top.
-OUTLINE_TOKENS_PER_CHAPTER = int(os.getenv("GESAKU_OUTLINE_TOKENS_PER_CH", "9000"))
-OUTLINE_MIN_TOKENS = 16000
-
-
-def outline_max_tokens(block_chapters: int = 1) -> int:
-    """max_tokens for one outline block, scaled to how many chapters it holds."""
-    needed = max(OUTLINE_MIN_TOKENS, block_chapters * OUTLINE_TOKENS_PER_CHAPTER)
-    return get_max_tokens_with_thinking(needed)
 
 def validate_block_output(text, start, end):
     missing = []

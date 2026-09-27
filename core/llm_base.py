@@ -334,6 +334,31 @@ def extract_text_and_stop_reason(resp, dialect: str = "anthropic"):
 def get_max_tokens_with_thinking(max_tokens):
     return max_tokens + 8000
 
+
+# Output tokens a detailed-outline call may emit per chapter, measured across
+# real runs. The model's verbosity for the same ask varies enormously: 4-chapter
+# blocks have produced 12,777 and 36,717 tokens, and 10-chapter refinement
+# blocks have hit 34,857 and been cut off. A flat cap sized for a terse block
+# truncates a verbose one, and the whole block is discarded — so the budget has
+# to scale with how many chapters the call is being asked for.
+OUTLINE_TOKENS_PER_CHAPTER = int(os.getenv("GESAKU_OUTLINE_TOKENS_PER_CH", "9000"))
+OUTLINE_MIN_TOKENS = 16000
+
+
+def outline_max_tokens(block_chapters: int = 1) -> int:
+    """max_tokens to hand `call_llm` for one outline call, by chapter count.
+
+    Returns the PRE-thinking value: `call_llm` adds the thinking budget itself
+    (get_max_tokens_with_thinking) when it builds the payload, so wrapping the
+    result again would inflate the real cap by 8k.
+
+    Shared by `gen_outline` (4-chapter blocks) and `gen_outline_part2`
+    (REFINEMENT_BLOCK_SIZE = 10), which both used to hardcode 16k. The floor
+    keeps a single-chapter retry from being starved by the multiplier.
+    """
+    return max(OUTLINE_MIN_TOKENS, block_chapters * OUTLINE_TOKENS_PER_CHAPTER)
+
+
 _client = None
 
 def get_client() -> httpx.Client:

@@ -6,7 +6,7 @@ sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
 
 from core.llm import (
     REFINEMENT_ATTEMPTS, REFINEMENT_BLOCK_SIZE,
-    TruncationError, call_llm, get_max_tokens_with_thinking,
+    TruncationError, call_llm, outline_max_tokens,
 )
 import sys
 import re
@@ -17,7 +17,9 @@ from core import paths
 
 load_dotenv()
 
-def call_writer(prompt, max_tokens=get_max_tokens_with_thinking(16000)):
+def call_writer(prompt, max_tokens=None):
+    if max_tokens is None:
+        max_tokens = outline_max_tokens()
     return call_llm(prompt=prompt, model_key="writer", max_tokens=max_tokens, beta_context=True, timeout_role="standard")
 
 def validate_block_output(text, start, end):
@@ -156,7 +158,7 @@ Each chapter outline must start with a heading: "### Chapter N: [Chapter Title]"
         last_err = ""
         for attempt in range(1, REFINEMENT_ATTEMPTS + 1):
             try:
-                res = call_writer(prompt)
+                res = call_writer(prompt, max_tokens=outline_max_tokens(end - start + 1))
             except TruncationError as e:
                 last_err = f"truncated ({e})"
                 print(f"  WARN: Refinement Block Ch {start}-{end} attempt {attempt} truncated ({e}), retrying...", file=sys.stderr)
