@@ -18,9 +18,26 @@ from core import paths
 
 load_dotenv()
 
-def call_writer(prompt, max_tokens=get_max_tokens_with_thinking(16000)):
+def call_writer(prompt, max_tokens=None):
     # Local thinking-proxy outline blocks routinely need >600s.
+    if max_tokens is None:
+        max_tokens = outline_max_tokens()
     return call_llm(prompt=prompt, model_key="writer", max_tokens=max_tokens, beta_context=True, timeout_role="long")
+
+# Output tokens per chapter in a detailed-outline block, measured across real
+# runs. The model's verbosity varies enormously for the same ask — blocks of 4
+# chapters have produced 12,777 and 36,717 tokens — so a fixed cap sized for a
+# terse block truncates a verbose one, and the whole block is discarded.
+# 9k/chapter is above the worst observed per-chapter rate with headroom for the
+# reasoning budget that get_max_tokens_with_thinking adds on top.
+OUTLINE_TOKENS_PER_CHAPTER = int(os.getenv("GESAKU_OUTLINE_TOKENS_PER_CH", "9000"))
+OUTLINE_MIN_TOKENS = 16000
+
+
+def outline_max_tokens(block_chapters: int = 1) -> int:
+    """max_tokens for one outline block, scaled to how many chapters it holds."""
+    needed = max(OUTLINE_MIN_TOKENS, block_chapters * OUTLINE_TOKENS_PER_CHAPTER)
+    return get_max_tokens_with_thinking(needed)
 
 def validate_block_output(text, start, end):
     missing = []
@@ -340,7 +357,7 @@ Write the detailed outlines for Chapters {start} through {end}.
 For EACH chapter in this range, you must output:
 1. Focus: [Character name this scene is ABOUT — may be the MC or a side character]
 2. MC presence: [on-page | off-page]  (first-person books only; use off-page only for brief interludes)
-3. Scene type: [setup | confrontation | climax | finale]  — exactly one word. The length budget keys off this: a climax or finale chapter is allowed ~1.55x the target words instead of ~1.45x, so it MUST be marked here and not left to be inferred from the beats.
+3. Scene type: [setup | confrontation | climax | finale] — exactly one word. A climax or finale chapter gets a larger word budget.
 4. Characters: [List of characters who appear in this chapter, comma-separated]
 5. Emotional Arc: [Emotional shift, e.g. Contentment -> Dread]
 6. Summary: [2-3 sentences of what happens]
@@ -370,7 +387,7 @@ CRITICAL RULES:
         last_hygiene_leaks: list[str] = []
         for attempt in range(1, 4):
             try:
-                res = call_writer(block_prompt)
+                res = call_writer(block_prompt, max_tokens=outline_max_tokens(end - start + 1))
             except TruncationError as e:
                 last_err = f"truncated: {e}"
                 print(f"  WARN: Block Ch {start}-{end} attempt {attempt} truncated ({e}), retrying...", file=sys.stderr)
@@ -429,7 +446,8 @@ CRITICAL RULES:
                 "with '### Chapter N: [Title]'."
             )
             try:
-                retry_res = call_writer(retry_prompt)
+                retry_res = call_writer(
+                    retry_prompt, max_tokens=outline_max_tokens(len(missing)))
                 more, still_missing = extract_chapter_outlines(retry_res, start, end)
                 extracted.update(more)
                 missing = still_missing

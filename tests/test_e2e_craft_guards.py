@@ -510,5 +510,34 @@ class NarratorLockStateTest(unittest.TestCase):
             self.assertTrue(narrator_lock_was_inactive(path, first_person=True))
 
 
+class OutlineTokenBudgetTest(unittest.TestCase):
+    """A verbose outline block must not be truncated by the token cap.
+
+    Blocks of 4 chapters have produced 12,777 and 36,717 tokens for the same
+    ask. The cap used to be a flat 16k (+8k thinking = 24k), so the verbose one
+    hit max_tokens, the whole 4-chapter block was discarded, and the outline
+    stalled at 12/30 chapters — a run that would then fail to draft.
+    """
+
+    def test_a_four_chapter_block_fits_the_worst_observed_output(self):
+        from foundation.gen_outline import outline_max_tokens
+        self.assertGreater(outline_max_tokens(4), 36717)
+
+    def test_the_cap_scales_with_block_size(self):
+        from foundation.gen_outline import outline_max_tokens
+        self.assertLess(outline_max_tokens(1), outline_max_tokens(4))
+        self.assertLess(outline_max_tokens(4), outline_max_tokens(8))
+
+    def test_a_single_chapter_still_gets_the_floor(self):
+        from foundation.gen_outline import outline_max_tokens
+        # A 1-chapter retry must not be starved by a per-chapter multiplier.
+        self.assertGreaterEqual(outline_max_tokens(1), 24000)
+
+    def test_the_prompt_carries_a_scene_type_field(self):
+        from pathlib import Path as _P
+        src = _P("foundation/gen_outline.py").read_text(encoding="utf-8")
+        self.assertIn("3. Scene type:", src)
+
+
 if __name__ == "__main__":
     unittest.main()
