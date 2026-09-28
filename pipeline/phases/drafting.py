@@ -109,6 +109,11 @@ def run_drafting(state: dict) -> dict:
 
     chapters_dir = paths.get_chapters_dir()  # also creates the directory
 
+    # Chapters whose narrator lock never ran. Summarised once at the end of the
+    # phase — a per-chapter line into a log nobody reads is how a whole book
+    # shipped with the guard off without anyone noticing.
+    inactive_lock_chapters: list[int] = []
+
     for ch in range(start_chapter, total + 1):
         banner(f"Drafting Chapter {ch}/{total}", "-")
         _outline_entry = ""
@@ -252,12 +257,20 @@ def run_drafting(state: dict) -> dict:
                 narrator_blocked = narrator_lock_blocks(eval_log_path)
                 if not narrator_blocked:
                     if narrator_lock_was_inactive(eval_log_path, first_person=True):
-                        # First_person book, MC not identifiable from outline
-                        # or registry, so nothing checked the narrator. Say so
-                        # once per chapter rather than shipping a silent pass.
-                        step(f"NARRATOR LOCK INACTIVE for Ch {ch}: protagonist not "
-                             f"identifiable from outline or character registry — "
-                             f"this chapter was NOT checked for identity swaps")
+                        # A first-person book whose MC cannot be identified is
+                        # NOT narrator-checked. This fired in one real run for
+                        # all 30 chapters and nobody saw it: the message was
+                        # correct but repeated per-chapter into a log nobody
+                        # reads, so the run reported 7.67 with the guard off.
+                        # Count it, say it once, and record it in state so it
+                        # survives the run and is visible to an operator.
+                        inactive_lock_chapters.append(ch)
+                        step(f"WARNING: NARRATOR LOCK INACTIVE for Ch {ch} — the "
+                             f"protagonist is not identifiable from the outline or "
+                             f"character registry, so this chapter was NOT checked "
+                             f"for narrator identity swaps")
+                        emit("narrator_lock_inactive", chapter=ch,
+                             chapters_total=total)
                     fb_path = paths.get_retry_feedback_path(ch)
                     fb_path.unlink(missing_ok=True)
                     commit_hash = git_add_commit(
@@ -436,6 +449,25 @@ def run_drafting(state: dict) -> dict:
              drafted=drafted, score=best_score if not drafted else None,
              best_score=round(best_score, 2) if best_score > 0 else None,
              words=best_word_count if best_word_count else None)
+
+    # One loud summary, and it outlives the run in state.json.
+    if inactive_lock_chapters:
+        state["narrator_lock_inactive_chapters"] = sorted(inactive_lock_chapters)
+        save_state(state)
+        banner("NARRATOR LOCK DID NOT RUN", "!")
+        step(f"WARNING: {len(inactive_lock_chapters)} of {total - start_chapter + 1} "
+             f"chapters were NOT checked for narrator identity swaps "
+             f"(chapters {inactive_lock_chapters[:12]}"
+             f"{'...' if len(inactive_lock_chapters) > 12 else ''}).")
+        step("The protagonist could not be identified from the outline or the "
+             "character registry, so `I am <other character>` would ship "
+             "unchecked. This is recorded in state.json as "
+             "narrator_lock_inactive_chapters.")
+        emit("narrator_lock_inactive_summary",
+             chapters=len(inactive_lock_chapters), total=total)
+    else:
+        state.pop("narrator_lock_inactive_chapters", None)
+        save_state(state)
 
     # All chapters drafted
     state["phase"] = "revision"

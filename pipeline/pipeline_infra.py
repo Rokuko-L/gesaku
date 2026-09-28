@@ -128,7 +128,7 @@ CLEAN_KEEP = (
     "eval_logs", "edit_logs", "briefs", "logs",
     "repetition_check.json", "open_callbacks.json",
     "premise_validation.json", "plant_hygiene.json",
-    "reviews.md", "run.json",
+    "reviews.md", "run.json", "arc_summary_cache.json",
     ".outline_roadmap.md", ".outline_part1.md", ".outline_part2.done",
     "retry_feedback_ch*.txt",
 )

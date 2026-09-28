@@ -124,6 +124,14 @@ def get_edit_logs_dir() -> Path:
     d.mkdir(parents=True, exist_ok=True)
     return d
 
+def get_arc_summary_cache_path() -> Path:
+    """Content-hash cache for `build_arc_summary` chapter summaries.
+
+    Rebuildable derived state, so it is excluded from `git_reset_hard`'s clean
+    list alongside the other generated artifacts.
+    """
+    return get_project_dir() / "arc_summary_cache.json"
+
 def get_eval_logs_dir() -> Path:
     d = get_project_dir() / "eval_logs"
     d.mkdir(parents=True, exist_ok=True)

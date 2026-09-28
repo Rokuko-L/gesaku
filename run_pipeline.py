@@ -54,6 +54,7 @@ FROM_SCRATCH_STALE_FILES = (
     "results.tsv", "state.json", "active_genre.json", "seed.txt",
     "open_callbacks.json", "plant_hygiene.json",
     "premise_validation.json", "retrofit_report.json",
+    "arc_summary_cache.json",
     ".outline_roadmap.md", ".outline_part1.md", ".outline_part2.done",
 )
 

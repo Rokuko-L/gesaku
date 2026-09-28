@@ -30,7 +30,61 @@ def validate_block_output(text, start, end):
             missing.append(f"Chapter {ch}")
     if missing:
         return False, f"Missing detailed outlines for: {', '.join(missing)}"
+    # The field labels are load-bearing, not decoration. Refinement once
+    # dissolved them into prose, which silently disabled the narrator lock
+    # (it resolves the MC from `Focus:` / `Characters:`) and the climax length
+    # ceiling (which reads `Scene type:`) for the whole book. A block that
+    # lost its labels is a failed block even though every chapter is present.
+    lost = missing_field_labels(text, start, end)
+    if lost:
+        return False, (
+            "Field labels missing or renamed (refinement must preserve them "
+            f"verbatim): {'; '.join(lost)}. Re-emit the block with the labels "
+            "Focus / MC presence / Scene type / Characters / Emotional Arc / "
+            "Summary / Orientation Facts / Scene Stakes / Scene Beats / "
+            "Plants & Harvests intact."
+        )
     return True, ""
+
+
+# Each label that other tooling parses. `Focus` and `Characters` identify the
+# MC, `Scene type` drives the climax ceiling; the rest are consumed by the
+# drafter and the hygiene checks.
+_FIELD_LABELS = (
+    "Focus", "MC presence", "Scene type", "Characters", "Emotional Arc",
+    "Summary", "Orientation Facts", "Scene Stakes", "Scene Beats",
+)
+
+
+def missing_field_labels(text, start, end):
+    """Which chapters in `text` lost a required field label.
+
+    Scoped to `## DETAILED CHAPTER OUTLINES`: the HIGH-LEVEL ROADMAP carries a
+    `### Chapter N: <slug>` line for every chapter in the book, and matching
+    those would report every chapter as broken no matter what the detailed
+    section contains.
+
+    Reports at most a few per chapter so a wholesale strip stays legible in the
+    retry feedback.
+    """
+    body = text
+    marker = "## DETAILED CHAPTER OUTLINES"
+    if marker in text:
+        body = text.split(marker, 1)[1]
+    problems = []
+    for ch in range(start, end + 1):
+        pattern = (rf'###\s*\*?\*?\s*(?:Chapter|Ch\.?)\s*\*?\*?\s*{ch}\b'
+                   rf'(.*?)(?=###\s*\*?\*?\s*(?:Chapter|Ch\.?)\s*\*?\*?\s*\d+\b|\Z)')
+        m = re.search(pattern, body, re.IGNORECASE | re.DOTALL)
+        if not m:
+            continue
+        entry = m.group(1)
+        gone = [lab for lab in _FIELD_LABELS
+                if not re.search(rf'^\s*(?:[-*]\s*|\d+[.)]\s*)?\**{re.escape(lab)}\**\s*:',
+                                 entry, re.IGNORECASE | re.MULTILINE)]
+        if gone:
+            problems.append(f"Chapter {ch} lost {', '.join(gone)}")
+    return problems
 
 def main():
     outline_path = paths.get_outline_path()
@@ -153,6 +207,24 @@ Focus on:
 FORMAT REQUIREMENT:
 Write the refined outlines in markdown.
 Each chapter outline must start with a heading: "### Chapter N: [Chapter Title]". Do not write any other chapters outside of Chapters {start} through {end}.
+
+**KEEP EVERY FIELD LABEL.** Each chapter must retain these exact lines, in this order, with their values rewritten but the labels themselves spelled exactly as shown:
+1. `Focus: ` (the character the scene is ABOUT)
+2. `MC presence: ` (on-page | off-page)
+3. `Scene type: ` (setup | confrontation | climax | finale)
+4. `Characters: ` (comma-separated)
+5. `Emotional Arc: `
+6. `Summary: `
+7. `Orientation Facts: `
+8. `Scene Stakes: `
+9. `Scene Beats: `
+10. `Plants & Harvests: `
+
+Do NOT fold these fields into prose, drop them, rename them, or replace them with a
+narrative paragraph. Other tooling reads these labels to identify the protagonist, to
+apply the climax length ceiling, and to find each chapter's cast — an outline without
+them is broken, not just terser. Prose that is not under a label is fine; a missing
+label is not.
 """
         block_result = ""
         last_err = ""
@@ -209,6 +281,31 @@ Each chapter outline must start with a heading: "### Chapter N: [Chapter Title]"
     
     # Save a copy as .outline_part1.md for backwards compatibility
     paths.get_outline_part1_path().write_text(full_outline_text, encoding="utf-8")
+
+    # Post-assembly integrity: the assembled outline must still be parseable by
+    # the tooling that reads it. Refinement dissolved every field label in one
+    # real run, which left the outline textually complete but functionally
+    # broken — the narrator lock resolved no MC (so it silently disabled
+    # itself for all 30 chapters) and the climax ceiling had no `Scene type`
+    # to read. Both failures are invisible downstream and permanent, so they
+    # are checked HERE, where the outline is still being built.
+    lost_final = missing_field_labels(full_outline_text, 1, total_chapters)
+    if lost_final:
+        print(f"ERROR: refined outline lost required field labels — "
+              f"{'; '.join(lost_final[:6])}"
+              f"{' ...' if len(lost_final) > 6 else ''}. "
+              f"The narrator lock and the climax length ceiling both read these "
+              f"labels; an outline without them is unusable. The marker was "
+              f"NOT written.", file=sys.stderr)
+        sys.exit(1)
+
+    from core.outline import mc_aliases_for_project
+    if not mc_aliases_for_project(full_outline_text, characters):
+        print(f"ERROR: refined outline yields no protagonist aliases. The "
+              f"first-person narrator lock resolves the MC from these labels "
+              f"and would silently disable itself for the whole book. The "
+              f"marker was NOT written.", file=sys.stderr)
+        sys.exit(1)
 
     if skipped_blocks:
         print(f"SKIPPED: {len(skipped_blocks)} block(s) had no source chapters: "
