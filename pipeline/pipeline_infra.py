@@ -391,10 +391,15 @@ def ensure_project_git(project_dir: Path):
     else:
         print(f"[git] WARNING: git init failed: {result.stderr.strip()}")
     _ensure_git_identity(project_dir)
-    # Write a project-level .gitignore template
+    # Write a project-level .gitignore template. `arc_summary_cache.json` is
+    # rebuildable derived state: `git add -A` runs on every chapter commit, so
+    # tracking it would commit a new copy on all ~90 chapter commits per run
+    # and let `git reset --hard` resurrect a stale cache over fresh chapters.
     proj_gi = project_dir / ".gitignore"
     if not proj_gi.exists():
-        proj_gi.write_text("*.aux\n*.log\n*.toc\n*.out\n*.synctex.gz\n", encoding="utf-8")
+        proj_gi.write_text(
+            "*.aux\n*.log\n*.toc\n*.out\n*.synctex.gz\n"
+            "arc_summary_cache.json\n", encoding="utf-8")
 
 
 def _ensure_git_identity(project_dir: Path) -> None:

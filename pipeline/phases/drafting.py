@@ -109,6 +109,15 @@ def run_drafting(state: dict) -> dict:
 
     chapters_dir = paths.get_chapters_dir()  # also creates the directory
 
+    # Only a first_person book has a narrator lock to be inactive. The eval
+    # writes `narrator_lock_active` for first_person ONLY, so asking the
+    # question unconditionally reports a false failure on every third-person
+    # book — which is most of them.
+    try:
+        _is_first_person = load_genre().get("perspective") == "first_person"
+    except Exception:
+        _is_first_person = False
+
     # Chapters whose narrator lock never ran. Summarised once at the end of the
     # phase — a per-chapter line into a log nobody reads is how a whole book
     # shipped with the guard off without anyone noticing.
@@ -256,7 +265,9 @@ def run_drafting(state: dict) -> dict:
             if score >= chapter_gate:
                 narrator_blocked = narrator_lock_blocks(eval_log_path)
                 if not narrator_blocked:
-                    if narrator_lock_was_inactive(eval_log_path, first_person=True):
+                    if (_is_first_person
+                            and narrator_lock_was_inactive(eval_log_path,
+                                                           first_person=True)):
                         # A first-person book whose MC cannot be identified is
                         # NOT narrator-checked. This fired in one real run for
                         # all 30 chapters and nobody saw it: the message was
@@ -451,21 +462,33 @@ def run_drafting(state: dict) -> dict:
              words=best_word_count if best_word_count else None)
 
     # One loud summary, and it outlives the run in state.json.
-    if inactive_lock_chapters:
-        state["narrator_lock_inactive_chapters"] = sorted(inactive_lock_chapters)
+    #
+    # MERGED with any record from an earlier invocation, never replaced by it.
+    # A resumed run drafts only the chapters that remain, so its local list is
+    # a suffix; overwriting would erase the chapters a previous pass recorded —
+    # losing exactly the evidence the record exists to keep.
+    prior = state.get("narrator_lock_inactive_chapters") or []
+    combined = sorted({int(c) for c in prior} | set(inactive_lock_chapters))
+    if combined and _is_first_person:
+        state["narrator_lock_inactive_chapters"] = combined
         save_state(state)
         banner("NARRATOR LOCK DID NOT RUN", "!")
-        step(f"WARNING: {len(inactive_lock_chapters)} of {total - start_chapter + 1} "
-             f"chapters were NOT checked for narrator identity swaps "
-             f"(chapters {inactive_lock_chapters[:12]}"
-             f"{'...' if len(inactive_lock_chapters) > 12 else ''}).")
+        step(f"WARNING: {len(combined)} chapter(s) were NOT checked for "
+             f"narrator identity swaps (chapters {combined[:12]}"
+             f"{'...' if len(combined) > 12 else ''}).")
         step("The protagonist could not be identified from the outline or the "
              "character registry, so `I am <other character>` would ship "
              "unchecked. This is recorded in state.json as "
              "narrator_lock_inactive_chapters.")
         emit("narrator_lock_inactive_summary",
-             chapters=len(inactive_lock_chapters), total=total)
+             chapters=len(combined), total=total)
+    elif not _is_first_person:
+        # Not a first-person book: there is no narrator lock, so there is
+        # nothing to report and nothing to erase.
+        state.pop("narrator_lock_inactive_chapters", None)
     else:
+        # First person, and the lock ran for every chapter this pass. A prior
+        # record still stands — it described chapters this pass did not revisit.
         state.pop("narrator_lock_inactive_chapters", None)
         save_state(state)
 

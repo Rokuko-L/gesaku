@@ -47,25 +47,32 @@ def validate_block_output(text, start, end):
     return True, ""
 
 
-# Each label that other tooling parses. `Focus` and `Characters` identify the
-# MC, `Scene type` drives the climax ceiling; the rest are consumed by the
-# drafter and the hygiene checks.
+# The labels other tooling actually parses. Deliberately NOT the full schema:
+#   Focus       -> core.outline._FOCUS_KEY   (protagonist identity)
+#   Characters  -> core.outline._CHARS_KEY   (protagonist fallback + cast)
+#   Scene type  -> pipeline_infra._CLIMAX_LABEL (climax length ceiling)
+#   Scene Beats -> draft_chapter             (beat count)
+#   Orientation Facts -> draft_chapter.parse_orientation_facts
+# `Emotional Arc`, `Summary`, `Scene Stakes` and `MC presence` have no consumer
+# yet, so gating on them would fail a book over a label nothing reads.
+# `Focus` accepts its documented `POV:` alias, because core/outline.py does and
+# a rename between the two is not data loss.
 _FIELD_LABELS = (
-    "Focus", "MC presence", "Scene type", "Characters", "Emotional Arc",
-    "Summary", "Orientation Facts", "Scene Stakes", "Scene Beats",
+    "Focus", "Characters", "Scene type", "Orientation Facts", "Scene Beats",
 )
+_FIELD_ALIASES = {"Focus": ("Focus", "POV")}
 
 
 def missing_field_labels(text, start, end):
-    """Which chapters in `text` lost a required field label.
+    """Which chapters in `text` lost a required field label, or left it empty.
 
     Scoped to `## DETAILED CHAPTER OUTLINES`: the HIGH-LEVEL ROADMAP carries a
     `### Chapter N: <slug>` line for every chapter in the book, and matching
     those would report every chapter as broken no matter what the detailed
     section contains.
 
-    Reports at most a few per chapter so a wholesale strip stays legible in the
-    retry feedback.
+    An entry stops at the next chapter heading OR at a `##` section break, so
+    a trailing ledger cannot lend its labels to the last chapter.
     """
     body = text
     marker = "## DETAILED CHAPTER OUTLINES"
@@ -74,17 +81,42 @@ def missing_field_labels(text, start, end):
     problems = []
     for ch in range(start, end + 1):
         pattern = (rf'###\s*\*?\*?\s*(?:Chapter|Ch\.?)\s*\*?\*?\s*{ch}\b'
-                   rf'(.*?)(?=###\s*\*?\*?\s*(?:Chapter|Ch\.?)\s*\*?\*?\s*\d+\b|\Z)')
-        m = re.search(pattern, body, re.IGNORECASE | re.DOTALL)
+                   rf'(.*?)(?=###\s*\*?\*?\s*(?:Chapter|Ch\.?)\s*\*?\*?\s*\d+\b'
+                   rf'|^##\s|\Z)')
+        m = re.search(pattern, body, re.IGNORECASE | re.DOTALL | re.MULTILINE)
         if not m:
             continue
         entry = m.group(1)
         gone = [lab for lab in _FIELD_LABELS
-                if not re.search(rf'^\s*(?:[-*]\s*|\d+[.)]\s*)?\**{re.escape(lab)}\**\s*:',
-                                 entry, re.IGNORECASE | re.MULTILINE)]
+                if not _has_label_value(entry, _FIELD_ALIASES.get(lab, (lab,)))]
         if gone:
             problems.append(f"Chapter {ch} lost {', '.join(gone)}")
     return problems
+
+
+def _has_label_value(entry: str, names) -> bool:
+    """Does `entry` carry any of `names` as a label, with content after it?
+
+    Two things this must get right. It must accept every form the generators
+    emit — numbered (`7. Focus:`), bulleted (`- **Focus**:`), bold, bare — and
+    any capitalisation. And a label whose value is empty on the same line is
+    NOT present: `Focus:` followed by nothing says nothing, and counting it as
+    present is how an outline passes every check while communicating nothing.
+    A multi-line value (a bulleted list under `Orientation Facts:`) counts,
+    because the content is on the following line.
+    """
+    for n in names:
+        # Content must follow the colon: inline (`Focus: Lily`) or on a following
+        # line as a bullet (`Orientation Facts:` then `  - The treaty...`).
+        # A bare `Focus:` with nothing after it is an empty field and does not
+        # count — including when the next line is another numbered label.
+        pattern = (rf'^[ \t]*(?:[-*]\s*|\d+[.)]\s*)?\**{re.escape(n)}\**[ \t]*:'
+                   rf'[ \t]*(?:\S'
+                   rf'|\n[ \t]*(?:[-*+][ \t]*\S|\d+[.)][ \t]+(?!'
+                   rf'[\w ]+\**\s*:)[ \t]*\S))')
+        if re.search(pattern, entry, re.IGNORECASE | re.MULTILINE):
+            return True
+    return False
 
 def main():
     outline_path = paths.get_outline_path()
@@ -274,13 +306,9 @@ label is not.
     for ch in sorted(unpolished_chapters):
         polished_outlines.setdefault(ch, unpolished_chapters[ch])
 
-    # Final assembly and save
+    # Final assembly
     full_outline_text = f"# {title.upper()}\n\n" + roadmap + "\n\n## DETAILED CHAPTER OUTLINES\n\n" + \
                         "\n\n---\n\n".join(polished_outlines[ch] for ch in sorted(polished_outlines.keys()))
-    outline_path.write_text(full_outline_text, encoding="utf-8")
-    
-    # Save a copy as .outline_part1.md for backwards compatibility
-    paths.get_outline_part1_path().write_text(full_outline_text, encoding="utf-8")
 
     # Post-assembly integrity: the assembled outline must still be parseable by
     # the tooling that reads it. Refinement dissolved every field label in one
@@ -288,24 +316,36 @@ label is not.
     # broken — the narrator lock resolved no MC (so it silently disabled
     # itself for all 30 chapters) and the climax ceiling had no `Scene type`
     # to read. Both failures are invisible downstream and permanent, so they
-    # are checked HERE, where the outline is still being built.
+    # are checked BEFORE anything is written.
+    #
+    # Order matters. This used to run after three write_text calls, which meant
+    # the guard that exists to protect outline.md was itself overwriting it
+    # with the broken text on the way to failing. On failure the previous
+    # outline is left exactly as it was, so a resume re-reads the good source.
     lost_final = missing_field_labels(full_outline_text, 1, total_chapters)
     if lost_final:
         print(f"ERROR: refined outline lost required field labels — "
               f"{'; '.join(lost_final[:6])}"
               f"{' ...' if len(lost_final) > 6 else ''}. "
               f"The narrator lock and the climax length ceiling both read these "
-              f"labels; an outline without them is unusable. The marker was "
-              f"NOT written.", file=sys.stderr)
+              f"labels; an outline without them is unusable. outline.md was "
+              f"NOT modified and the marker was NOT written.", file=sys.stderr)
         sys.exit(1)
 
     from core.outline import mc_aliases_for_project
     if not mc_aliases_for_project(full_outline_text, characters):
         print(f"ERROR: refined outline yields no protagonist aliases. The "
               f"first-person narrator lock resolves the MC from these labels "
-              f"and would silently disable itself for the whole book. The "
-              f"marker was NOT written.", file=sys.stderr)
+              f"and would silently disable itself for the whole book. "
+              f"outline.md was NOT modified and the marker was NOT written.",
+              file=sys.stderr)
         sys.exit(1)
+
+    # Only now, with both gates passed, does the refined outline replace the
+    # part-1 text on disk.
+    outline_path.write_text(full_outline_text, encoding="utf-8")
+    # Save a copy as .outline_part1.md for backwards compatibility
+    paths.get_outline_part1_path().write_text(full_outline_text, encoding="utf-8")
 
     if skipped_blocks:
         print(f"SKIPPED: {len(skipped_blocks)} block(s) had no source chapters: "
