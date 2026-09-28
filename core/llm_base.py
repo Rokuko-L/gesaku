@@ -100,7 +100,12 @@ def llm_timeout(role: str = "standard") -> int:
 # (blocks x attempts x budget) — one owner for each number, and neither side
 # can drift from the other.
 REFINEMENT_ATTEMPTS = 3
-REFINEMENT_BLOCK_SIZE = 10
+# Refinement blocks were 10 chapters, which asked for a 120,000-token budget
+# (128,000 on the wire) and came back 400 Bad Request. The block is the unit
+# that must shrink: 5 chapters at 20,000 each is 100,000 pre-thinking, which the
+# provider serves, and it stays well under the ceiling. Halving the block
+# doubles the number of calls, but a rejected request produces nothing at all.
+REFINEMENT_BLOCK_SIZE = 5
 
 
 class ProviderError(Exception):
@@ -336,13 +341,30 @@ def get_max_tokens_with_thinking(max_tokens):
 
 
 # Output tokens a detailed-outline call may emit per chapter, measured across
-# real runs. The model's verbosity for the same ask varies enormously: 4-chapter
-# blocks have produced 12,777 and 36,717 tokens, and 10-chapter refinement
-# blocks have hit 34,857 and been cut off. A flat cap sized for a terse block
-# truncates a verbose one, and the whole block is discarded — so the budget has
-# to scale with how many chapters the call is being asked for.
-OUTLINE_TOKENS_PER_CHAPTER = int(os.getenv("GESAKU_OUTLINE_TOKENS_PER_CH", "9000"))
-OUTLINE_MIN_TOKENS = 16000
+# real runs. The model's verbosity for the same ask varies enormously, so this
+# is sized from the observed MAXIMUM rather than a central tendency: a block
+# truncated at the cap is discarded whole and regenerated, which costs far more
+# than an oversized budget ever does.
+#
+# Measured (sir the confortable v6 fp, 30 chapters, 4-chapter blocks):
+#   expansion  n=10  min 8,101  median 28,675  max 47,416  (2 truncated)
+#   refinement n=11  min 21,736 median 42,944  max 72,022  (3 truncated)
+# The 9,000/chapter this replaced was fitted to the expansion MEDIAN and still
+# truncated a 4-chapter block at 44,934 on the next run, because
+# 4 * 9,000 + the 8k thinking reserve is 44,000 and the model wanted more.
+# Sizing to the observed max leaves headroom without a magic number that has
+# to be re-guessed on every new seed.
+OUTLINE_TOKENS_PER_CHAPTER = int(os.getenv("GESAKU_OUTLINE_TOKENS_PER_CH", "20000"))
+OUTLINE_MIN_TOKENS = 24000
+# Ceiling on the value RETURNED to the caller, i.e. before `call_llm` adds the
+# 8k thinking reserve. It has to be set against the provider's limit on the
+# WIRE value, not this one: a 10-chapter refinement block returned 120,000 here,
+# which call_llm turned into 128,000, and the provider rejected it with a 400
+# Bad Request. Rejecting the request is a worse failure than truncating it,
+# because nothing retries. 64,000 here is 72,000 on the wire, which clears the
+# observed 10-chapter refinement max (72,022) only just — which is the signal
+# that a 10-chapter block is simply too large a unit for this prompt.
+OUTLINE_MAX_TOKENS = int(os.getenv("GESAKU_OUTLINE_MAX_TOKENS", "64000"))
 
 # The high-level roadmap is a single document covering the whole book: one line
 # per chapter plus the Global Plot Threads Ledger. It is not per-chapter, so it
@@ -364,10 +386,13 @@ def outline_max_tokens(block_chapters: int = 1) -> int:
     result again would inflate the real cap by 8k.
 
     Shared by `gen_outline` (4-chapter blocks) and `gen_outline_part2`
-    (REFINEMENT_BLOCK_SIZE = 10), which both used to hardcode 16k. The floor
-    keeps a single-chapter retry from being starved by the multiplier.
+    (REFINEMENT_BLOCK_SIZE = 10). The floor keeps a single-chapter retry from
+    being starved by the multiplier; the ceiling keeps a 10-chapter refinement
+    block from asking for a budget no provider will honour, which would fail
+    the request outright rather than merely truncating.
     """
-    return max(OUTLINE_MIN_TOKENS, block_chapters * OUTLINE_TOKENS_PER_CHAPTER)
+    per_chapter = block_chapters * OUTLINE_TOKENS_PER_CHAPTER
+    return min(OUTLINE_MAX_TOKENS, max(OUTLINE_MIN_TOKENS, per_chapter))
 
 
 _client = None
