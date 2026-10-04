@@ -4,6 +4,7 @@ import re
 import sys
 
 from core.paths import get_outline_path
+from core.prose import TITLE_WORDS
 
 
 def normalize_chapter_heading(text: str, chapter_num: int) -> str:
@@ -87,6 +88,32 @@ def validate_generator_output(content: str, name: str, min_len: int = 100, expec
             if h not in content:
                 raise RuntimeError(f"{name}: output missing expected header '{h}'")
     return content
+
+def extract_chapter_outline(outline_text: str, chapter_num: int) -> str:
+    """Extract a specific chapter's outline entry from the DETAILED section.
+
+    Scoped to '## DETAILED CHAPTER OUTLINES' so the HIGH-LEVEL ROADMAP one-liner
+    is never matched instead of the real beats entry. Raises ValueError if missing.
+    """
+    if "## DETAILED CHAPTER OUTLINES" in outline_text:
+        outline_text = outline_text.split("## DETAILED CHAPTER OUTLINES", 1)[1]
+    pattern = rf'###\s*\*?\*?\s*(?:Chapter|Ch\.?)\s*\*?\*?\s*{chapter_num}\b.*?(?=###\s*\*?\*?\s*(?:Chapter|Ch\.?)\s*\*?\*?\s*(?:\d+)\b|## Act|## Foreshadowing|$)'
+    match = re.search(pattern, outline_text, re.IGNORECASE | re.DOTALL)
+    if not match:
+        raise ValueError(
+            f"Chapter {chapter_num} outline entry not found in the "
+            f"## DETAILED CHAPTER OUTLINES section — refusing to draft without beats."
+        )
+    return match.group(0).strip()
+
+def extract_next_chapter_outline(outline_text: str, chapter_num: int) -> str:
+    """Extract the next chapter's outline (first few lines for continuity)."""
+    try:
+        next_entry = extract_chapter_outline(outline_text, chapter_num + 1)
+    except ValueError:
+        return "(final chapter)"
+    lines = next_entry.split('\n')[:10]
+    return '\n'.join(lines)
 
 def _normalize_beat_label(label: str) -> str:
     """Normalize a beat label for fuzzy matching — remove bold, POV, numbering."""
@@ -331,6 +358,96 @@ def _beat_tokens_in_text(beat_label: str, text: str) -> bool:
         return False
     return True
 
+_PLANT_TAG_RE = re.compile(
+    # The description runs to the closing bracket and may contain apostrophes,
+    # commas and dashes. It used to be `[^'"\]]+`, which silently dropped every
+    # tag whose description contained a possessive — "Baal II's soul",
+    # "Lily's hands" — hiding 23 of v4's 42 plant tags.
+    # Slugs accept apostrophes (curly and straight) and dots: real outlines use
+    # them ("the_king's_migraine", "slug.with.dots"), and a narrower class made
+    # the leak scanner blind to exactly those tags.
+    r"""\[(Plant|Harvest)\s*:\s*([^\s:\[\]]+)\s*[-:]\s*([^\[\]]+?)\s*\]""",
+    re.IGNORECASE,
+)
+
+
+_QUOTE_PAIRS = {'"': '"', "'": "'", "\u201c": "\u201d", "\u2018": "\u2019"}
+
+
+def _unquote(text: str) -> str:
+    """Remove one matched wrapping quote pair, if present.
+
+    Only a *pair* is removed. Stripping a quote character set would eat a
+    legitimate trailing apostrophe ("the generals'" -> "the generals").
+    """
+    d = text.strip()
+    for opener, closer in _QUOTE_PAIRS.items():
+        if len(d) >= 2 and d.startswith(opener) and d.endswith(closer):
+            return d[1:-1].strip()
+    return d
+
+
+def chapter_sections(outline_text: str) -> dict:
+    """Split an outline into {chapter number: section text}.
+
+    Only text after the first chapter heading is returned. (Keeping the preamble
+    under a chapter 0 was tried and reverted: it recovered nothing for the real
+    project, and the HIGH-LEVEL ROADMAP reuses the same `### Chapter N` headings,
+    so a roadmap entry would be overwritten by its DETAILED namesake. The tags
+    that were invisible were lost to the quote-hostile description regex, not to
+    this split — see `_PLANT_TAG_RE`.)
+    """
+    sections = {}
+    current_ch = None
+    current_lines = []
+    for line in outline_text.splitlines():
+        cleaned = line.strip().replace('*', '').replace('_', '')
+        m = re.match(r'^###\s*(?:Chapter|Ch\.?)\s*(\d+)\b', cleaned, re.IGNORECASE)
+        if m:
+            if current_ch is not None:
+                sections[current_ch] = "\n".join(current_lines)
+            current_ch = int(m.group(1))
+            current_lines = []
+        if current_ch is not None:
+            current_lines.append(line)
+    if current_ch is not None:
+        sections[current_ch] = "\n".join(current_lines)
+    return sections
+
+
+def scan_plant_tag_marks(text: str) -> list[str]:
+    """Verbatim `[Plant: …]` / `[Harvest: …]` marks in arbitrary text.
+
+    For leak checks (prose must never contain planning tags). Uses the same
+    `_PLANT_TAG_RE` owner as the parser, so a scanner cannot drift from the
+    format it is looking for.
+    """
+    return [m.group(0) for m in _PLANT_TAG_RE.finditer(text or "")]
+
+
+def parse_plant_tags(outline_text: str) -> tuple[list[dict], list[dict]]:
+    """Every `[Plant: slug - "desc"]` / `[Harvest: …]` tag, as (plants, harvests).
+
+    One owner for the tag format. This used to be three regexes that disagreed:
+    the validator's, a copy inside `extract_outline_debts`, and a stricter one in
+    `gen_outline` that required quotes and forbade hyphens in slugs — so whether
+    a tag existed depended on which caller you asked.
+
+    Each entry is {"chapter": int, "slug": str, "desc": str}, both lowercased.
+    """
+    plants, harvests = [], []
+    for chapter, content in chapter_sections(outline_text).items():
+        for kind, slug, desc in _PLANT_TAG_RE.findall(content):
+            entry = {
+                "chapter": chapter,
+                "slug": slug.strip().lower(),
+                # Descriptions are usually quoted; only a matched pair is removed.
+                "desc": _unquote(desc).lower(),
+            }
+            (plants if kind.lower() == "plant" else harvests).append(entry)
+    return plants, harvests
+
+
 def validate_plants_harvests(outline_text: str) -> tuple[bool, str]:
     """
     Validate that all plants and harvests in outline.md are logically consistent:
@@ -339,42 +456,8 @@ def validate_plants_harvests(outline_text: str) -> tuple[bool, str]:
       token-set overlap fallback is used.
     """
     import re
-    
-    # Split text by Chapter headings to locate each chapter's section
-    chapters_content = {}
-    current_ch = None
-    current_lines = []
-    
-    for line in outline_text.splitlines():
-        # Match Chapter headings with/without formatting
-        cleaned_line = line.strip().replace('*', '').replace('_', '')
-        m = re.match(r'^###\s*(?:Chapter|Ch\.?)\s*(\d+)\b', cleaned_line, re.IGNORECASE)
-        if m:
-            if current_ch is not None:
-                chapters_content[current_ch] = "\n".join(current_lines)
-            current_ch = int(m.group(1))
-            current_lines = []
-        if current_ch is not None:
-            current_lines.append(line)
-            
-    if current_ch is not None:
-        chapters_content[current_ch] = "\n".join(current_lines)
 
-    # Extract all plants and harvests from each chapter
-    plants = [] # list of dict: {"chapter": int, "slug": str, "desc": str}
-    harvests = [] # list of dict: {"chapter": int, "slug": str, "desc": str}
-    
-    tag_pattern = r'\[(Plant|Harvest):\s*([a-zA-Z0-9_-]+)\s*[:-]\s*[\'"]?([^\'\"\]]+)[\'"]?\]'
-    
-    for ch, content in chapters_content.items():
-        matches = re.findall(tag_pattern, content)
-        for tag_type, slug, desc in matches:
-            slug = slug.strip().lower()
-            desc = desc.strip().lower()
-            if tag_type.lower() == "plant":
-                plants.append({"chapter": ch, "slug": slug, "desc": desc})
-            else:
-                harvests.append({"chapter": ch, "slug": slug, "desc": desc})
+    plants, harvests = parse_plant_tags(outline_text)
 
     errors = []
     
@@ -411,46 +494,486 @@ def validate_plants_harvests(outline_text: str) -> tuple[bool, str]:
         return False, "\n".join(errors)
     return True, ""
 
+_DEBT_RE = re.compile(r'^Ch\s*(\d+)\s*Setup:\s*([A-Za-z0-9_\-]+)\s*-\s*"(.*)"\s*$')
+
+
+def parse_debt(entry: str) -> dict | None:
+    """Debts are stored as `Ch 3 Setup: slug - "desc"` strings."""
+    m = _DEBT_RE.match((entry or "").strip())
+    if not m:
+        return None
+    return {"chapter": int(m.group(1)), "slug": m.group(2).lower(),
+            "desc": m.group(3).strip()}
+
+
+def open_debts_for_chapter(debts, chapter: int, limit: int = 3) -> list:
+    """Unpaid setups declared before `chapter`, oldest first.
+
+    A debt is by construction a plant that appears in no harvest. The consumer
+    used to match a chapter's *harvest* slugs against these debt strings, which
+    can never be equal — so the "narrative debts" guardrail had never once
+    fired, and nothing in the pipeline could cause an unpaid plant to be paid
+    off. Surfacing them here is what makes that possible.
+    """
+    out = []
+    for entry in debts or []:
+        parsed = parse_debt(entry)
+        if parsed and parsed["chapter"] < chapter:
+            out.append(parsed)
+    out.sort(key=lambda d: (d["chapter"], d["slug"]))
+    return out[:limit]
+
+
 def extract_outline_debts(outline_text: str) -> list[str]:
-    """Extract all active plant slugs that have no corresponding harvest in the outline."""
-    import re
-    # Match Chapter headings with/without formatting
-    chapters_content = {}
-    current_ch = None
-    current_lines = []
-    
-    for line in outline_text.splitlines():
-        cleaned_line = line.strip().replace('*', '').replace('_', '')
-        m = re.match(r'^###\s*(?:Chapter|Ch\.?)\s*(\d+)\b', cleaned_line, re.IGNORECASE)
-        if m:
-            if current_ch is not None:
-                chapters_content[current_ch] = "\n".join(current_lines)
-            current_ch = int(m.group(1))
-            current_lines = []
-        if current_ch is not None:
-            current_lines.append(line)
-            
-    if current_ch is not None:
-        chapters_content[current_ch] = "\n".join(current_lines)
-
-    plants = []
-    harvests = []
-    tag_pattern = r'\[(Plant|Harvest):\s*([a-zA-Z0-9_-]+)\s*[:-]\s*[\'"]?([^\'\"\]]+)[\'"]?\]'
-    
-    for ch, content in chapters_content.items():
-        matches = re.findall(tag_pattern, content)
-        for tag_type, slug, desc in matches:
-            slug = slug.strip().lower()
-            desc = desc.strip().lower()
-            if tag_type.lower() == "plant":
-                plants.append({"chapter": ch, "slug": slug, "desc": desc})
-            else:
-                harvests.append({"chapter": ch, "slug": slug, "desc": desc})
-
+    """Plant slugs that have no harvest anywhere in the outline."""
+    plants, harvests = parse_plant_tags(outline_text)
     harvested_slugs = {h["slug"] for h in harvests}
     debts = []
     for p in plants:
         if p["slug"] not in harvested_slugs:
             debts.append(f"Ch {p['chapter']} Setup: {p['slug']} - \"{p['desc']}\"")
-            
+
     return debts
+
+
+_PAREN_ALIAS = re.compile(r"\(([^)]+)\)")
+_FOCUS_KEY = re.compile(r"^(?:Focus|POV)\s*:\s*(.+)$", re.IGNORECASE)
+_LIST_MARKER = re.compile(r"^(?:[-*•]|\d+[.)])\s+")
+# Junk that shows up inside Focus labels ("Wick (dip), then Lily", "Lily / Kael alternating").
+_FOCUS_JUNK = {
+    "then", "and", "or", "alternating", "dip", "brief", "present", "on-page",
+    "off-page", "interlude", "scene", "focus", "pov", "the", "a", "an",
+    "of", "in", "on", "at", "to", "for", "with", "from", "by", "de", "van",
+}
+
+
+def _focus_line_value(raw: str) -> str | None:
+    """Extract the name field from a Focus/POV line, any markdown dress."""
+    line = raw.strip()
+    if not line or line.startswith("#"):
+        return None
+    line = _LIST_MARKER.sub("", line)
+    line = line.replace("*", "").strip()
+    m = _FOCUS_KEY.match(line)
+    if not m:
+        return None
+    value = m.group(1).strip().strip("*").strip()
+    return value or None
+
+
+def focus_names(outline_text: str) -> list[str]:
+    """Every Focus/POV label in the outline, in order.
+
+    Accepts the generator template (`1. Focus: Lily`), bullets
+    (`- **Focus:** Lily`), and bare `**POV:** Lily`.
+    """
+    out: list[str] = []
+    for raw in (outline_text or "").splitlines():
+        value = _focus_line_value(raw)
+        if value:
+            out.append(value)
+    return out
+
+
+# Legacy outlines (pre-Focus) have no Focus/POV line at all. Their
+# `**Characters:**` line lists cast in prominence order, so the first name is
+# the best available MC signal. This is the fallback that keeps the narrator
+# lock alive on a project drafted before the Focus field existed.
+_CHARS_KEY = re.compile(r"^(?:Characters|Cast)\s*:\s*(.+)$", re.IGNORECASE)
+
+
+def _first_character_name(raw: str) -> str | None:
+    """Leading name of a `**Characters:**` list, any markdown dress.
+
+    `Maledictus (as the newborn Prince), Alistair, ...` -> `Maledictus`.
+    """
+    line = _LIST_MARKER.sub("", raw.strip()).replace("*", " ").strip()
+    m = _CHARS_KEY.match(line)
+    if not m:
+        return None
+    first = _split_cast_chunks(m.group(1))[0]
+    first = _PAREN_ALIAS.sub(" ", first).strip()
+    return first or None
+
+
+def lead_character_names(outline_text: str) -> list[str]:
+    """Leading name of every `Characters:`/`Cast:` line, in order."""
+    out: list[str] = []
+    for raw in (outline_text or "").splitlines():
+        name = _first_character_name(raw)
+        if name:
+            out.append(name)
+    return out
+
+
+# A numbered heading in a character registry. Entry #1 is *usually* the
+# protagonist, but that is a convention and not a guarantee: measured across the
+# registries in projects/, four break it — `sir the confortable` numbers its
+# per-character profile subheadings ("### 1. Core Motivations & Comedic
+# Flaws"), and `sir the confortable v4` / `FakeSaint` lead with a foil or the
+# love interest. So this source may only ever ADD names to a set that another
+# source already vouched for; it may never be the sole authority.
+_REGISTRY_ENTRY = re.compile(
+    r"^#{2,4}\s*\**\s*(\d+)[.)]\s*(.+?)\s*\**\s*$")
+
+# Role and label words that are never a person's name. The registries write
+# "THE NARRATOR: DANIEL VEY" and "PROTAGONIST: PRINCESS ELARA", so without this
+# the resolved "given name" is `Narrator` and the real name is demoted to a
+# surname — which then fails to match "I am Daniel" in the prose.
+_ROLE_WORDS = {
+    "protagonist", "narrator", "main", "lead", "hero", "heroine", "pov",
+    "aka", "alias", "aka", "cast", "registry", "character", "characters",
+    "the", "a", "an", "of", "and", "or", "as",
+}
+
+
+def _is_role_phrase(text: str) -> bool:
+    """Is this heading a role/label line rather than a person?
+
+    `THE NARRATOR: DANIEL "DANNY" VEY` and `PROTAGONIST: LADY ELARA VON
+    HIMMEL` both name a person, but not in the leading token. The name after
+    the colon is the real one.
+    """
+    head, sep, tail = text.partition(":")
+    if sep and tail.strip():
+        # "NARRATOR: DANIEL VEY" -> the part after the colon is the person.
+        return True
+    words = [w for w in re.split(r"\s+", text.strip()) if w]
+    return all(w.lower().strip(".,") in _ROLE_WORDS for w in words)
+
+
+def registry_lead_name(characters_md: str) -> str | None:
+    """Name of character entry #1 in a `characters.md` registry.
+
+    Returns the part AFTER a `Role:` prefix when there is one, so a registry
+    headed "THE NARRATOR: DANIEL VEY" yields Daniel rather than Narrator.
+    Returns None when entry #1 is not a person (a profile subheading, a section
+    title) — the caller must then fall back to the outline rather than trust it.
+    """
+    for raw in (characters_md or "").splitlines():
+        m = _REGISTRY_ENTRY.match(raw.strip())
+        if not (m and m.group(1) == "1"):
+            continue
+        head = m.group(2)
+        people = _split_focus_people(head)
+        if not people:
+            continue
+        if _is_role_phrase(head):
+            tail = head.partition(":")[2].strip()
+            if tail:
+                return tail
+            return None
+        # A heading with no name-like token is a section title, not a person.
+        if not _has_name_token(people[0]):
+            continue
+        return head
+    return None
+
+
+def _has_name_token(person: dict) -> bool:
+    """Does this record carry a token shaped like a person's name?
+
+    Section titles masquerade as registry entries — `sir the confortable`
+    numbers its per-character profile subheadings, so entry #1 is literally
+    "Core Motivations & Comedic Flaws". Capitalization alone does not separate
+    them ("Core" is as capitalized as "Lily"), so the discriminator is a
+    common-word list: a subheading is built almost entirely from ordinary
+    English, while a name is not. Requiring at least one token outside that
+    list rejects the subheading and still accepts `Liliana "Lily" Celestia
+    Lumengarde`, `Cecilia de Vaelis` and `Quill`.
+    """
+    for t in person.get("tokens", []):
+        if not _NAME_LIKE.fullmatch(t):
+            continue  # `&`, `**Corvo` — punctuation, not a name
+        if not _usable_name(_clean_name_token(t)):
+            continue
+        if _clean_name_token(t) not in _HEADING_WORDS:
+            return True
+    return False
+
+
+# A single word with no internal punctuation.
+_NAME_LIKE = re.compile(r"[^\W\d_][\w'’]*", re.UNICODE)
+
+# The vocabulary of a section heading, as opposed to a person's name. A
+# registry entry heading is a name when at least one word is outside this set.
+_HEADING_WORDS = {
+    "core", "motivations", "comedic", "flaws", "traits", "arc", "voice",
+    "summary", "overview", "notes", "description", "profile", "backstory",
+    "personality", "appearance", "relationships", "role", "roleplay",
+    "design", "development", "function", "purpose", "story", "plot",
+    "theme", "themes", "structure", "background", "details", "quirks",
+    "strengths", "weaknesses", "goals", "motivations", "flaws", "key",
+    "part", "chapter", "section", "introduction", "conclusion", "notes",
+}
+
+
+def _pick_mc(freq: dict[str, int]) -> str:
+    """Most frequent person, breaking ties toward the first-listed name.
+
+    `max(freq, key=freq.get)` already returns the first-inserted key among
+    equals, and dict is insertion-ordered, so a tie resolves to whoever the
+    outline listed first. This is the explicit form of that, kept because the
+    tie behaviour is load-bearing (a protagonist/rival alternation ties
+    exactly) and the intent should be readable rather than incidental.
+    """
+    if not freq:
+        return ""
+    top = max(freq.values())
+    for name, count in freq.items():
+        if count == top:
+            return name
+    return ""
+
+
+def _strip_quotes(token: str) -> str:
+    """Drop surrounding quote marks from a name token.
+
+    `Liliana "Lily" Celestia` must yield a `lily` that can match prose, not
+    `"lily"` which can never appear in a sentence.
+    """
+    return token.strip("\"'“”‘’").strip()
+
+
+def _alias_set(people: list[dict]) -> set[str]:
+    """Lowercase name tokens + parenthetical aliases for person records.
+
+    Role and label words are dropped. The registries write `THE NARRATOR:
+    DANIEL "DANNY" VEY` and `PROTAGONIST: PRINCESS ELARA`, and keeping
+    `narrator` would whitelist "I am the narrator" as the MC.
+    """
+    out: set[str] = set()
+    for p in people:
+        for t in p["tokens"]:
+            cleaned = _clean_name_token(t)
+            if _usable_name(cleaned):
+                out.add(cleaned)
+        for a in p["aliases"]:
+            for t in _strip_quotes(a).replace("/", " ").replace("|", " ").split():
+                cleaned = _clean_name_token(t)
+                if _usable_name(cleaned):
+                    out.add(cleaned)
+    return out
+
+
+def _usable_name(token: str) -> bool:
+    """Is this cleaned token usable as a name for the lock's lookup set?"""
+    return bool(token) and token not in _FOCUS_JUNK and token not in _ROLE_WORDS
+
+
+def _split_focus_people(label: str) -> list[dict]:
+    """Split a Focus label into person records.
+
+    `Lily Bakersville (Baal) / Kael` → two people; `Wick (dip), then Lily`
+    → two people. Each record: given name, all head tokens, paren aliases.
+
+    A nickname in straight or curly quotes is its own token, because the
+    registry writes `Liliana "Lily" Celestia` and a token of `"lily"` can
+    never match a word in the prose. Quotes are stripped from every token.
+    """
+    people: list[dict] = []
+    chunks = re.split(r"\s*(?:,|/|\||\bthen\b)\s*", label)
+    for chunk in chunks:
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        parens = [a for a in _PAREN_ALIAS.findall(chunk) if a.strip()]
+        head = _PAREN_ALIAS.sub(" ", chunk)
+        tokens = [t for t in re.split(r"\s+", head) if t]
+        tokens = [_strip_quotes(t) for t in tokens]
+        tokens = [t for t in tokens
+                  if t and t.lower() not in _FOCUS_JUNK and t.strip("*_`")]
+        if not tokens:
+            continue
+        # Given name = first token that can actually be a name. Role labels
+        # ("NARRATOR", "PROTAGONIST") and title words are skipped; an all-caps
+        # head is lowercased first so the check is case-insensitive, because
+        # the registries write entry #1 in shouty caps while the outline
+        # writes the same person in title case.
+        given = ""
+        for t in tokens:
+            cleaned = _clean_name_token(t)
+            if not _usable_name(cleaned):
+                continue
+            if t[:1].isupper() and cleaned not in TITLE_WORDS:
+                given = t
+                break
+        if not given and tokens:
+            given = tokens[0]
+        people.append({"given": given, "tokens": tokens, "aliases": parens})
+    return people
+
+
+def _split_cast_chunks(value: str) -> list[str]:
+    """Split a `Characters:` list on commas, ignoring commas inside parens.
+
+    `Lily (narrator, protagonist), Mira` is two people, not three — splitting
+    on the raw commas yields a chunk of `protagonist)` whose "given name" is
+    the word `protagonist`, poisoning the cast set.
+    """
+    parts: list[str] = []
+    depth = 0
+    buf: list[str] = []
+    for ch in value:
+        if ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth = max(0, depth - 1)
+        if ch == "," and depth == 0:
+            parts.append("".join(buf))
+            buf = []
+            continue
+        buf.append(ch)
+    parts.append("".join(buf))
+    return [p for p in parts if p.strip()]
+
+
+def cast_names_from_outline(outline_text: str) -> set[str]:
+    """Every lowercase given-name token in the outline's cast lists.
+
+    This is the narrator lock's negative control. A self-id matching a name
+    the book actually casts is a real narrator swap; a capitalized word matching
+    nobody is personification. Without the cast set the detector has to guess
+    from word shape alone, which is what produced "I am Death" false positives.
+    """
+    out: set[str] = set()
+    for raw in (outline_text or "").splitlines():
+        line = _LIST_MARKER.sub("", raw.strip()).replace("*", " ").strip()
+        m = _CHARS_KEY.match(line)
+        if not m:
+            continue
+        for chunk in _split_cast_chunks(m.group(1)):
+            people = _split_focus_people(chunk)
+            if not people:
+                continue
+            given = _clean_name_token(people[0]["given"])
+            if given and given not in _FOCUS_JUNK:
+                out.add(given)
+    return out
+
+
+def _clean_name_token(token: str) -> str:
+    """Normalize a cast/registry token so it can match a word in prose.
+
+    Strips quotes, possessives, markdown emphasis, bracket noise and trailing
+    punctuation. A cast line written `Lily's mother`, `(Narrator):` or
+    `### 1. **Corvo Quill**` otherwise contributes `lily's`, `narrator:` or
+    `**corvo` to the lookup set — tokens no sentence can ever contain, which
+    silently widens the alias set with dead entries and can demote the real
+    name to a surname.
+    """
+    t = _strip_quotes(token)
+    t = re.sub(r"['’]s$", "", t)
+    t = t.strip("*_`")
+    t = t.strip("()<>[]{}")
+    t = t.strip(".,;:!?&—–-")
+    return t.strip().lower()
+
+
+def protagonist_aliases(outline_text: str) -> set[str]:
+    """Lowercase name tokens for the protagonist (the MC), from the outline.
+
+    `Focus: Lily Bakersville (Baal)` yields lily / bakersville / baal so a
+    first-person lock accepts both the public name and the secret one.
+    Parenthetical aliases are taken only from labels whose person *is* the
+    MC — a rival's "(the Render of Ash)" must not whitelist that title.
+
+    Falls back to the leading name of each `Characters:` line when the outline
+    has no Focus/POV field. Outlines drafted before the Focus field existed
+    parse to zero Focus labels, and an empty alias set silently disables the
+    narrator lock. Callers that have the character registry on hand should
+    prefer `mc_aliases_for_project`, which consults that too.
+    """
+    return mc_aliases_for_project(outline_text)
+
+
+def mc_aliases_for_project(outline_text: str, characters_md: str = "") -> set[str]:
+    """MC alias set from every source available.
+
+    The outline is the authority. The character registry is a weak source that
+    may only ADD to it.
+
+    1. `Focus:` / `POV:` labels — the explicit MC-lock field.
+    2. Leading name of each outline `Characters:` line — prominence order.
+    3. Character registry entry #1 — **union, and only for extra identities.**
+
+    The registry exists to supply a name the outline cannot: a reincarnate MC
+    written `Liliana ... (Maledictus)` where the outline's lead name is just
+    "Lily". Entry #1 is a convention, and four registries in projects/ break
+    it — one numbers its per-character profile subheadings, two lead with a
+    foil or the love interest, and one puts a role label where the name should
+    be. So it is admitted only when it agrees with the outline on a person, and
+    only the names the outline did not already supply are taken: a foil who
+    shares no name with the MC contributes nothing, instead of silently
+    becoming a second "I".
+
+    An empty return means the protagonist could not be identified from any
+    source, and the caller must treat the narrator lock as unavailable rather
+    than as satisfied.
+    """
+    aliases = _protagonist_from_focus(outline_text)
+    if not aliases:
+        aliases = _protagonist_from_characters(outline_text)
+    if not characters_md:
+        return aliases
+    head = registry_lead_name(characters_md)
+    if not head:
+        return aliases
+    people = _split_focus_people(head)
+    if not people:
+        return aliases
+    reg_names = _alias_set(people)
+    if not reg_names:
+        return aliases
+    # Agreement test: does the registry name someone the outline already has?
+    # Compare whole name sets, not the leading token — a registry writes
+    # "Princess Liliana ... (Maledictus)" where the outline says only "Lily",
+    # so the given names differ even though it is the same person. A foil who
+    # shares no name at all with the outline's MC contributes nothing.
+    if not reg_names & aliases:
+        return aliases
+    return aliases | reg_names
+
+
+def _protagonist_from_focus(outline_text: str) -> set[str]:
+    """MC alias set from Focus/POV labels, or empty when there are none."""
+    labels = focus_names(outline_text)
+    if not labels:
+        return set()
+
+    freq: dict[str, int] = {}
+    per_label: list[list[dict]] = []
+    for label in labels:
+        people = _split_focus_people(label)
+        per_label.append(people)
+        for p in people:
+            g = p["given"].lower()
+            if g:
+                freq[g] = freq.get(g, 0) + 1
+    mc = _pick_mc(freq)
+    if not mc:
+        return set()
+    # Only labels whose person IS the MC contribute — a rival's
+    # "(the Render of Ash)" must not whitelist that title for everyone.
+    return _alias_set([p for people in per_label for p in people
+                       if p["given"].lower() == mc])
+
+
+def _protagonist_from_characters(outline_text: str) -> set[str]:
+    """MC alias set from `Characters:` lines when no Focus field exists."""
+    freq: dict[str, int] = {}
+    first_seen: dict[str, list[dict]] = {}
+    for name in lead_character_names(outline_text):
+        people = _split_focus_people(name)
+        if not people:
+            continue
+        p = people[0]
+        g = p["given"].lower()
+        if not g:
+            continue
+        freq[g] = freq.get(g, 0) + 1
+        first_seen.setdefault(g, []).append(p)
+    mc = _pick_mc(freq)
+    if not mc:
+        return set()
+    return _alias_set(first_seen.get(mc, []))

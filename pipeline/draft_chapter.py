@@ -8,7 +8,9 @@ from pathlib import Path as _Path
 sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
 
 from core.llm import TruncationError, call_llm
-from core.outline import parse_premise_beats, normalize_chapter_heading
+from core.outline import (extract_chapter_outline, extract_next_chapter_outline,
+                          normalize_chapter_heading, open_debts_for_chapter,
+                          parse_premise_beats)
 from core.paths import get_novel_title
 from core.textstats import check_structural_repetition
 from core import canon as canon_mod
@@ -17,8 +19,10 @@ import re
 import sys
 from pathlib import Path
 from dotenv import load_dotenv
-from core.genre import load_genre, prose_mode_system_block
+from core.genre import load_genre, perspective_system_block, prose_mode_system_block
 from core import paths
+from core import prose
+from core import retrieval
 from core import textstats
 
 load_dotenv()
@@ -28,14 +32,7 @@ def call_writer(prompt, max_tokens=None):
     chapter_system = genre_cfg["identity"]["chapter_system"]
     perspective = genre_cfg.get("perspective", "")
     if perspective:
-        if perspective == "first_person":
-            chapter_system += ("\n\nMANDATORY PERSPECTIVE: Write this chapter in STRICT FIRST-PERSON "
-                               "limited narration from the POV character ('I/me/my'). The POV "
-                               "character narrates everything; no third-person narration anywhere.")
-        else:
-            chapter_system += ("\n\nMANDATORY PERSPECTIVE: Write this chapter in STRICT THIRD-PERSON "
-                               "limited narration anchored to the POV character ('he/she/they' or the "
-                               "character's name). Never switch to first-person narration.")
+        chapter_system += perspective_system_block(perspective)
     chapter_system += prose_mode_system_block(genre_cfg)
     estimated_words = genre_cfg["generation"]["outline"]["estimated_words"]
     chapter_count = genre_cfg["generation"]["outline"]["estimated_chapters"]
@@ -53,39 +50,6 @@ def load_file(path):
     except FileNotFoundError:
         return ""
 
-def extract_chapter_outline(outline_text, chapter_num):
-    """Extract a specific chapter's outline entry from the DETAILED section.
-
-    Scoped to '## DETAILED CHAPTER OUTLINES' so the HIGH-LEVEL ROADMAP one-liner
-    (which appears earlier in the file) is never matched instead of the real
-    beats entry. Raises if the entry is missing — a chapter drafted without its
-    outline is worse than no draft at all.
-    """
-    if "## DETAILED CHAPTER OUTLINES" in outline_text:
-        # Scope to the detailed section: a fresh outline's HIGH-LEVEL ROADMAP
-        # one-liner appears first and must never be drafted from instead of the
-        # real beats entry.
-        outline_text = outline_text.split("## DETAILED CHAPTER OUTLINES", 1)[1]
-    # Rebuilt outlines (post-export, "### Ch N:" format) have no roadmap and no
-    # DETAILED header — whole-text search is correct for them.
-    pattern = rf'###\s*\*?\*?\s*(?:Chapter|Ch\.?)\s*\*?\*?\s*{chapter_num}\b.*?(?=###\s*\*?\*?\s*(?:Chapter|Ch\.?)\s*\*?\*?\s*(?:\d+)\b|## Act|## Foreshadowing|$)'
-    match = re.search(pattern, outline_text, re.IGNORECASE | re.DOTALL)
-    if not match:
-        raise ValueError(
-            f"Chapter {chapter_num} outline entry not found in the "
-            f"## DETAILED CHAPTER OUTLINES section — refusing to draft without beats."
-        )
-    return match.group(0).strip()
-
-def extract_next_chapter_outline(outline_text, chapter_num):
-    """Extract the next chapter's outline (just first few lines for continuity)."""
-    try:
-        next_entry = extract_chapter_outline(outline_text, chapter_num + 1)
-    except ValueError:
-        return "(final chapter)"
-    lines = next_entry.split('\n')[:10]
-    return '\n'.join(lines)
-
 def scan_prior_chapter_crutches(chapters_dir, current_chapter, max_phrases=12):
     """Find distinctive phrases used across PRIOR chapters and warn against reuse.
 
@@ -94,6 +58,11 @@ def scan_prior_chapter_crutches(chapters_dir, current_chapter, max_phrases=12):
     tick. Extract distinctive (rare-word) 3-4 gram phrases from all prior
     chapters, count how many chapters they appear in, and return the worst
     offenders as a do-not-reuse list.
+
+    Short mantras ("the plan can wait") slip past a stopword filter that
+    drops any n-gram containing "the"/"can". Those are tracked separately:
+    2-5 word phrases with at least two content words, banned once they show
+    up in 3+ prior chapters (or 4+ raw hits).
     """
     import collections
     stop = {"the", "a", "an", "and", "or", "but", "of", "in", "on", "at",
@@ -110,27 +79,123 @@ def scan_prior_chapter_crutches(chapters_dir, current_chapter, max_phrases=12):
                 "through", "during", "without", "against", "around", "within",
                 "along", "across", "behind", "beyond", "beneath", "among"}
 
-    phrase_counts = collections.defaultdict(set)
+    def _norm(w: str) -> str:
+        return w.strip(".,;:!?\"'()[]{}*-—_`“”‘’…").lower()
+
+    def _is_title_case(w: str) -> bool:
+        core = w.strip(".,;:!?\"'()[]{}*-—_`“”‘’…")
+        return len(core) > 1 and core[0].isupper() and core[1:].islower()
+
+    phrase_counts = collections.defaultdict(set)   # distinctive 3-4 grams
+    refrain_counts = collections.defaultdict(lambda: [0, set()])  # short mantras
+    proper_keys = set()   # keys that look like names/titles, never ban
+    chapters_seen = 0
     for ch in range(1, current_chapter):
         path = chapters_dir / f"ch_{ch:02d}.md"
         if not path.exists():
             continue
+        chapters_seen += 1
         text = path.read_text(encoding="utf-8")
         words = text.split()
+        norms = [_norm(w) for w in words]
         for n in (4, 3):
             for i in range(len(words) - n + 1):
-                gram = words[i:i + n]
-                if any(w.strip(".,;:!?\"'()[]-—").lower() in stop for w in gram):
+                gram = [_norm(w) for w in words[i:i + n]]
+                if any(not g or g in stop for g in gram):
                     continue
-                key = " ".join(w.strip(".,;:!?\"'()[]-—") for w in gram).lower()
+                key = " ".join(gram)
                 if len(key) < 12:
                     continue
                 phrase_counts[key].add(ch)
+                if sum(1 for w in words[i:i + n] if _is_title_case(w)) >= 2:
+                    proper_keys.add(key)
+        # Short refrains: keep function words in the key so "the plan can wait"
+        # is visible, but require >=2 content words to avoid pure glue.
+        for n in (5, 4, 3, 2):
+            for i in range(len(norms) - n + 1):
+                gram = norms[i:i + n]
+                if not any(gram):
+                    continue
+                content = [w for w in gram if w and w not in stop]
+                if len(content) < 2:
+                    continue
+                if any(len(w) < 3 for w in content):
+                    continue
+                key = " ".join(gram)
+                if len(key) < 8:
+                    continue
+                refrain_counts[key][0] += 1
+                refrain_counts[key][1].add(ch)
+                if sum(1 for w in words[i:i + n] if _is_title_case(w)) >= 2:
+                    proper_keys.add(key)
 
-    # Phrases appearing in 2+ distinct prior chapters are crutches
-    crutches = [(p, sorted(chs)) for p, chs in phrase_counts.items() if len(chs) >= 2]
+    # Phrases in most chapters are book vocabulary (names, core nouns), not a
+    # crutch. "demon lord" in 22/24 chapters is the premise; "the plan can wait"
+    # in 7/24 is a mantra. Ban the latter, never the former.
+    def _is_vocab(n_chs: int, key: str) -> bool:
+        if key in proper_keys:
+            return True
+        # Need enough chapters for a percentage to mean anything, and the
+        # phrase must be near-ubiquitous — a 7-chapter refrain in a 24-chapter
+        # book is a crutch, not world vocabulary.
+        return chapters_seen >= 6 and n_chs >= max(4, int(chapters_seen * 0.5))
+
+    # Mantra-shaped refrains (catchphrases) get priority over place-name n-grams.
+    _MANTRA_CATCH = {
+        "wait", "waits", "waiting", "tomorrow", "tonight", "later", "enough",
+        "again", "hate", "hates", "love", "loves", "mine", "yours", "never",
+        "always",
+    }
+
+    def _is_mantra(key: str) -> bool:
+        words = key.split()
+        if not (2 <= len(words) <= 5):
+            return False
+        # Catchphrase shape: "the/my/his/her + short clause with a punch word"
+        # ("the plan can wait") or a short modal clause ("can wait").
+        if words[0] in {"the", "my", "his", "her", "this", "that", "our", "their"}:
+            return any(w in _MANTRA_CATCH for w in words) or any(
+                w in {"can", "could", "will", "would"} for w in words
+            )
+        return any(w in _MANTRA_CATCH for w in words) and len(words) <= 4
+
+    crutches = [
+        (p, sorted(chs)) for p, chs in phrase_counts.items()
+        if len(chs) >= 2 and not _is_vocab(len(chs), p)
+    ]
+    refrains = [
+        (key, sorted(chs))
+        for key, (hits, chs) in refrain_counts.items()
+        if (len(chs) >= 3 or hits >= 4) and not _is_vocab(len(chs), key)
+    ]
+    mantras = [(p, chs) for p, chs in refrains if _is_mantra(p)]
+    other_refrains = [(p, chs) for p, chs in refrains if not _is_mantra(p)]
+
+    def _mantra_rank(item):
+        key, chs = item
+        words = key.split()
+        catch = int(any(w in _MANTRA_CATCH for w in words))
+        # "the plan can wait" shape — determiner + modal/punch — beats
+        # stylistic ticks like "had never once".
+        shaped = int(
+            words[0] in {"the", "my", "his", "her", "this", "that", "our", "their"}
+            and any(w in {"can", "could", "will", "would"} | _MANTRA_CATCH for w in words)
+        )
+        return (-shaped, -catch, -len(chs))
+
+    mantras.sort(key=_mantra_rank)
+    other_refrains.sort(key=lambda x: -len(x[1]))
     crutches.sort(key=lambda x: -len(x[1]))
-    return crutches[:max_phrases]
+    out = mantras[:8]
+    seen = {p for p, _ in out}
+    for p, chs in other_refrains[:2] + crutches:
+        if p in seen:
+            continue
+        seen.add(p)
+        out.append((p, chs))
+        if len(out) >= max_phrases:
+            break
+    return out[:max_phrases]
 
 
 def parse_orientation_facts(chapter_outline):
@@ -175,30 +240,32 @@ def main():
     chapter_outline = extract_chapter_outline(outline, chapter_num)
     next_chapter = extract_next_chapter_outline(outline, chapter_num)
     
-    # Check for active narrative debts to resolve in this chapter
-    chapter_harvests = re.findall(r'\[Harvest:\s*([a-zA-Z0-9_-]+)', chapter_outline, re.IGNORECASE)
-    active_debts_to_resolve = []
-    if chapter_harvests:
-        try:
-            state_path = paths.get_project_dir() / "state.json"
-            state = json.loads(state_path.read_text(encoding="utf-8"))
-            debts = state.get("debts", [])
-            for h_slug in chapter_harvests:
-                h_slug_clean = h_slug.strip().lower()
-                for d in debts:
-                    if h_slug_clean in d.lower():
-                        active_debts_to_resolve.append(d)
-        except Exception:
-            pass
+    # Setups the outline opened and never scheduled a payoff for. These are
+    # offered to the chapter as material — an invitation, not a demand, in
+    # keeping with the "prefer nothing over a forced reference" rule the
+    # callback injection uses. (The old code matched this chapter's *harvest*
+    # slugs against the debt strings, which can never match: a debt is by
+    # construction a plant with no harvest anywhere.)
+    open_debts = []
+    try:
+        state_path = paths.get_project_dir() / "state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        open_debts = open_debts_for_chapter(state.get("debts", []), chapter_num)
+    except (OSError, ValueError) as e:
+        # Not fatal — the chapter is still writable without this context — but
+        # say so rather than swallowing it.
+        print(f"WARN: could not read narrative debts: {e}", file=sys.stderr)
 
     debt_guardrail = ""
-    if active_debts_to_resolve:
-        debt_lines = "\n".join(f"- {d}" for d in active_debts_to_resolve)
+    if open_debts:
+        debt_lines = "\n".join(
+            f"- (set up in ch{d['chapter']}) {d['desc']}" for d in open_debts
+        )
         debt_guardrail = f"""
-NARRATIVE DEBTS RESOLUTION WARNING:
-This chapter is scheduled to pay off the following narrative setup(s):
+UNPAID SETUPS (opened earlier, never paid off):
 {debt_lines}
-You MUST write prose in this chapter that resolves these setups naturally.
+If one of these can be paid off naturally in this chapter, pay it off —
+changed meaning, not a name-drop. Leave it alone if it would be forced.
 """
     
     # Previous chapter (if exists) — full ~600-word tail starting at a sentence boundary
@@ -211,6 +278,17 @@ You MUST write prose in this chapter that resolves these setups naturally.
         prev_tail = "(first chapter -- no previous)"
 
     title = get_novel_title()
+
+    _perspective = load_genre().get("perspective", "")
+    if _perspective == "first_person":
+        interlude_format_note = (
+            "If any scene is a third-person interlude (MC off-page), follow the "
+            "MANDATORY PERSPECTIVE interlude rules exactly."
+        )
+    else:
+        interlude_format_note = (
+            "Separate Focus changes with a hard scene break (`---`)."
+        )
 
     # Build structural guardrails (applied to EVERY chapter)
     structural_guardrails = """
@@ -300,6 +378,23 @@ between beats should be a natural prose transition, not a labeled divider.
                     "Weigh reader-grounding with extra scrutiny — ensure every concept is "
                     "properly introduced on the page.\n"
                 )
+    pack = retrieval.build_retrieval_pack(
+        chapter_num=chapter_num,
+        chapter_outline=chapter_outline,
+        characters_text=characters,
+        world_text=world,
+        canon_view=canon_view,
+        orientation_facts=orientation_facts,
+    )
+    retrieval.write_retrieval_telemetry(
+        pack,
+        chapter_num,
+        paths.get_eval_logs_dir() / f"retrieval_ch{chapter_num:02d}_telemetry.json",
+    )
+    # Degrade to source bibles if pack is empty; placeholder only when source is empty.
+    world_block = pack.world_block or world or "(world bible unavailable)"
+    characters_block = pack.characters_block or characters or "(character registry unavailable)"
+
     prompt = f"""Write Chapter {chapter_num} of "{title}."
 
 VOICE DEFINITION (follow this exactly):
@@ -315,10 +410,10 @@ PREVIOUS CHAPTER'S ENDING (continue from here):
 {prev_tail}
 
 WORLD BIBLE (reference for worldbuilding details):
-{world}
+{world_block}
 
 CHARACTER REGISTRY (reference for speech patterns and behavior):
-{characters}
+{characters_block}
 """
 
     if canon_view:
@@ -362,6 +457,7 @@ FORMATTING:
 Start the chapter with a single markdown H1 title line, exactly:
 `# Chapter {chapter_num}: <Chapter Title>`
 Nothing else on that line — no bold, no "##", no slug/codename.
+{interlude_format_note}
 Write the chapter now. Full text, beginning to end.
 """
 
@@ -422,12 +518,29 @@ Write the chapter now. Full text, beginning to end.
         print("TRUNCATION_DETECTED: all attempts truncated — no draft produced", file=sys.stderr)
         sys.exit(2)
 
-    # Save
+    # Save. Strip anything that is not prose (an appended notes block, or a
+    # derail into prompt echo/reasoning) before it can enter the project.
     out_path = chapters_dir / f"ch_{chapter_num:02d}.md"
-    out_path.write_text(normalize_chapter_heading(result, chapter_num), encoding="utf-8")
+    body = normalize_chapter_heading(result, chapter_num)
+    if prose.needs_redraft(body):
+        # The model stopped writing the story and started talking about the
+        # task, and almost nothing survives. Fail the attempt so the drafting
+        # loop retries instead of keeping a fragment. A merely *short* chapter
+        # is not rejected here — drafting.py has its own expansion path for it.
+        print(f"NON_PROSE_FRAGMENT: derailed after only {prose.prose_words(body)} "
+              f"words of prose; refusing to save", file=sys.stderr)
+        sys.exit(3)
+    if prose.cut_reason(body) == "derail":
+        print("NON_PROSE_DERAIL: draft interrupted by model output", file=sys.stderr)
+    body = prose.strip_non_prose(body)
+    body, removed = prose.strip_artifacts(body)
+    if removed:
+        print(f"ARTIFACTS: {len(removed)} removal(s): {removed}", file=sys.stderr)
+    body = body.rstrip() + "\n"
+    out_path.write_text(body, encoding="utf-8")
     print(f"Saved to {out_path}", file=sys.stderr)
-    print(f"Word count: {len(result.split())}", file=sys.stderr)
-    print(result)
+    print(f"Word count: {len(body.split())}", file=sys.stderr)
+    print(body)
 
 if __name__ == "__main__":
     main()

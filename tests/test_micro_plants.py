@@ -168,6 +168,36 @@ class ValidationTest(unittest.TestCase):
         with self.assertRaises(OutputValidationError):
             parse_validated(MicroPlantExtract, '{"new_plants": "nope"}')
 
+    def test_an_overlong_plant_is_truncated_not_rejected(self):
+        """v5's extractor wrote ~300-char plants against a 240 cap, so every
+        response failed and the store stayed empty for 22 of 24 chapters."""
+        text = ("Grimble's six tins of reverse-chronological incense — a budget "
+                "line item from the previous fiscal quarter that he insists on "
+                "documenting — ") * 8
+        self.assertGreater(len(text), 600)
+        parsed = parse_validated(MicroPlantExtract, json.dumps({
+            "new_plants": [{"text": text, "kind": "object"}],
+            "harvested_ids": ["keep-me"],
+        }))
+        kept = parsed.new_plants[0].text
+        self.assertLessEqual(len(kept), 600)
+        self.assertTrue(kept.rstrip().endswith("\u2026"))
+        # The rest of the response survives: one bad field no longer costs the
+        # whole extract.
+        self.assertEqual(["keep-me"], parsed.harvested_ids)
+
+    def test_an_unbroken_overlong_plant_still_validates(self):
+        """No space to break on is the degenerate case of the same bug."""
+        parsed = parse_validated(MicroPlantExtract, json.dumps({
+            "new_plants": [{"text": "x" * 900, "kind": "object"}],
+            "harvested_ids": [],
+        }))
+        self.assertLessEqual(len(parsed.new_plants[0].text), 600)
+
+    def test_an_empty_plant_text_is_still_rejected(self):
+        with self.assertRaises(OutputValidationError):
+            parse_validated(MicroPlantExtract, '{"new_plants": [{"text": ""}]}')
+
 
 class ExtractSoftFailTest(unittest.TestCase):
     def test_script_imports_without_llm(self):
@@ -175,6 +205,92 @@ class ExtractSoftFailTest(unittest.TestCase):
         mod = importlib.import_module("pipeline.extract_micro_plants")
         self.assertTrue(hasattr(mod, "extract_for_chapter"))
         self.assertTrue(hasattr(mod, "main"))
+
+    def test_a_schema_failure_retries_then_gives_up_softly(self):
+        """A bad response must not crash the subprocess: the phase calls this
+        fail-soft after every kept chapter, and v5 lost the extract to an
+        uncaught decode error."""
+        import importlib
+        from unittest import mock
+
+        mod = importlib.import_module("pipeline.extract_micro_plants")
+        with tempfile.TemporaryDirectory() as td:
+            chapters = Path(td) / "chapters"
+            chapters.mkdir()
+            (chapters / "ch_05.md").write_text("Prose. " * 200, encoding="utf-8")
+            calls = []
+
+            def fake_llm(**kw):
+                calls.append(kw["prompt"])
+                return "not json at all"
+
+            with mock.patch.object(mod.paths, "get_chapters_dir", return_value=chapters), \
+                 mock.patch.object(mod, "call_llm", side_effect=fake_llm), \
+                 mock.patch.object(mod.mp, "save_callbacks") as saved:
+                rc = mod.extract_for_chapter(5)
+
+        self.assertEqual(0, rc)                    # fail-soft, not an exception
+        self.assertEqual(3, len(calls))            # initial + two self-corrections
+        self.assertIn("ERROR ON ATTEMPT", calls[1])  # feedback was fed back
+        self.assertIn("under 280 characters", calls[1])
+        saved.assert_not_called()                  # nothing written on failure
+
+
+class StoreLifecycleTest(unittest.TestCase):
+    """The store's transitions. These had no coverage before."""
+
+    def _store(self, **kw):
+        item = {"id": "a1", "text": "a brass key", "kind": "object",
+                "source_chapter": 5, "status": "open", "window": 12}
+        item.update(kw)
+        return {"callbacks": [item], "updated_chapter": 5}
+
+    def test_a_payoff_before_its_own_plant_is_refused(self):
+        """v4's store contains exactly this error (planted ch23, harvested ch19)."""
+        data = mark_harvested(self._store(source_chapter=23), 19, ["a1"])
+        self.assertEqual("open", data["callbacks"][0]["status"])
+        self.assertNotIn("harvested_chapter", data["callbacks"][0])
+
+    def test_a_same_chapter_payoff_is_allowed(self):
+        """A setup and its payoff can live in one chapter."""
+        data = mark_harvested(self._store(source_chapter=5), 5, ["a1"])
+        self.assertEqual("harvested", data["callbacks"][0]["status"])
+        self.assertEqual(5, data["callbacks"][0]["harvested_chapter"])
+
+    def test_an_expired_plant_can_still_be_paid_off(self):
+        """Expiry stops the revision nudge, not the record."""
+        data = mark_harvested(
+            self._store(status="expired", expired_chapter=19), 20, ["a1"])
+        self.assertEqual("harvested", data["callbacks"][0]["status"])
+        self.assertEqual(20, data["callbacks"][0]["harvested_chapter"])
+
+    def test_marking_twice_is_idempotent(self):
+        data = self._store()
+        mark_harvested(data, 9, ["a1"])
+        mark_harvested(data, 14, ["a1"])
+        self.assertEqual(9, data["callbacks"][0]["harvested_chapter"])
+
+    def test_an_unknown_id_changes_nothing(self):
+        data = self._store()
+        mark_harvested(data, 9, ["nope"])
+        self.assertEqual("open", data["callbacks"][0]["status"])
+
+    def test_expire_stale_honours_the_stored_window(self):
+        """The per-item window used to be written and never read."""
+        data = {"callbacks": [{"id": "a1", "status": "open", "source_chapter": 5,
+                               "window": 3}], "updated_chapter": 5}
+        expire_stale(data, 10)          # 10 - 5 = 5 > 3
+        self.assertEqual("expired", data["callbacks"][0]["status"])
+
+        data2 = {"callbacks": [{"id": "b1", "status": "open", "source_chapter": 5,
+                                "window": 30}], "updated_chapter": 5}
+        expire_stale(data2, 10)         # 5 > 30 is false
+        self.assertEqual("open", data2["callbacks"][0]["status"])
+
+    def test_expired_plants_stay_out_of_the_revision_nudge(self):
+        data = self._store(status="expired", expired_chapter=19)
+        self.assertEqual([], open_items(data))
+        self.assertEqual("", soft_inject_block(data, 20))
 
 
 if __name__ == "__main__":

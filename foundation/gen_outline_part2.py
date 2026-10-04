@@ -4,20 +4,22 @@ import sys
 from pathlib import Path as _Path
 sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
 
-from core.llm import TruncationError, call_llm, get_max_tokens_with_thinking
-from core.paths import format_prompt
-import os
+from core.llm import (
+    REFINEMENT_ATTEMPTS, REFINEMENT_BLOCK_SIZE,
+    TruncationError, call_llm, outline_max_tokens,
+)
 import sys
 import re
 import json
-from pathlib import Path
 from dotenv import load_dotenv
 from core.genre import load_genre, chapters_total as genre_chapters_total
 from core import paths
 
 load_dotenv()
 
-def call_writer(prompt, max_tokens=get_max_tokens_with_thinking(16000)):
+def call_writer(prompt, max_tokens=None):
+    if max_tokens is None:
+        max_tokens = outline_max_tokens()
     return call_llm(prompt=prompt, model_key="writer", max_tokens=max_tokens, beta_context=True, timeout_role="standard")
 
 def validate_block_output(text, start, end):
@@ -28,10 +30,95 @@ def validate_block_output(text, start, end):
             missing.append(f"Chapter {ch}")
     if missing:
         return False, f"Missing detailed outlines for: {', '.join(missing)}"
+    # The field labels are load-bearing, not decoration. Refinement once
+    # dissolved them into prose, which silently disabled the narrator lock
+    # (it resolves the MC from `Focus:` / `Characters:`) and the climax length
+    # ceiling (which reads `Scene type:`) for the whole book. A block that
+    # lost its labels is a failed block even though every chapter is present.
+    lost = missing_field_labels(text, start, end)
+    if lost:
+        return False, (
+            "Field labels missing or renamed (refinement must preserve them "
+            f"verbatim): {'; '.join(lost)}. Re-emit the block with the labels "
+            "Focus / MC presence / Scene type / Characters / Emotional Arc / "
+            "Summary / Orientation Facts / Scene Stakes / Scene Beats / "
+            "Plants & Harvests intact."
+        )
     return True, ""
 
+
+# The labels other tooling actually parses. Deliberately NOT the full schema:
+#   Focus       -> core.outline._FOCUS_KEY   (protagonist identity)
+#   Characters  -> core.outline._CHARS_KEY   (protagonist fallback + cast)
+#   Scene type  -> pipeline_infra._CLIMAX_LABEL (climax length ceiling)
+#   Scene Beats -> draft_chapter             (beat count)
+#   Orientation Facts -> draft_chapter.parse_orientation_facts
+# `Emotional Arc`, `Summary`, `Scene Stakes` and `MC presence` have no consumer
+# yet, so gating on them would fail a book over a label nothing reads.
+# `Focus` accepts its documented `POV:` alias, because core/outline.py does and
+# a rename between the two is not data loss.
+_FIELD_LABELS = (
+    "Focus", "Characters", "Scene type", "Orientation Facts", "Scene Beats",
+)
+_FIELD_ALIASES = {"Focus": ("Focus", "POV")}
+
+
+def missing_field_labels(text, start, end):
+    """Which chapters in `text` lost a required field label, or left it empty.
+
+    Scoped to `## DETAILED CHAPTER OUTLINES`: the HIGH-LEVEL ROADMAP carries a
+    `### Chapter N: <slug>` line for every chapter in the book, and matching
+    those would report every chapter as broken no matter what the detailed
+    section contains.
+
+    An entry stops at the next chapter heading OR at a `##` section break, so
+    a trailing ledger cannot lend its labels to the last chapter.
+    """
+    body = text
+    marker = "## DETAILED CHAPTER OUTLINES"
+    if marker in text:
+        body = text.split(marker, 1)[1]
+    problems = []
+    for ch in range(start, end + 1):
+        pattern = (rf'###\s*\*?\*?\s*(?:Chapter|Ch\.?)\s*\*?\*?\s*{ch}\b'
+                   rf'(.*?)(?=###\s*\*?\*?\s*(?:Chapter|Ch\.?)\s*\*?\*?\s*\d+\b'
+                   rf'|^##\s|\Z)')
+        m = re.search(pattern, body, re.IGNORECASE | re.DOTALL | re.MULTILINE)
+        if not m:
+            continue
+        entry = m.group(1)
+        gone = [lab for lab in _FIELD_LABELS
+                if not _has_label_value(entry, _FIELD_ALIASES.get(lab, (lab,)))]
+        if gone:
+            problems.append(f"Chapter {ch} lost {', '.join(gone)}")
+    return problems
+
+
+def _has_label_value(entry: str, names) -> bool:
+    """Does `entry` carry any of `names` as a label, with content after it?
+
+    Two things this must get right. It must accept every form the generators
+    emit — numbered (`7. Focus:`), bulleted (`- **Focus**:`), bold, bare — and
+    any capitalisation. And a label whose value is empty on the same line is
+    NOT present: `Focus:` followed by nothing says nothing, and counting it as
+    present is how an outline passes every check while communicating nothing.
+    A multi-line value (a bulleted list under `Orientation Facts:`) counts,
+    because the content is on the following line.
+    """
+    for n in names:
+        # Content must follow the colon: inline (`Focus: Lily`) or on a following
+        # line as a bullet (`Orientation Facts:` then `  - The treaty...`).
+        # A bare `Focus:` with nothing after it is an empty field and does not
+        # count — including when the next line is another numbered label.
+        pattern = (rf'^[ \t]*(?:[-*]\s*|\d+[.)]\s*)?\**{re.escape(n)}\**[ \t]*:'
+                   rf'[ \t]*(?:\S'
+                   rf'|\n[ \t]*(?:[-*+][ \t]*\S|\d+[.)][ \t]+(?!'
+                   rf'[\w ]+\**\s*:)[ \t]*\S))')
+        if re.search(pattern, entry, re.IGNORECASE | re.MULTILINE):
+            return True
+    return False
+
 def main():
-    root = paths.get_root_dir()
     outline_path = paths.get_outline_path()
     roadmap_path = paths.get_outline_roadmap_path()
 
@@ -55,7 +142,7 @@ def main():
         voice_part2 = voice
 
     genre_cfg = load_genre()
-    
+    chapters_total = genre_chapters_total() if genre_cfg else 0
     try:
         state = json.loads((paths.get_project_dir() / "state.json").read_text(encoding="utf-8"))
         title = state.get("title", "Untitled Novel")
@@ -63,7 +150,7 @@ def main():
         state = {}
         title = "Untitled Novel"
     total_chapters = (
-        genre_chapters_total()
+        chapters_total
         or int(state.get("chapters_total") or 0)
         or 24
     )
@@ -77,25 +164,44 @@ def main():
             match = re.search(pattern, detailed_section, re.IGNORECASE | re.DOTALL)
             if match:
                 unpolished_chapters[ch] = match.group(0).strip()
-            else:
-                print(f"WARNING: Chapter {ch} not found in outline.md Detailed section during refinement preparation.", file=sys.stderr)
     else:
         print("ERROR: ## DETAILED CHAPTER OUTLINES section not found in outline.md during refinement preparation.", file=sys.stderr)
         sys.exit(1)
 
-    block_size = 10
+    missing_source = [ch for ch in range(1, total_chapters + 1) if ch not in unpolished_chapters]
+    if missing_source:
+        # gen_outline.py writes the detailed section in blocks, so a truncated
+        # or partially-healed part 1 reaches here with the tail absent. Say so
+        # once with the chapter list rather than per chapter: twenty printed
+        # lines buried the rest of the run log and hid that blocks were skipped.
+        print(f"WARNING: {len(missing_source)} of {total_chapters} chapters are absent from "
+              f"the Detailed section (part 1 incomplete): chapters {missing_source}",
+              file=sys.stderr)
+
+    block_size = REFINEMENT_BLOCK_SIZE
     blocks = []
     for start in range(1, total_chapters + 1, block_size):
         end = min(start + block_size - 1, total_chapters)
         blocks.append((start, end))
 
     polished_outlines = {}
+    skipped_blocks = []
+    failed_blocks = []
 
     for start, end in blocks:
+        block_chapters = [ch for ch in range(start, end + 1) if ch in unpolished_chapters]
+        if not block_chapters:
+            # Nothing to refine: spending 3 writer calls on an empty block is
+            # pure waste, and its failure would abort a run over chapters that
+            # were never in this pass to begin with.
+            print(f"SKIP: Block Ch {start}-{end} has no source chapters.", file=sys.stderr)
+            skipped_blocks.append((start, end))
+            continue
+
         print(f"Refining Block Ch {start}-{end}...", file=sys.stderr)
         
         # Build unpolished block text
-        unpolished_block = "\n\n".join(unpolished_chapters[ch] for ch in range(start, end + 1) if ch in unpolished_chapters)
+        unpolished_block = "\n\n".join(unpolished_chapters[ch] for ch in block_chapters)
         
         # Build previous polished context (for local continuity)
         prev_polished = ""
@@ -133,53 +239,143 @@ Focus on:
 FORMAT REQUIREMENT:
 Write the refined outlines in markdown.
 Each chapter outline must start with a heading: "### Chapter N: [Chapter Title]". Do not write any other chapters outside of Chapters {start} through {end}.
+
+**KEEP EVERY FIELD LABEL.** Each chapter must retain these exact lines, in this order, with their values rewritten but the labels themselves spelled exactly as shown:
+1. `Focus: ` (the character the scene is ABOUT)
+2. `MC presence: ` (on-page | off-page)
+3. `Scene type: ` (setup | confrontation | climax | finale)
+4. `Characters: ` (comma-separated)
+5. `Emotional Arc: `
+6. `Summary: `
+7. `Orientation Facts: `
+8. `Scene Stakes: `
+9. `Scene Beats: `
+10. `Plants & Harvests: `
+
+Do NOT fold these fields into prose, drop them, rename them, or replace them with a
+narrative paragraph. Other tooling reads these labels to identify the protagonist, to
+apply the climax length ceiling, and to find each chapter's cast — an outline without
+them is broken, not just terser. Prose that is not under a label is fine; a missing
+label is not.
 """
         block_result = ""
-        for attempt in range(1, 4):
+        last_err = ""
+        for attempt in range(1, REFINEMENT_ATTEMPTS + 1):
             try:
-                res = call_writer(prompt)
+                res = call_writer(prompt, max_tokens=outline_max_tokens(end - start + 1))
             except TruncationError as e:
+                last_err = f"truncated ({e})"
                 print(f"  WARN: Refinement Block Ch {start}-{end} attempt {attempt} truncated ({e}), retrying...", file=sys.stderr)
                 continue
             passed, err = validate_block_output(res, start, end)
             if passed:
                 block_result = res
                 break
-            print(f"  WARN: Refinement Block Ch {start}-{end} failed validation on attempt {attempt}/3: {err}. Retrying...", file=sys.stderr)
+            last_err = err
+            print(f"  WARN: Refinement Block Ch {start}-{end} failed validation on attempt {attempt}/{REFINEMENT_ATTEMPTS}: {err}. Retrying...", file=sys.stderr)
             prompt += f"\n\nERROR ON ATTEMPT {attempt}: {err}\nEnsure you return refined outlines for all chapters from {start} to {end}."
-            
+
         if not block_result:
-            print(f"ERROR: Failed to refine Block Ch {start}-{end}.", file=sys.stderr)
-            sys.exit(1)
+            failed_blocks.append((start, end, last_err))
+            continue
 
         # Parse and save the block chapters to polished_outlines
-        for ch in range(start, end + 1):
+        for ch in block_chapters:
             pattern = rf'###\s*\*?\*?\s*(?:Chapter|Ch\.?)\s*\*?\*?\s*{ch}\b.*?(?=###\s*\*?\*?\s*(?:Chapter|Ch\.?)\s*\*?\*?\s*(?:\d+)\b|## Act|## Foreshadowing|$)'
             match = re.search(pattern, block_result, re.IGNORECASE | re.DOTALL)
             if match:
                 polished_outlines[ch] = match.group(0).strip()
             else:
-                print(f"ERROR: Could not isolate Chapter {ch} refined outline from block output.", file=sys.stderr)
-                sys.exit(1)
+                # The block validated, so this chapter heading exists in raw
+                # form; falling back to the unpolished source keeps the
+                # chapter rather than aborting the whole pass over one heading.
+                polished_outlines[ch] = unpolished_chapters[ch]
+                print(f"  WARN: could not isolate Chapter {ch} from block output; "
+                      f"keeping its unpolished text.", file=sys.stderr)
 
         # Save active block progress in outline.md immediately
         full_outline_text = f"# {title.upper()}\n\n" + roadmap + "\n\n## DETAILED CHAPTER OUTLINES\n\n" + \
                             "\n\n---\n\n".join(polished_outlines[ch] for ch in sorted(polished_outlines.keys()))
         outline_path.write_text(full_outline_text, encoding="utf-8")
 
-    # Final assembly and save
+    # Chapters whose blocks failed keep their unpolished text: the pass adds
+    # foreshadowing and plant tags, it does not author chapters. Shipping the
+    # unpolished versions is what makes a partial refinement usable — but the
+    # caller has to hear about it, because the plant ledger below is what the
+    # reveal retrofit and plant hygiene read.
+    for ch in sorted(unpolished_chapters):
+        polished_outlines.setdefault(ch, unpolished_chapters[ch])
+
+    # Final assembly
     full_outline_text = f"# {title.upper()}\n\n" + roadmap + "\n\n## DETAILED CHAPTER OUTLINES\n\n" + \
                         "\n\n---\n\n".join(polished_outlines[ch] for ch in sorted(polished_outlines.keys()))
+
+    # Post-assembly integrity: the assembled outline must still be parseable by
+    # the tooling that reads it. Refinement dissolved every field label in one
+    # real run, which left the outline textually complete but functionally
+    # broken — the narrator lock resolved no MC (so it silently disabled
+    # itself for all 30 chapters) and the climax ceiling had no `Scene type`
+    # to read. Both failures are invisible downstream and permanent, so they
+    # are checked BEFORE anything is written.
+    #
+    # Order matters. This used to run after three write_text calls, which meant
+    # the guard that exists to protect outline.md was itself overwriting it
+    # with the broken text on the way to failing. On failure the previous
+    # outline is left exactly as it was, so a resume re-reads the good source.
+    lost_final = missing_field_labels(full_outline_text, 1, total_chapters)
+    if lost_final:
+        print(f"ERROR: refined outline lost required field labels — "
+              f"{'; '.join(lost_final[:6])}"
+              f"{' ...' if len(lost_final) > 6 else ''}. "
+              f"The narrator lock and the climax length ceiling both read these "
+              f"labels; an outline without them is unusable. outline.md was "
+              f"NOT modified and the marker was NOT written.", file=sys.stderr)
+        sys.exit(1)
+
+    from core.outline import mc_aliases_for_project
+    if not mc_aliases_for_project(full_outline_text, characters):
+        print(f"ERROR: refined outline yields no protagonist aliases. The "
+              f"first-person narrator lock resolves the MC from these labels "
+              f"and would silently disable itself for the whole book. "
+              f"outline.md was NOT modified and the marker was NOT written.",
+              file=sys.stderr)
+        sys.exit(1)
+
+    # Only now, with both gates passed, does the refined outline replace the
+    # part-1 text on disk.
     outline_path.write_text(full_outline_text, encoding="utf-8")
-    
     # Save a copy as .outline_part1.md for backwards compatibility
     paths.get_outline_part1_path().write_text(full_outline_text, encoding="utf-8")
+
+    if skipped_blocks:
+        print(f"SKIPPED: {len(skipped_blocks)} block(s) had no source chapters: "
+              f"{[f'Ch {a}-{b}' for a, b in skipped_blocks]}", file=sys.stderr)
+
+    missing_after = [ch for ch in range(1, total_chapters + 1)
+                     if ch not in polished_outlines]
+    if failed_blocks or missing_after:
+        # The completion marker is the phase's checkpoint, so it must not claim
+        # a pass that did not finish. The outline above is already on disk with
+        # whatever was polished; leaving the marker unwritten makes the next
+        # resume re-run the polish. Exiting non-zero is deliberate:
+        # `uv_run(check=True)` aborts the foundation phase, because an
+        # unrefined outline is what plant hygiene, the reveal retrofit and the
+        # drafting prompt all read. A skipped block lands here too — a block
+        # with no source chapters means part 1 never wrote them, and reporting
+        # success would let `_foundation_part2_ok` disagree with the marker.
+        detail = "; ".join(f"Ch {a}-{b} ({err})" for a, b, err in failed_blocks) or "none"
+        print(f"ERROR: outline refinement incomplete — {len(failed_blocks)} failed "
+              f"block(s): {detail}. Missing chapters: {missing_after} "
+              f"(skipped blocks: {[f'Ch {a}-{b}' for a, b in skipped_blocks]}). "
+              f"The marker was NOT written.", file=sys.stderr)
+        sys.exit(1)
 
     # Checkpoint marker: the foundation loop skips this pass only when this
     # file exists. Written last, so an interrupted run re-runs the polish.
     paths.get_outline_part2_path().write_text("done\n", encoding="utf-8")
 
-    print("Outline refinement complete!", file=sys.stderr)
+    print(f"Outline refinement complete! ({len(polished_outlines)} chapters)",
+          file=sys.stderr)
 
 if __name__ == "__main__":
     main()

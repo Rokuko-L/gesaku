@@ -52,12 +52,13 @@ def main():
     perspective_line = ""
     perspective = genre.get("perspective", "")
     if perspective == "first_person":
-        perspective_line = ("MANDATORY PERSPECTIVE: The novel is FIRST-PERSON. The world bible must "
-                            "state Kaelen narrates in first-person 'I/me/my'. Do not describe the "
-                            "narration as third-person or limited-third.")
+        perspective_line = ("MANDATORY PERSPECTIVE: The novel is FIRST-PERSON, MC-LOCKED. The world "
+                            "bible must state that \"I/me/my\" is always the main character (narrator). "
+                            "Do not describe the narration as third-person, and do not let side "
+                            "characters become the first-person narrator.")
     elif perspective == "third_person":
         perspective_line = ("MANDATORY PERSPECTIVE: The novel is THIRD-PERSON (close limited). The "
-                            "world bible must state the narration stays in the POV character's head.")
+                            "world bible must state the narration stays in the Focus character's head.")
     prompt = format_prompt(genre["generation"]["gen_world_prompt"], seed=seed, voice_part2=voice_part2)
     if perspective_line:
         prompt = f"{perspective_line}\n\n{prompt}"

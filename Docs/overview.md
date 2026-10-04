@@ -15,18 +15,37 @@ improvements (modify → evaluate → keep/discard).
 core/             Shared library — no pipeline-specific logic
 ├── paths.py        Project root/state resolution, folder+file path helpers
 │                   (incl. per-artifact sidecars), prompt loader, atomic JSON
-├── llm.py          Multi-provider client (call_llm: anthropic + openai
-│                   dialects, any compat endpoint) + response extraction
+├── llm.py          Single-shot client (call_llm) + response extraction.
+│                   Re-imports the base and tool-loop names so core.llm stays
+│                   the documented entry point
+├── llm_base.py     Client base: config tables, timeouts, provider/model
+│                   resolution, HTTP client, llm_events telemetry, SSE/JSON
+│                   response parsing. Imports no sibling llm module
+├── llm_toolwire.py Dialect wire layer for tools: schemas, request building,
+│                   JSON/SSE tool-turn parsing (streamed fragment accumulation)
+├── llm_tools.py    Bounded multi-turn tool loop (call_llm_tools / ToolLoopResult):
+│                   budget stop + harvest, transcript assembly, trace
 ├── json_repair.py  Healing JSON parser (parse_json_response), re-exported by
 │                   llm.py for the documented entry point
 ├── canon.py        Canon.md parse + chapter-scoped writer/judge views;
 │                   sealed foundation (visible_from) + denylist terms
+├── retrieval.py    Host-scoped draft/revision context packs (GESAKU_RETRIEVAL_MODE)
+├── continuity_text.py  Closed-pass continuity text helpers + A↔tool overlap metric
 ├── plant_hygiene.py Outline plant hygiene: pre-reveal leak regex + action-plant
 │                   coverage floor
 ├── micro_plants.py  Prose-emergent micro-plant store (open_callbacks.json) +
-│                   plant↔harvest clustering for the rebuilt ledger
-├── outline.py      Outline text ops: chapter headings, premise beats,
-│                   plants/harvests validation, debt extraction
+│                   plant↔harvest clustering. A harvest may *declare* the
+│                   chapter that set it up; declared beats inferred, and the
+│                   cluster reports which it used
+├── outline.py      Outline text ops: chapter headings, premise beats, Focus
+│                   labels / protagonist aliases, and the single owner of the
+│                   `[Plant: slug - "desc"]` tag format (parse_plant_tags).
+│                   Plants/harvests validation, debt extraction, and
+│                   open_debts_for_chapter
+├── prose.py        Prose guard: cuts an appended notes block or a derail into
+│                   prompt echo, and reports what survives. Also
+│                   narrator_identity_swaps (first_person is MC-locked).
+│                   One module, all write sites
 ├── textstats.py    Context windows (tail/head), repetition detection
 ├── novel_tex.py    Default LaTeX novel.tex template generation
 ├── genre.py        Genre config loader + validator (active_genre.json);
@@ -50,6 +69,8 @@ pipeline/         Orchestration and per-stage tooling
 ├── orientation.py    Outline orientation-fact coverage check
 ├── eval_prompts.py   Judge prompt construction (genre-config driven)
 ├── evaluate.py       Scoring engine: slop + judge + penalties (judge_view)
+├── continuity_closed.py  Deterministic Findings A (no LLM; unequal trust)
+├── continuity_open.py    Bounded tool-using continuity judge (budget=12)
 ├── briefs/           Revision-brief generators, one module per feedback source
 ├── retrofit_reveal.py Post-reveal rewrite of ch 1..R-1 (coverage-gated)
 └── ...               drafting/revision/export stage scripts
@@ -72,7 +93,7 @@ webui/            Operator console: server.py (FastAPI bridge, port 8600)
 
 Root entry points: run_pipeline.py (orchestrator CLI — sequences phases, owns
 the CLI), cli.py (`uv run gesaku` operator console), webui/server.py (FastAPI
-bridge), install_fonts.py, _utf8.py (UTF-8 enforcement shim)
+bridge), install_fonts.py, core/_utf8.py (UTF-8 enforcement shim)
 ```
 
 **Data flow:**
@@ -96,14 +117,18 @@ git keep/discard per attempt, results.tsv score log)
 | [pipeline/spec.md](pipeline/spec.md) | Full pipeline process spec (phases, revision loop) |
 | [pipeline/state-and-git.md](pipeline/state-and-git.md) | state.json, registry, git keep/discard plumbing |
 | [pipeline/scoring-engine.md](pipeline/scoring-engine.md) | How chapters get scored (slop + judge + penalties) |
+| [pipeline/continuity-judge.md](pipeline/continuity-judge.md) | Closed Findings A + bounded open-pass judge |
 | [core/path-resolution.md](core/path-resolution.md) | Project isolation, path helpers, atomic writes |
 | [core/llm-client.md](core/llm-client.md) | API client, retries, truncation, JSON repair |
+| [core/context-retrieval.md](core/context-retrieval.md) | Scoped draft/revision context packs |
 | [core/output-validation.md](core/output-validation.md) | Pydantic schemas for LLM output, self-correction retries |
+| [core/prose-guard.md](core/prose-guard.md) | Cutting non-prose model output (notes blocks, mid-chapter derails) |
 | [core/prompt-management.md](core/prompt-management.md) | prompts/ directory and loader conventions |
 | [systems/mock-testing.md](systems/mock-testing.md) | Testing pipeline code offline with MockLLM |
 | [systems/console-bridge.md](systems/console-bridge.md) | webui FastAPI bridge: endpoints, run instructions, deferred scope |
 | [reference/test-suites.md](reference/test-suites.md) | Offline suite index + how to run |
 | [reference/project-refactor.md](reference/project-refactor.md) | Multi-project refactor record (completed) |
+| [reference/agentic-upgrades.md](reference/agentic-upgrades.md) | Plan of record: scoped retrieval + bounded continuity judge |
 | [reference/archive/](reference/archive/) | Superseded docs (ANTI-PATTERNS.md, program.md, test-infra.md) — historical only |
 
 ## Pipeline Fuel — NOT documentation
@@ -134,3 +159,9 @@ Never treat these as agent docs, never "clean them up":
    owns timeouts and tolerances. Mirror, never re-derive.
 8. Config knobs live in one named table (`timeout_for`, `*_threshold`,
    `*_tolerance`) — no per-call-site magic numbers.
+9. `core.outline.parse_plant_tags` is the single owner of the
+   `[Plant: slug - "desc"]` tag format. Anything that reads or writes plant or
+   harvest tags goes through it — a second regex means two answers.
+10. Non-prose model output is cut at the write site (`core/prose.py`), never
+    patched up afterwards. A derail is rejected; an appended notes block is
+    dropped and the chapter kept.

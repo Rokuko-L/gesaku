@@ -29,9 +29,10 @@ from dotenv import load_dotenv
 from core import canon as canon_mod
 from core import paths
 from core import plant_hygiene
+from core import prose
 from core import outline as outline_mod
 from core import textstats
-from core.genre import load_genre, prose_mode_system_block
+from core.genre import load_genre, perspective_system_block, prose_mode_system_block
 from core.llm import call_llm
 from core.paths import get_novel_title
 
@@ -44,16 +45,8 @@ def call_writer(prompt: str, max_tokens: int = 16000) -> str:
     genre_cfg = load_genre()
     system = genre_cfg["identity"]["revision_system"]
     perspective = genre_cfg.get("perspective", "")
-    if perspective == "first_person":
-        system += (
-            "\n\nMANDATORY PERSPECTIVE: Keep STRICT FIRST-PERSON limited narration "
-            "from the original POV character."
-        )
-    elif perspective == "third_person":
-        system += (
-            "\n\nMANDATORY PERSPECTIVE: Keep STRICT THIRD-PERSON limited narration "
-            "anchored to the original POV character."
-        )
+    if perspective:
+        system += perspective_system_block(perspective)
     system += prose_mode_system_block(genre_cfg)
     return call_llm(
         prompt=prompt,
@@ -184,7 +177,16 @@ def retrofit_chapter(
             file=sys.stderr,
         )
         return False
-    ch_path.write_text(outline_mod.normalize_chapter_heading(result, chapter_num), encoding="utf-8")
+    body = outline_mod.normalize_chapter_heading(result, chapter_num)
+    if prose.needs_redraft(body):
+        print(f"  WARN: ch{chapter_num} retrofit derailed into non-prose; keeping original",
+              file=sys.stderr)
+        return False
+    body = prose.strip_non_prose(body)
+    body, removed = prose.strip_artifacts(body)
+    if removed:
+        print(f"  ARTIFACTS ch{chapter_num}: {removed}", file=sys.stderr)
+    ch_path.write_text(body.rstrip() + "\n", encoding="utf-8")
     print(f"  Saved ch{chapter_num} ({wc}w -> {new_wc}w)", file=sys.stderr)
     return True
 

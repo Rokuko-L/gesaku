@@ -75,6 +75,7 @@ export default function Settings() {
       const payload = {
         baseUrl: settings.baseUrl,
         models: settings.models,
+        agentic: settings.agentic || { retrievalMode: 'dump', judgeToolBudget: 12, requireTools: false },
         thresholds: settings.thresholds,
         heuristics: settings.heuristics,
         defaults: settings.defaults,
@@ -277,8 +278,50 @@ export default function Settings() {
           </div>
         </Quadrant>
 
-        <Quadrant num="04" label="defaults">
+        <Quadrant num="04" label="agentic + defaults">
           <div className="space-y-4">
+            <label className="block">
+              <span className="mb-1 block font-mono text-[10px] text-fog-400">agentic / retrieval_mode</span>
+              <select
+                className={`${input} appearance-none`}
+                value={settings.agentic?.retrievalMode || 'dump'}
+                onChange={(e) =>
+                  setSettings({
+                    ...settings,
+                    agentic: { ...(settings.agentic || {}), retrievalMode: e.target.value },
+                  })
+                }
+              >
+                <option value="dump">dump — full world + characters</option>
+                <option value="scoped">scoped — beat-scoped retrieval pack</option>
+              </select>
+            </label>
+            <Slider
+              label="judge_tool_budget" min={0} max={200} step={1}
+              value={settings.agentic?.judgeToolBudget ?? 12}
+              format={(v) => String(v)}
+              onChange={(v) =>
+                setSettings({
+                  ...settings,
+                  agentic: { ...(settings.agentic || {}), judgeToolBudget: v },
+                })
+              }
+            />
+            <label className="flex items-center gap-3">
+              <input
+                type="checkbox"
+                checked={!!settings.agentic?.requireTools}
+                onChange={(e) =>
+                  setSettings({
+                    ...settings,
+                    agentic: { ...(settings.agentic || {}), requireTools: e.target.checked },
+                  })
+                }
+              />
+              <span className="font-mono text-[10px] text-fog-400">
+                require_tools (fail launch if tool path broken)
+              </span>
+            </label>
             <label className="block">
               <span className="mb-1 block font-mono text-[10px] text-fog-400">default_genre</span>
               <input

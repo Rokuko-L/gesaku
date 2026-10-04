@@ -231,6 +231,60 @@ def prose_mode_system_block(genre_cfg: dict) -> str:
     return f"\n\n=== PROSE MODE ({mode}) ===\n{pack}\n"
 
 
+def perspective_system_block(perspective: str) -> str:
+    """Narrator rules for drafting/revision.
+
+    first_person is MC-locked: "I" is always the protagonist, even when the
+    scene focuses on a side character. Off-MC scenes use a hard-broken
+    third-person interlude rather than inventing a second "I".
+    """
+    if perspective == "first_person":
+        return (
+            "\n\nMANDATORY PERSPECTIVE: STRICT FIRST-PERSON, MC-LOCKED.\n"
+            f"- \"I/me/my\" is ALWAYS the MC. Never write a side character, "
+            "rival, parent, or narrator-as-author as \"I\".\n"
+            "- The outline's Focus field names who the scene is ABOUT. Focus may "
+            "differ from the narrator. Changing Focus never changes who \"I\" is.\n"
+            f"- Focus is the MC (or they are on-page): stay in their live "
+            "first-person interiority.\n"
+            f"- Focus is someone else and the MC is off-page: write a "
+            "THIRD-PERSON INTERLUDE only. Mark it with a hard scene break "
+            "(a line containing only `---`) before and after, and keep it short. "
+            "Do not resume first person inside that interlude.\n"
+            f"- Focus is someone else but the MC is on-page: stay in "
+            f"the MC's \"I\" and render the focus through what they see, "
+            "infer, overhear, and are told. No head-hopping into the other mind."
+        )
+    if perspective == "third_person":
+        return (
+            "\n\nMANDATORY PERSPECTIVE: STRICT THIRD-PERSON close limited.\n"
+            "- Stay in one character's head per scene (the outline Focus). "
+            "Grammar is he/she/they or the character's name — never first person.\n"
+            "- No mid-scene head-hopping. If Focus changes, use a hard scene break."
+        )
+    return ""
+
+
+def perspective_eval_rule(perspective: str) -> str:
+    """Judge-facing variant of the narrator rule."""
+    if perspective == "first_person":
+        return (
+            "\n\nPERSPECTIVE RULE: The novel is mandated FIRST-PERSON, MC-LOCKED. "
+            f"\"I/me/my\" must be the MC in every first-person passage. "
+            "A side character or rival speaking as \"I\" is a hard failure — quote "
+            "the swap. A third-person interlude is allowed only across a hard "
+            "scene break (`---`) when the MC is off-page; flag any other "
+            "third-person leak, and flag first-person returns inside an interlude."
+        )
+    if perspective == "third_person":
+        return (
+            "\n\nPERSPECTIVE RULE: The novel is mandated THIRD-PERSON close limited "
+            "(he/she/they, one head per scene). Flag first-person narration and "
+            "mid-scene head-hops with a quote of the offending passage."
+        )
+    return ""
+
+
 # CLI usage: python genre.py --validate
 if __name__ == "__main__":
     import argparse

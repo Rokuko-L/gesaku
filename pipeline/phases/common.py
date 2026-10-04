@@ -85,9 +85,9 @@ def update_canon_from_eval(ch: int, attempt_num: int = None, eval_log_path=None)
 
 
 def on_chapter_kept(ch: int, reextract: bool = False) -> None:
-    """Fail-soft post-keep hook: extract prose-emergent micro-plants.
+    """Fail-soft post-keep hook: micro-plants + closed continuity pass.
 
-    Never blocks drafting/revision. Distinct from outline-tag `state["debts"]`.
+    Never blocks drafting/revision. Continuity is warn-only.
     """
     script = "pipeline/extract_micro_plants.py"
     cmd = f'"{sys.executable}" {script} {ch}'
@@ -99,6 +99,18 @@ def on_chapter_kept(ch: int, reextract: bool = False) -> None:
             step(f"micro-plant extract skipped for ch{ch} (rc={rep.returncode})")
     except Exception as e:
         step(f"micro-plant extract failed for ch{ch}: {e}")
+
+    # Closed continuity pass — deterministic, warn-only, fail-soft.
+    try:
+        cont_cmd = f'"{sys.executable}" pipeline/continuity_closed.py {ch}'
+        cres = run_tool(cont_cmd, timeout=timeout_for("short"), check=False)
+        if cres.returncode != 0:
+            step(f"continuity_closed skipped for ch{ch} (rc={cres.returncode})")
+    except Exception as e:
+        step(f"continuity_closed failed for ch{ch}: {e}")
+
+    # Open continuity judge is CLI/opt-in until Phase 6 budget data — do not
+    # block keep on a live LLM tool loop. Operators run continuity_open.py.
 
 
 CALLBACKS_SIDECAR = "open_callbacks.json"
@@ -198,6 +210,51 @@ DEFAULT_NEAR_CLEAN_MESSAGE = (
 )
 
 
+def narrator_lock_blocks(eval_log_path) -> bool:
+    """True when the eval recorded narrator identity swaps (first_person hard fail).
+
+    A score tax is not a keep-gate: drafting must refuse keep / near-clean /
+    force-keep when this is true, or a single swap on a strong chapter ships.
+    """
+    if not eval_log_path:
+        return False
+    p = Path(eval_log_path)
+    if not p.exists():
+        return False
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    return bool(data.get("narrator_violations"))
+
+
+def narrator_lock_was_inactive(eval_log_path, first_person: bool = False) -> bool:
+    """True when the eval explicitly recorded that the narrator lock did not run.
+
+    The eval writes `narrator_lock_active` only for a first_person book, and
+    only when the MC could not be identified. An ABSENT flag therefore means
+    "not a first-person chapter, or a log written before the flag existed" —
+    and both are out of scope here, so this returns False and never fires on a
+    third-person book.
+
+    Callers that must also treat a missing flag as a gap (drafting, on a
+    first-person run) pass `first_person=True`.
+    """
+    if not eval_log_path:
+        return False
+    p = Path(eval_log_path)
+    if not p.exists():
+        return False
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    if "narrator_lock_active" in data:
+        return not data.get("narrator_lock_active")
+    # An eval log written before the flag existed. Absence is not a pass.
+    return bool(first_person)
+
+
 def build_eval_feedback(eval_log_path):
     """Build targeted retry feedback from a failed chapter eval JSON.
 
@@ -252,11 +309,27 @@ def build_eval_feedback(eval_log_path):
             "finish every outline beat, and end decisively. Compression beats expansion."
         )
 
+    narrator_penalty = float(data.get("narrator_penalty") or 0.0)
+    narrator_violations = data.get("narrator_violations") or []
+    if narrator_penalty > 0 or narrator_violations:
+        lines.append(
+            "NARRATOR LOCK: this book is first-person and 'I' is ONLY the main "
+            "character. The previous draft named someone else as 'I' (a side "
+            "character, rival, or parent). Fix every one of these — rewrite those "
+            "passages from the MC's voice, or if the MC is off-page use a short "
+            "third-person interlude across a hard '---' scene break. Never invent "
+            "a second first-person narrator."
+        )
+        for v in narrator_violations[:5]:
+            lines.append(f"  - offending: {v}")
+
     # Near-clean detection: the draft missed the keep bar by a hair with
     # negligible mechanical penalties (raw judge score high, tic/slop
     # penalties tiny). In this state a blind retry (draft deleted, fresh
     # generation) regresses — keep the draft instead (observed: ch20 6.4 ->
     # 3.32, 4.5, 3.24; ch13 6.25 -> 4.22).
+    # A narrator swap is never "negligible" — it is the hard failure the
+    # first_person lock exists to stop (v4 ch19).
     try:
         raw_score = float(data.get("raw_judge_score") or 0)
         adjusted_score = float(data.get("overall_score") or 0)
@@ -266,7 +339,8 @@ def build_eval_feedback(eval_log_path):
     tic_penalty = slop.get("prose_tic_penalty") or 0.0
     near_clean = (raw_score >= chapter_threshold()
                   and adjusted_score >= chapter_threshold() - near_clean_margin()
-                  and slop_penalty < 2.0 and tic_penalty < 1.0)
+                  and slop_penalty < 2.0 and tic_penalty < 1.0
+                  and narrator_penalty <= 0 and not narrator_violations)
 
     if not lines:
         # The judge found nothing wrong. A clean eval with empty feedback

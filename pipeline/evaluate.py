@@ -20,6 +20,7 @@ sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
 from core.llm import TruncationError, call_llm, extract_text_from_response, get_max_tokens_with_thinking, parse_json_response
 from core import paths
 from core import textstats
+from core.outline import open_debts_for_chapter
 from core import canon as canon_mod
 import argparse
 import json
@@ -35,7 +36,7 @@ from pathlib import Path
 # Load .env file if present
 from dotenv import load_dotenv
 load_dotenv()
-from core.genre import load_genre
+from core.genre import load_genre, perspective_eval_rule, prose_mode_system_block
 from core import validation
 from pipeline.slop import slop_score
 from pipeline.orientation import check_orientation_facts
@@ -99,11 +100,9 @@ def call_judge(prompt, max_tokens=2000):
     system = genre_cfg["identity"]["evaluator_system"]
     perspective = genre_cfg.get("perspective", "")
     if perspective:
-        expected = "first-person ('I/me/my' narration by the POV character)" if perspective == "first_person" else "third-person limited (he/she/they, anchored to the POV character's head)"
-        system += (f"\n\nPERSPECTIVE RULE: The novel is mandated {expected}. If the chapter drifts "
-                   "out of this narration mode, flag it under prose_quality or voice_adherence "
+        system += perspective_eval_rule(perspective)
+        system += (" Flag any violation under prose_quality or voice_adherence "
                    "with a specific quote of the offending passage.")
-    from core.genre import prose_mode_system_block
     prose_block = prose_mode_system_block(genre_cfg)
     if prose_block:
         system += (prose_block +
@@ -206,21 +205,20 @@ def evaluate_chapter(chapter_num):
     # Reader-knowledge view: public foundation + core + prior As-of. Sealed facts withheld.
     canon_view = canon_mod.judge_view_md(canon_mod.parse_canon(layers["canon"]), chapter_num)
 
-    # Check for active narrative debts to resolve in this chapter
-    chapter_harvests = re.findall(r'\[Harvest:\s*([a-zA-Z0-9_-]+)', chapter_outline, re.IGNORECASE)
+    # Setups the outline opened and never scheduled a payoff for. Same source as
+    # the drafter's, so the judge is told what the drafter was asked to do. The
+    # old code matched this chapter's *harvest* slugs against the debt strings,
+    # which can never be equal — a debt has no harvest anywhere.
     active_debts_to_resolve = []
-    if chapter_harvests:
-        try:
-            state_path = paths.get_project_dir() / "state.json"
-            state = json.loads(state_path.read_text(encoding="utf-8"))
-            debts = state.get("debts", [])
-            for h_slug in chapter_harvests:
-                h_slug_clean = h_slug.strip().lower()
-                for d in debts:
-                    if h_slug_clean in d.lower():
-                        active_debts_to_resolve.append(d)
-        except Exception:
-            pass
+    try:
+        state_path = paths.get_project_dir() / "state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        active_debts_to_resolve = [
+            f"(set up in ch{d['chapter']}) {d['desc']}"
+            for d in open_debts_for_chapter(state.get("debts", []), chapter_num)
+        ]
+    except (OSError, ValueError) as e:
+        print(f"WARN: could not read narrative debts: {e}", file=sys.stderr)
 
     prompt = build_chapter_prompt(
         voice=layers["voice"],
@@ -242,23 +240,17 @@ def evaluate_chapter(chapter_num):
         
         # Word count penalty
         genre_cfg = load_genre()
-        estimated_words = genre_cfg["generation"]["outline"]["estimated_words"]
-        chapter_count = genre_cfg["generation"]["outline"]["estimated_chapters"]
-        target_words = estimated_words // chapter_count
+        estimated_words = genre_cfg["generation"]["outline"]["estimated_words"] or 0
+        chapter_count = max(1, genre_cfg["generation"]["outline"]["estimated_chapters"] or 1)
+        target_words = max(1, estimated_words // chapter_count) if estimated_words else 3200
         actual_words = len(chapter_text.split())
         
         # Word count penalty with climax/finale buffer
         length_penalty = 0.0
         tolerance_min = int(target_words * 0.8)
         
-        is_climax = False
-        if chapter_num == chapter_count:
-            is_climax = True
-        else:
-            if "climax" in chapter_outline.lower() or "battle" in chapter_outline.lower() or "final" in chapter_outline.lower() or "coup" in chapter_outline.lower():
-                is_climax = True
-                
-        if is_climax:
+        from pipeline.pipeline_infra import is_climax_chapter
+        if is_climax_chapter(chapter_num, chapter_count, chapter_outline):
             tolerance_max = int(target_words * 1.55) # ~5,000 words ceiling
             print(f"  [INFO] Climax chapter detected: higher length ceiling allowed ({tolerance_max} words)", file=sys.stderr)
         else:
@@ -279,10 +271,53 @@ def evaluate_chapter(chapter_num):
             adjusted = max(0, adjusted - orientation_penalty)
             print(f"  [ORIENTATION] FAILED: {len(failed_facts)} fact(s) not dramatized: {failed_facts} — penalty: -{orientation_penalty:.2f}", file=sys.stderr)
             result["orientation_failed_facts"] = failed_facts
-            
+
+        # Narrator lock (first_person is MC-locked). Mechanical — a side
+        # character speaking as "I" is a hard craft failure the judge often
+        # praises as "voice of X". Coefficient is high on purpose: v4 ch19
+        # (a full Mira first-person chapter) must not clear the keep bar.
+        narrator_penalty = 0.0
+        narrator_violations: list[str] = []
+        narrator_lock_active = False
+        if genre_cfg.get("perspective") == "first_person":
+            from core.outline import cast_names_from_outline, mc_aliases_for_project
+            from core.prose import narrator_identity_swaps
+            outline_text = ""
+            characters_text = ""
+            try:
+                outline_text = paths.get_outline_path().read_text(encoding="utf-8")
+            except OSError as e:
+                print(f"  [NARRATOR] outline unreadable ({e})", file=sys.stderr)
+            try:
+                characters_text = paths.get_characters_path().read_text(encoding="utf-8")
+            except OSError:
+                pass
+            allowed = mc_aliases_for_project(outline_text, characters_text)
+            if not allowed:
+                # An unidentifiable MC is not a satisfied lock. Record it so
+                # drafting can say the guard was off rather than reporting a
+                # clean chapter as if the narrator had been checked.
+                print("  [NARRATOR] MC UNIDENTIFIED from outline and character "
+                      "registry; lock INACTIVE this chapter", file=sys.stderr)
+            else:
+                narrator_lock_active = True
+                cast = cast_names_from_outline(outline_text)
+                narrator_violations = narrator_identity_swaps(
+                    chapter_text, allowed, cast)
+                if narrator_violations:
+                    narrator_penalty = min(6.0, 2.0 * len(narrator_violations))
+                    adjusted = max(0, adjusted - narrator_penalty)
+                    print(f"  [NARRATOR] {len(narrator_violations)} identity swap(s): "
+                          f"{narrator_violations[:3]} — penalty: -{narrator_penalty:.2f}",
+                          file=sys.stderr)
+            result["narrator_violations"] = narrator_violations
+            result["narrator_lock_active"] = narrator_lock_active
+            result["narrator_mc_aliases"] = sorted(allowed)
+
         print(f"  [LENGTH] {actual_words}/{target_words} words — penalty: -{length_penalty:.2f}", file=sys.stderr)
         result["length_penalty"] = length_penalty
         result["orientation_penalty"] = orientation_penalty
+        result["narrator_penalty"] = narrator_penalty
         result["raw_judge_score"] = result["overall_score"]
         result["overall_score"] = round(adjusted, 2)
 

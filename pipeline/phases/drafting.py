@@ -19,17 +19,20 @@ from pathlib import Path
 from core import paths
 from core.genre import load_genre
 from core.outline import extract_outline_debts
+from core.progress import emit
 
 from pipeline.pipeline_infra import (
-    INFRA_MAX_ATTEMPTS, banner, chapter_threshold, count_words_in_chapters,
-    force_keep_margin, get_total_chapters, git_add_commit, log_result,
+    INFRA_MAX_ATTEMPTS, banner, chapter_length_bounds, chapter_threshold,
+    count_words_in_chapters,
+    force_keep_margin, get_total_chapters, git_add_commit, is_climax_chapter,
+    log_result,
     max_chapter_attempts, near_clean_margin, parse_score,
     resolve_chapters_total, run_tool, save_state, step, store_novel_score,
     timeout_for, uv_run,
 )
 from pipeline.phases.common import (
-    build_eval_feedback, on_chapter_kept, resync_canon_after_cycle,
-    update_canon_from_eval,
+    build_eval_feedback, narrator_lock_blocks, narrator_lock_was_inactive,
+    on_chapter_kept, resync_canon_after_cycle, update_canon_from_eval,
 )
 
 
@@ -87,12 +90,16 @@ def run_drafting(state: dict) -> dict:
     # a chapter is structurally broken — 100 bytes (~15 words) is not a draft).
     try:
         genre_cfg = load_genre()
-        est_words = genre_cfg["generation"]["outline"]["estimated_words"]
-        target_words = est_words // total
+        est_words = genre_cfg["generation"]["outline"]["estimated_words"] or 0
+        total_est = max(1, genre_cfg["generation"]["outline"]["estimated_chapters"] or 1)
+        target_words = (est_words // total_est) if est_words else 3200
     except (KeyError, ZeroDivisionError):
         target_words = 3200
-    min_words = int(target_words * 0.6)
-    step(f"Chapter target: ~{target_words} words (min acceptable draft: {min_words})")
+    min_words, max_words = chapter_length_bounds(
+        target_words, is_climax=False
+    )
+    # Per-chapter climax band is applied inside the loop (last chapter / outline).
+    step(f"Chapter target: ~{target_words} words (accept band: {min_words}-{max_words})")
 
     # Hard floor for force-keeping a failed chapter: below this we skip and record,
     # we do NOT ship sub-garbage as canon.
@@ -102,8 +109,40 @@ def run_drafting(state: dict) -> dict:
 
     chapters_dir = paths.get_chapters_dir()  # also creates the directory
 
+    # Only a first_person book has a narrator lock to be inactive. The eval
+    # writes `narrator_lock_active` for first_person ONLY, so asking the
+    # question unconditionally reports a false failure on every third-person
+    # book — which is most of them.
+    try:
+        _is_first_person = load_genre().get("perspective") == "first_person"
+    except Exception:
+        _is_first_person = False
+
+    # Chapters whose narrator lock never ran. Summarised once at the end of the
+    # phase — a per-chapter line into a log nobody reads is how a whole book
+    # shipped with the guard off without anyone noticing.
+    inactive_lock_chapters: list[int] = []
+
     for ch in range(start_chapter, total + 1):
         banner(f"Drafting Chapter {ch}/{total}", "-")
+        _outline_entry = ""
+        try:
+            from core.outline import extract_chapter_outline
+            _outline_entry = extract_chapter_outline(
+                (paths.get_outline_path().read_text(encoding="utf-8")
+                 if paths.get_outline_path().exists() else ""),
+                ch,
+            )
+        except (OSError, ValueError) as e:
+            step(f"outline entry for ch{ch} unavailable ({e}); climax band from position only")
+        _climax = is_climax_chapter(ch, total, _outline_entry)
+        min_words, max_words = chapter_length_bounds(target_words, is_climax=_climax)
+        # A chapter is 2-5 minutes of drafting plus eval, which is long enough
+        # to look hung without a marker. Announce the band up front so a reader
+        # can see what the run is aiming for while it is still working.
+        emit("chapter_start", chapter=ch, chapters_total=total,
+             target_words=target_words, band=[min_words, max_words],
+             climax=_climax)
         drafted = False
         best_score = -1.0
         best_draft_content = None
@@ -117,6 +156,7 @@ def run_drafting(state: dict) -> dict:
             step(f"Attempt {attempt}/{max_attempts}")
             # Inner infra-retry loop: timeouts, empty files, and truncations don't burn quality attempts
             quality_attempt = False
+            length_fix_sent = False
             for infra in range(1, INFRA_MAX_ATTEMPTS + 1):
                 cmd = f"\"{sys.executable}\" pipeline/draft_chapter.py {ch}"
                 if retry_feedback:
@@ -141,21 +181,44 @@ def run_drafting(state: dict) -> dict:
                     # Chronic undershoot (observed: 15 consecutive Ch-1 drafts
                     # below the floor). Retry with explicit expansion numbers —
                     # a bare "too short" gives the writer nothing to act on.
-                    step(f"Chapter too short ({word_count}w < {min_words}w minimum), "
-                         f"retrying with expansion budget...")
-                    genre_cfg = load_genre()
-                    target = (genre_cfg["generation"]["outline"]["estimated_words"]
-                              // max(genre_cfg["generation"]["outline"]["estimated_chapters"], 1))
-                    shortfall = target - word_count
-                    retry_feedback = (
-                        f"LENGTH FIX REQUIRED: your previous draft was only {word_count} words; "
-                        f"the target is ~{target} words (shortfall: {shortfall}).\n"
-                        f"Do NOT add filler or summarize faster. Instead: expand EVERY scene beat "
-                        f"to full scene treatment — dramatize the beats you compressed, add sensory "
-                        f"detail, physical action, and real-time interiority per beat. "
-                        f"Aim for at least {min_words} words this time."
-                    )
-                    continue
+                    # After one expand retry, accept the draft so a persistently
+                    # short model cannot leave a hole in the manuscript (B6).
+                    if not length_fix_sent:
+                        step(f"Chapter too short ({word_count}w < {min_words}w minimum), "
+                             f"retrying with expansion budget...")
+                        shortfall = target_words - word_count
+                        retry_feedback = (
+                            f"LENGTH FIX REQUIRED: your previous draft was only {word_count} words; "
+                            f"the target is ~{target_words} words (shortfall: {shortfall}).\n"
+                            f"Do NOT add filler or summarize faster. Instead: expand EVERY scene beat "
+                            f"to full scene treatment — dramatize the beats you compressed, add sensory "
+                            f"detail, physical action, and real-time interiority per beat. "
+                            f"Aim for at least {min_words} words this time."
+                        )
+                        length_fix_sent = True
+                        continue
+                    step(f"Accepting short draft ({word_count}w) after expansion retry")
+                    quality_attempt = True
+                    break
+                if word_count > max_words:
+                    # v5 ch19 shipped at 5.6k against a ~3.5k target. Compress
+                    # before the judge ever sees it — but only once; after that
+                    # the length penalty at eval owns the call (no silent hole).
+                    if not length_fix_sent:
+                        step(f"Chapter too long ({word_count}w > {max_words}w maximum), "
+                             f"retrying with compression budget...")
+                        retry_feedback = (
+                            f"LENGTH FIX REQUIRED: your previous draft was {word_count} words; "
+                            f"the maximum acceptable is {max_words} words (target ~{target_words}).\n"
+                            f"Compress WITHOUT dropping any scene beat: cut recap, repeated "
+                            f"setup, and double-explained jokes. Keep every beat's decisive "
+                            f"action and the chapter ending. Land at or under {max_words} words."
+                        )
+                        length_fix_sent = True
+                        continue
+                    step(f"Accepting long draft ({word_count}w) after compression retry")
+                    quality_attempt = True
+                    break
 
                 quality_attempt = True
                 break
@@ -200,139 +263,165 @@ def run_drafting(state: dict) -> dict:
                 attempt_log_paths[attempt] = eval_log_path
 
             if score >= chapter_gate:
-                fb_path = paths.get_retry_feedback_path(ch)
-                fb_path.unlink(missing_ok=True)
-                commit_hash = git_add_commit(
-                    f"ch{ch:02d}: score {score}, {word_count}w")
-                log_result(commit_hash, f"ch{ch:02d}", score, word_count,
-                           "keep", f"Chapter {ch} (attempt {attempt})")
-                state["chapters_drafted"] = ch
-                save_state(state)
-
-                # Append canon entries from the eval JSON LOG FILE
-                update_canon_from_eval(ch, attempt_num=attempt, eval_log_path=eval_log_path)
-                on_chapter_kept(ch)
-                _maybe_run_reveal_retrofit(state, ch)
-
-                drafted = True
-                break
-            else:
-                if score > best_score:
-                    best_score = score
-                    best_draft_content = ch_file.read_text(encoding="utf-8")
-                    best_word_count = word_count
-                    best_attempt_num = attempt
-                    step(f"New best fallback score for Ch {ch}: {score}")
-
-                step(f"Score {score} < {chapter_gate}, discarding attempt")
-                log_result("discarded", f"ch{ch:02d}", score, word_count,
-                           "discard", f"Chapter {ch} attempt {attempt}")
-                # Feed the judge's findings back into the next attempt
-                retry_feedback, near_clean = build_eval_feedback(eval_log_path)
-                if retry_feedback:
-                    step(f"Built retry feedback for Ch {ch} attempt {attempt + 1} "
-                         f"({len(retry_feedback)} chars)")
-
-                if near_clean:
-                    # The draft missed the keep bar by a hair with negligible
-                    # mechanical penalties. Retrying means deleting this draft
-                    # and generating blind — which regresses (observed: ch20
-                    # 6.4 -> 3.32/4.5/3.24, ch13 6.25 -> 4.22). Keep it.
-                    raw_note = ""
-                    if eval_log_path and eval_log_path.exists():
-                        try:
-                            raw_note = str(json.loads(
-                                eval_log_path.read_text(encoding="utf-8")
-                            ).get("raw_judge_score", "?"))
-                        except Exception:
-                            raw_note = "?"
-                    step(f"NEAR-CLEAN eval (raw {raw_note}) — keeping Ch {ch} at {score} "
-                         f"instead of retrying")
+                narrator_blocked = narrator_lock_blocks(eval_log_path)
+                if not narrator_blocked:
+                    if (_is_first_person
+                            and narrator_lock_was_inactive(eval_log_path,
+                                                           first_person=True)):
+                        # A first-person book whose MC cannot be identified is
+                        # NOT narrator-checked. This fired in one real run for
+                        # all 30 chapters and nobody saw it: the message was
+                        # correct but repeated per-chapter into a log nobody
+                        # reads, so the run reported 7.67 with the guard off.
+                        # Count it, say it once, and record it in state so it
+                        # survives the run and is visible to an operator.
+                        inactive_lock_chapters.append(ch)
+                        step(f"WARNING: NARRATOR LOCK INACTIVE for Ch {ch} — the "
+                             f"protagonist is not identifiable from the outline or "
+                             f"character registry, so this chapter was NOT checked "
+                             f"for narrator identity swaps")
+                        emit("narrator_lock_inactive", chapter=ch,
+                             chapters_total=total)
+                    fb_path = paths.get_retry_feedback_path(ch)
+                    fb_path.unlink(missing_ok=True)
                     commit_hash = git_add_commit(
-                        f"ch{ch:02d}: near-clean keep, score {score}, {word_count}w")
+                        f"ch{ch:02d}: score {score}, {word_count}w")
                     log_result(commit_hash, f"ch{ch:02d}", score, word_count,
-                               "keep", f"Chapter {ch} (near-clean keep, attempt {attempt})")
+                               "keep", f"Chapter {ch} (attempt {attempt})")
                     state["chapters_drafted"] = ch
                     save_state(state)
+
+                    # Append canon entries from the eval JSON LOG FILE
                     update_canon_from_eval(ch, attempt_num=attempt, eval_log_path=eval_log_path)
                     on_chapter_kept(ch)
                     _maybe_run_reveal_retrofit(state, ch)
+
                     drafted = True
                     break
+                step(f"Score {score} >= gate but NARRATOR LOCK — refusing keep")
 
-                # TARGETED SLOP REPAIR: if the draft's content is fine (high raw
-                # judge score) but mechanical slop penalties dragged it under the
-                # bar, repair the flagged paragraphs IN PLACE instead of throwing
-                # the draft away and regenerating blind (which regresses raw
-                # quality — observed ch15 8.5-raw attempts bouncing 6.26->3.39).
-                if not slop_repaired and eval_log_path and eval_log_path.exists():
+            if score > best_score:
+                best_score = score
+                best_draft_content = ch_file.read_text(encoding="utf-8")
+                best_word_count = word_count
+                best_attempt_num = attempt
+                step(f"New best fallback score for Ch {ch}: {score}")
+
+            step(f"Score {score} vs gate {chapter_gate} — not keeping (narrator_block="
+                 f"{narrator_lock_blocks(eval_log_path)})")
+            log_result("discarded", f"ch{ch:02d}", score, word_count,
+                       "discard", f"Chapter {ch} attempt {attempt}")
+            # Feed the judge's findings back into the next attempt
+            retry_feedback, near_clean = build_eval_feedback(eval_log_path)
+            if retry_feedback:
+                step(f"Built retry feedback for Ch {ch} attempt {attempt + 1} "
+                     f"({len(retry_feedback)} chars)")
+
+            if near_clean and not narrator_lock_blocks(eval_log_path):
+                # The draft missed the keep bar by a hair with negligible
+                # mechanical penalties. Retrying means deleting this draft
+                # and generating blind — which regresses (observed: ch20
+                # 6.4 -> 3.32/4.5/3.24, ch13 6.25 -> 4.22). Keep it.
+                raw_note = ""
+                if eval_log_path and eval_log_path.exists():
                     try:
-                        ev = json.loads(eval_log_path.read_text(encoding="utf-8"))
-                        raw_judge = ev.get("raw_judge_score", 0) or 0
-                        slop = ev.get("slop") or {}
-                        mech = (slop.get("slop_penalty", 0) or 0) + (slop.get("prose_tic_penalty", 0) or 0)
+                        raw_note = str(json.loads(
+                            eval_log_path.read_text(encoding="utf-8")
+                        ).get("raw_judge_score", "?"))
                     except Exception:
-                        raw_judge, mech = 0, 0
-                    if raw_judge >= 7.0 and mech >= 1.5 and raw_judge - score >= 1.0:
-                        slop_repaired = True
-                        step(f"SLOP-DOMINANT eval (raw {raw_judge}, mech -{mech:.1f}) — "
-                             f"repairing Ch {ch} in place instead of regenerating")
-                        rep = run_tool(
-                            f"\"{sys.executable}\" pipeline/repair_slop.py {ch}",
-                            timeout=timeout_for("standard"), check=False)
-                        if rep.returncode == 0:
-                            rep_wc = len(ch_file.read_text(encoding="utf-8").split())
-                            step(f"Repaired Ch {ch} ({rep_wc}w) — re-evaluating...")
-                            rep_eval = uv_run(f"pipeline/evaluate.py --chapter={ch}", timeout=timeout_for("standard"))
-                            try:
-                                rep_score = parse_score(rep_eval.stdout, "overall_score")
-                            except ValueError as e:
-                                step(f"WARNING: repair re-eval unparseable for Ch {ch} ({e}) — "
-                                     f"keeping pre-repair draft as fallback")
-                                rep_score = score
-                            step(f"Repaired Ch {ch} score: {rep_score}")
-                            if rep_score >= chapter_gate:
-                                step(f"Repair lifted Ch {ch} over the bar — keeping")
-                                fb_path = paths.get_retry_feedback_path(ch)
-                                fb_path.unlink(missing_ok=True)
-                                commit_hash = git_add_commit(
-                                    f"ch{ch:02d}: slop-repair keep, score {rep_score}, {rep_wc}w")
-                                log_result(commit_hash, f"ch{ch:02d}", rep_score, rep_wc,
-                                           "keep", f"Chapter {ch} (slop repair, attempt {attempt})")
-                                state["chapters_drafted"] = ch
-                                save_state(state)
-                                update_canon_from_eval(ch, attempt_num=attempt, eval_log_path=eval_log_path)
-                                on_chapter_kept(ch)
-                                _maybe_run_reveal_retrofit(state, ch)
-                                drafted = True
-                                break
-                            elif rep_score > best_score and rep_score > 0:
-                                best_score = rep_score
-                                best_draft_content = ch_file.read_text(encoding="utf-8")
-                                best_word_count = rep_wc
-                                best_attempt_num = attempt
-                                step(f"Repaired Ch {ch} is new best fallback: {rep_score}")
+                        raw_note = "?"
+                step(f"NEAR-CLEAN eval (raw {raw_note}) — keeping Ch {ch} at {score} "
+                     f"instead of retrying")
+                commit_hash = git_add_commit(
+                    f"ch{ch:02d}: near-clean keep, score {score}, {word_count}w")
+                log_result(commit_hash, f"ch{ch:02d}", score, word_count,
+                           "keep", f"Chapter {ch} (near-clean keep, attempt {attempt})")
+                state["chapters_drafted"] = ch
+                save_state(state)
+                update_canon_from_eval(ch, attempt_num=attempt, eval_log_path=eval_log_path)
+                on_chapter_kept(ch)
+                _maybe_run_reveal_retrofit(state, ch)
+                drafted = True
+                break
 
-                # Remove the bad chapter file so next attempt starts fresh
-                if ch_file.exists():
-                    rel_path = f"chapters/ch_{ch:02d}.md"
-                    res = subprocess.run(
-                        shlex.split(f"git ls-files --error-unmatch {rel_path}"),
-                        cwd=str(paths.get_project_dir()),
-                        capture_output=True,
-                        text=True,
-                        shell=False
-                    )
-                    if res.returncode == 0:
-                        run_tool(f"git checkout -- {rel_path}", cwd=str(paths.get_project_dir()))
-                    else:
-                        ch_file.unlink(missing_ok=True)
+            # TARGETED SLOP REPAIR: if the draft's content is fine (high raw
+            # judge score) but mechanical slop penalties dragged it under the
+            # bar, repair the flagged paragraphs IN PLACE instead of throwing
+            # the draft away and regenerating blind (which regresses raw
+            # quality — observed ch15 8.5-raw attempts bouncing 6.26->3.39).
+            if (not slop_repaired and not narrator_lock_blocks(eval_log_path)
+                    and eval_log_path and eval_log_path.exists()):
+                try:
+                    ev = json.loads(eval_log_path.read_text(encoding="utf-8"))
+                    raw_judge = ev.get("raw_judge_score", 0) or 0
+                    slop = ev.get("slop") or {}
+                    mech = (slop.get("slop_penalty", 0) or 0) + (slop.get("prose_tic_penalty", 0) or 0)
+                except Exception:
+                    raw_judge, mech = 0, 0
+                if raw_judge >= 7.0 and mech >= 1.5 and raw_judge - score >= 1.0:
+                    slop_repaired = True
+                    step(f"SLOP-DOMINANT eval (raw {raw_judge}, mech -{mech:.1f}) — "
+                         f"repairing Ch {ch} in place instead of regenerating")
+                    rep = run_tool(
+                        f"\"{sys.executable}\" pipeline/repair_slop.py {ch}",
+                        timeout=timeout_for("standard"), check=False)
+                    if rep.returncode == 0:
+                        rep_wc = len(ch_file.read_text(encoding="utf-8").split())
+                        step(f"Repaired Ch {ch} ({rep_wc}w) — re-evaluating...")
+                        rep_eval = uv_run(f"pipeline/evaluate.py --chapter={ch}", timeout=timeout_for("standard"))
+                        try:
+                            rep_score = parse_score(rep_eval.stdout, "overall_score")
+                        except ValueError as e:
+                            step(f"WARNING: repair re-eval unparseable for Ch {ch} ({e}) — "
+                                 f"keeping pre-repair draft as fallback")
+                            rep_score = score
+                        step(f"Repaired Ch {ch} score: {rep_score}")
+                        if rep_score >= chapter_gate:
+                            step(f"Repair lifted Ch {ch} over the bar — keeping")
+                            fb_path = paths.get_retry_feedback_path(ch)
+                            fb_path.unlink(missing_ok=True)
+                            commit_hash = git_add_commit(
+                                f"ch{ch:02d}: slop-repair keep, score {rep_score}, {rep_wc}w")
+                            log_result(commit_hash, f"ch{ch:02d}", rep_score, rep_wc,
+                                       "keep", f"Chapter {ch} (slop repair, attempt {attempt})")
+                            state["chapters_drafted"] = ch
+                            save_state(state)
+                            update_canon_from_eval(ch, attempt_num=attempt, eval_log_path=eval_log_path)
+                            on_chapter_kept(ch)
+                            _maybe_run_reveal_retrofit(state, ch)
+                            drafted = True
+                            break
+                        elif rep_score > best_score and rep_score > 0:
+                            best_score = rep_score
+                            best_draft_content = ch_file.read_text(encoding="utf-8")
+                            best_word_count = rep_wc
+                            best_attempt_num = attempt
+                            step(f"Repaired Ch {ch} is new best fallback: {rep_score}")
+
+            # Remove the bad chapter file so the next attempt starts fresh.
+            # This runs on every non-kept attempt, not just the slop-repair
+            # path — the retry is a fresh generation, so the previous draft
+            # must not survive into it.
+            if ch_file.exists() and not drafted:
+                rel_path = f"chapters/ch_{ch:02d}.md"
+                res = subprocess.run(
+                    shlex.split(f"git ls-files --error-unmatch {rel_path}"),
+                    cwd=str(paths.get_project_dir()),
+                    capture_output=True,
+                    text=True,
+                    shell=False
+                )
+                if res.returncode == 0:
+                    run_tool(f"git checkout -- {rel_path}", cwd=str(paths.get_project_dir()))
+                else:
+                    ch_file.unlink(missing_ok=True)
 
         if not drafted:
             force_worthy = (
                 best_draft_content is not None
                 and best_score >= force_keep_floor
                 and best_word_count >= min_words
+                and not narrator_lock_blocks(attempt_log_paths.get(best_attempt_num))
             )
             if force_worthy:
                 step(f"WARNING: Chapter {ch} failed all {max_attempts} attempts, "
@@ -367,6 +456,41 @@ def run_drafting(state: dict) -> dict:
                     skipped.append(ch)
                 state["skipped_chapters"] = skipped
                 save_state(state)
+        emit("chapter_done", chapter=ch, chapters_total=total,
+             drafted=drafted, score=best_score if not drafted else None,
+             best_score=round(best_score, 2) if best_score > 0 else None,
+             words=best_word_count if best_word_count else None)
+
+    # One loud summary, and it outlives the run in state.json.
+    #
+    # MERGED with any record from an earlier invocation, never replaced by it.
+    # A resumed run drafts only the chapters that remain, so its local list is
+    # a suffix; overwriting would erase the chapters a previous pass recorded —
+    # losing exactly the evidence the record exists to keep.
+    prior = state.get("narrator_lock_inactive_chapters") or []
+    combined = sorted({int(c) for c in prior} | set(inactive_lock_chapters))
+    if combined and _is_first_person:
+        state["narrator_lock_inactive_chapters"] = combined
+        save_state(state)
+        banner("NARRATOR LOCK DID NOT RUN", "!")
+        step(f"WARNING: {len(combined)} chapter(s) were NOT checked for "
+             f"narrator identity swaps (chapters {combined[:12]}"
+             f"{'...' if len(combined) > 12 else ''}).")
+        step("The protagonist could not be identified from the outline or the "
+             "character registry, so `I am <other character>` would ship "
+             "unchecked. This is recorded in state.json as "
+             "narrator_lock_inactive_chapters.")
+        emit("narrator_lock_inactive_summary",
+             chapters=len(combined), total=total)
+    elif not _is_first_person:
+        # Not a first-person book: there is no narrator lock, so there is
+        # nothing to report and nothing to erase.
+        state.pop("narrator_lock_inactive_chapters", None)
+    else:
+        # First person, and the lock ran for every chapter this pass. A prior
+        # record still stands — it described chapters this pass did not revisit.
+        state.pop("narrator_lock_inactive_chapters", None)
+        save_state(state)
 
     # All chapters drafted
     state["phase"] = "revision"

@@ -9,34 +9,49 @@ uv run python -m unittest discover -s tests -p "test_*.py"
 `tests/` is the offline suite. A test that needs a real LLM belongs in the
 E2E layer, not here.
 
-## `unittest` modules (186 tests)
+**Start with `tests/test_e2e_craft_guards.py`** for the narrator-lock / refrain
+/ length-band rules (the v4/v5 craft failures). The per-module suites below
+are regression locks for specific bugs — dense on purpose.
+
+## `unittest` modules
 
 | Suite | Tests | Covers |
 |---|---|---|
+| `tests/test_e2e_craft_guards.py` | 46 | Focus vs narrator split (MC-locked first person, v4 ch19 Mira hop, generator-template Focus parsing, dialogue/italic/single-quote/possessive skips, stray-quote and Unicode/hyphen names, rival-alias leak, narrator keep-gate, shouted all-caps interiority spared, bare-given-name and cast-name swaps still caught, role/place cast entries cannot launder personification), legacy Focus-less outline MC resolution (Characters-line + registry-entry-#1 fallback, foil/subheading/role-prefix rejection, cast set, first-listed tie-break), inactive-vs-satisfied lock state incl. third-person silence, refrain ban ("the plan can wait", proper nouns spared), length band (v5 ch19 oversize, label-only climax ceiling) |
 | `tests/test_refactor_smoke.py` | 21 | pipeline invariants: genre owns chapter count, best-novel peak tracking, foundation checkpoint skip, named timeout budgets, tolerance policy, LLM-output schemas, prompt loading, `run_tool` timeout semantics, callback/chapter coupling |
 | `tests/test_canon_scoping.py` | 20 | sealed foundation views, As-of chapter filter, denylist terms, fail-closed malformed tags |
-| `tests/test_micro_plants.py` | 16 | micro-plant store: add/harvest/expire, near-dup + plant↔harvest clustering |
-| `tests/test_provider_llm.py` | 14 | wire format per dialect over `httpx.MockTransport` (URL, auth, payload, truncation parity) |
+| `tests/test_micro_plants.py` | 27 | micro-plant store: add/harvest/expire, near-dup + plant↔harvest clustering, the lifecycle guards (a payoff before its own plant is refused, an expired plant can still be harvested, `expire_stale` honours the stored `window`, idempotent marking), and the extract contract: an over-long plant truncates instead of failing the response, an unbroken token still validates, and a schema failure retries with feedback before giving up softly |
+| `tests/test_plant_tags.py` | 18 | the single owner of the `[Plant:]`/`[Harvest:]` tag format: every tag shape, wrapping quotes vs possessives, the preamble/roadmap split, parser↔validator↔debt agreement, and debt delivery to the drafter |
+| `tests/test_hygiene_names.py` | 14 | required-character derivation: the pronoun "I" and power-tier tokens excluded, word-boundary registry matching, canon terminology ("the Law", "Law III") excluded, single-letter names kept, and the floor-at-1 decision on real data |
+| `tests/test_prose_integrity.py` | 33 | the prose guard: the real ch_20 derail cut to a fragment, notes trailers in all four heading dresses, the bare-"Notes" false positive, first-person deliberation left alone, and the v5 artifacts — `## BEAT`/`**Beat 2**` headings dropped, all four foreign-script words removed, orphaned punctuation tidied, the chapter's own title kept even at line 1, and the nine prose sentences an earlier pattern deleted whole (`Part 2 of my plan was to wait.`, `Scene 4 was the worst of them.`, …) now surviving |
+| `tests/test_ledger_payload.py` | 11 | ledger rows: no row called `matched` without both ends, orphans not reported as paid, span from earliest plant to latest payoff, `settled` from the finish state |
+| `tests/test_attribution.py` | 11 | the attribution pass with a stubbed judge: prompt contents, ordering/invented chapters refused, unusable output degrading to no attribution, short answers padded |
+| `tests/test_provider_llm.py` | 18 | wire format per dialect over `httpx.MockTransport` (URL, auth, payload, truncation parity, empty-200 retry — with and without a stop reason) |
 | `tests/test_scoring_guards.py` | 13 | keep/discard guards through the real foundation loop |
 | `tests/test_utils.py` | 12 | path helpers, project state, atomic registry writes |
 | `tests/test_llm_telemetry.py` | 11 | `llm_events.jsonl` emission + usage/stop-reason extraction from SSE streams and both dialects' key names |
 | `tests/test_plant_coverage.py` | 10 | pre-reveal outline leak regex + action-plant coverage floor |
+| `tests/test_declared_plants.py` | 8 | a declared payoff↔plant link beats token inference, survives unrelated wording, still obeys ordering, and reads back off the outline bullet |
 | `tests/test_mock_llm.py` | 8 | mock harness + validation-retry integration |
+| `tests/test_retrieval.py` | 18 | host-scoped packs: mode, terms, parent→child sections, sealed-pack, fallback flags, named budgets |
+| `tests/test_llm_tools.py` | 27 | tool substrate: dialect payloads, streamed fragment accumulation incl. two-tool interleaving and index-less frames (Anthropic `input_json_delta`, OpenAI `tool_calls`), budget harvest shape, transport retry, stripped gateway, budget 0, executor errors, preflight, named budget=12 |
+| `tests/test_continuity_closed.py` | 19 | closed continuity: trust map, seal policy (no frame noise), overlap structured match + denominator, tag scan (incl. apostrophe slugs), loaded-vs-checked reporting, smoke |
+| `tests/test_continuity_open.py` | 6 | open-pass mock loop, budget stop, path escape (sibling prefix), overlap |
 | `tests/test_epub_export.py` | 7 | EPUB build + structural validation (zip layout, OPF/spine/nav/NCX targets, escaping, stable identifier) and the export/CLI wiring |
 | `tests/test_multi_project.py` | 6 | project-dir/state isolation, registry atomicity, path-traversal guard, from-scratch cleanup |
-| `tests/test_run_manager.py` | 6 | bridge liveness: dead pid is not our run, stale `run.json` is dropped, tree-kill guards |
+| `tests/test_run_manager.py` | 8 | bridge liveness: dead pid is not our run, stale `run.json` is dropped, tree-kill guards |
 | `tests/test_utils_stress.py` | 6 | concurrency + traversal edge cases |
-| `tests/test_webui_server.py` | 5 | bridge import smoke, `norm_phase`, `_mask`, `llm_event_view` (+ producer-source guard) |
-| `tests/test_export_restore.py` | 4 | the export peak restore: extra chapters dropped, plant store restored, orphan store dropped |
+| `tests/test_webui_server.py` | 13 | bridge import smoke, `norm_phase`, `_mask`, `llm_event_view` (+ producer-source guard) |
+| `tests/test_webui_settings_agentic.py` | 12 | Settings `agentic` knobs: GET defaults/env, POST .env write, invalid mode/budget rejected (string and fractional float) |
+| `tests/test_export_restore.py` | 9 | the export peak restore (extra chapters dropped, plant store restored, orphan store dropped) + PDF em-dash treatment (three production bugs) |
 | `tests/test_gatekeepers.py` | 4 | outline gatekeepers execute for real — drift verdicts block/pass, short books skip without LLM calls |
 | `tests/test_path_contamination.py` | 4 | cross-project leakage, root cleanliness, registry placement |
 | `tests/test_retrofit_gate.py` | 4 | retrofit coverage block + non-blocking continuity report |
 | `tests/test_import_integrity.py` | 3 | AST-scans every import statement (incl. lazy function-level ones) resolves; enforces the `core <- foundation/pipeline` direction |
 | `tests/test_revert_behavior.py` | 3 | results.tsv best-commit lookup + both revert branches, against a throwaway git repo |
-| `tests/test_encoding_healing.py` | 2 | UTF-16/latin-1 self-heal |
 | `tests/test_static_analysis.py` | 2 | ruff F821/F811 gate + single entry-point `main()` per entry file |
 | `tests/test_tee_flush.py` | 2 | the Tee'd pipeline log is readable before close; a dead log handle cannot kill a run |
-| `tests/test_json_repair.py` | 1 | damaged-JSON healing layers (one subtest per malformed payload) |
+| `tests/test_json_repair.py` | 3 | damaged-JSON healing layers + UTF-16/latin-1 source self-heal in `evaluate.load_file` |
 
 Some of these files also keep a `main()` so they can be run directly; the
 `TestCase` is what CI discovers. `tests/` is scanned by

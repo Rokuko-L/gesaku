@@ -17,7 +17,7 @@ from core import paths
 import os
 
 from core.genre import load_genre
-from core.llm import llm_timeout
+from core.llm import REFINEMENT_ATTEMPTS, REFINEMENT_BLOCK_SIZE, llm_timeout
 from core.outline import (
     extract_outline_debts, validate_plants_harvests, validate_premise_beats,
 )
@@ -28,6 +28,29 @@ from pipeline.pipeline_infra import (
     git_reset_hard, load_state, log_result, parse_lore_score, parse_score,
     resolve_chapters_total, save_state, step, timeout_for, uv_run,
 )
+
+
+def _refinement_subprocess_cap(state: dict) -> int:
+    """Subprocess cap for gen_outline_part2, derived the same way as part 1.
+
+    That pass refines `REFINEMENT_BLOCK_SIZE` chapters per writer call, up to
+    `REFINEMENT_ATTEMPTS` calls per block, at the standard budget. At the
+    default budgets that is 900 s per block, so the `xlong` floor covers up to
+    40 chapters (24 chapters -> 3 blocks -> 2700 s, floor wins; 41 -> 4500 s,
+    the product wins). A long book at v5's 3000 s per-call budget scales to
+    90 000 s at 100 chapters.
+
+    The block size is read from the shared constant, not from
+    `GESAKU_OUTLINE_BLOCK_SIZE`: unlike `gen_outline`, this generator has no
+    env-var block size, so reading one here would size the cap for blocks the
+    script will never form.
+    """
+    total = resolve_chapters_total(state)
+    n_blocks = max(1, -(-total // max(REFINEMENT_BLOCK_SIZE, 1)))
+    return max(
+        timeout_for("xlong"),
+        n_blocks * REFINEMENT_ATTEMPTS * llm_timeout("standard"),
+    )
 
 
 def _outline_subprocess_cap(state: dict) -> int:
@@ -74,10 +97,24 @@ def _foundation_artifact_ok(path, min_chars: int = 500,
     if len(text) < min_chars:
         return False
     if require_chapters:
-        found = set(int(m) for m in re.findall(
-            r'###\s*\*?\*?\s*Ch(?:apter)?\b\s*\*?\*?\s*(\d+)',
-            text, re.IGNORECASE))
-        if len(found) < require_chapters:
+        # Count chapters the way the drafter will read them, NOT by counting
+        # headers anywhere in the file. The high-level roadmap carries a
+        # `### Chapter N: <slug>` line for every chapter in the book, so a
+        # whole-file scan sees 30 headers on an outline whose DETAILED section
+        # stops at 12 — the checkpoint then passed on a 12/30 outline, skipped
+        # regeneration, and the run died downstream in the refinement pass with
+        # a misleading "no source chapters" error. extract_chapter_outline is
+        # the authority: it scopes to ## DETAILED CHAPTER OUTLINES and raises
+        # on anything less than a real beats entry.
+        from core.outline import extract_chapter_outline
+        present = 0
+        for ch in range(1, require_chapters + 1):
+            try:
+                extract_chapter_outline(text, ch)
+            except ValueError:
+                continue
+            present += 1
+        if present < require_chapters:
             return False
     return True
 
@@ -211,11 +248,8 @@ def run_foundation(state: dict) -> dict:
             step("Outline part 2 exists — skipping regen (checkpoint)")
         else:
             step("Generating outline (part 2 — foreshadowing)...")
-            n_blocks = max(1, -(-resolve_chapters_total(state) // 10))
             uv_run("foundation/gen_outline_part2.py",
-                   timeout=max(timeout_for("standard"),
-                               n_blocks * llm_timeout("standard")))
-
+                   timeout=_refinement_subprocess_cap(state))
         step("Sanitizing chapter titles...")
         uv_run("pipeline/sanitize_outline_titles.py", timeout=timeout_for("short"))
 

@@ -10,7 +10,10 @@ import sys
 from pathlib import Path as _Path
 sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
 
-from core.llm import call_llm, extract_text_from_response, get_max_tokens_with_thinking
+from core.llm import (
+    TruncationError, call_llm, extract_text_from_response,
+    get_max_tokens_with_thinking,
+)
 from core import paths
 from core import llm
 from core import canon as canon_mod
@@ -24,8 +27,56 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-def call_judge(prompt, max_tokens=8000):
-    return call_llm(prompt=prompt, system="You are a ruthless literary editor. You cut fat from prose. You have no sentiment about good-enough sentences -- if a sentence isn't earning its place, it goes. You quote exactly from the text. You never invent or paraphrase. Always respond with valid JSON.", model_key="judge", max_tokens=max_tokens, temperature=0.3, timeout_role="standard")
+# A cut list for a full chapter runs long: measured mean output is 12,723
+# tokens against a chapter of ~3,200 words. The old flat 8,000 truncated 26 of
+# 90 calls — 23.6% of the revision phase's model time spent generating output
+# that was thrown away and regenerated. Sized above the observed mean, and it
+# escalates on truncation the way evaluate.py already does.
+CUT_BASE_TOKENS = int(os.getenv("GESAKU_CUT_TOKENS", "20000"))
+CUT_MAX_TOKENS = int(os.getenv("GESAKU_CUT_MAX_TOKENS", "40000"))
+# Escalation retries multiply the worst case. The caller runs this script under
+# ONE subprocess wall-clock cap (revision.py passes timeout_for("standard")),
+# and this repo's .env sets the LLM and subprocess budgets EQUAL, so three
+# retries could not finish inside the envelope that pays for them — the
+# subprocess would be killed before it could write ch_NN_cuts.json, and
+# apply_cuts would then silently skip the chapter. Two attempts fits; a third
+# does not, so the base budget is sized to succeed on the first call and the
+# escalation exists for the tail.
+CUT_RETRIES = int(os.getenv("GESAKU_CUT_RETRIES", "2"))
+
+
+def call_judge(prompt, max_tokens=None, retries=None):
+    """Ask for the cut list, escalating the budget on truncation.
+
+    Retrying with the same-or-smaller budget is guaranteed to truncate again —
+    the full list has to be asked for again, with more room.
+    """
+    if retries is None:
+        retries = CUT_RETRIES
+    if retries < 1:
+        raise ValueError(f"retries must be >= 1, got {retries}")
+    if max_tokens is None:
+        max_tokens = CUT_BASE_TOKENS
+    budget = max_tokens
+    for attempt in range(1, retries + 1):
+        try:
+            return call_llm(
+                prompt=prompt,
+                system=("You are a ruthless literary editor. You cut fat from "
+                        "prose. You have no sentiment about good-enough "
+                        "sentences -- if a sentence isn't earning its place, it "
+                        "goes. You quote exactly from the text. You never "
+                        "invent or paraphrase. Always respond with valid JSON."),
+                model_key="judge", max_tokens=budget, temperature=0.3,
+                timeout_role="standard")
+        except TruncationError:
+            if attempt == retries or budget >= CUT_MAX_TOKENS:
+                raise
+            new_budget = min(CUT_MAX_TOKENS, int(budget * 1.5))
+            print(f"  Cut list truncated on attempt {attempt}/{retries} — "
+                  f"retrying with a larger output budget "
+                  f"({budget} -> {new_budget})", file=sys.stderr)
+            budget = new_budget
 
 EDIT_PROMPT = paths.load_prompt("adversarial_edit")
 

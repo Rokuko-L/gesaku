@@ -3,6 +3,7 @@ import { api } from './api/client.js'
 import { useRoute, navigate, projectRoute } from './router.js'
 import { AppProvider, useApp } from './state.jsx'
 import { Button, EmptyState } from './components/ui.jsx'
+import ErrorBoundary from './components/ErrorBoundary.jsx'
 import ProjectHeader from './components/ProjectHeader.jsx'
 import ProjectsGallery from './screens/ProjectsGallery.jsx'
 import Settings from './screens/Settings.jsx'
@@ -141,13 +142,16 @@ function Workspace({ route }) {
 
         {/* render as ELEMENTS, never fn calls — fn calls break hook ownership */}
         <main className="min-w-0 flex-1 overflow-y-auto p-6">
-          {view === 'overview' && <Overview project={project} />}
-          {view === 'pipeline' && <PipelineDashboard project={project} tab={route.tab} />}
-          {view === 'foundation' && <FoundationView project={project} tab={route.tab} />}
-          {view === 'manuscript' && <Manuscript project={project} />}
-          {view === 'revision' && <RevisionView project={project} />}
-          {view === 'ledger' && <LedgerView project={project} />}
-          {view === 'arena' && <Arena project={project} />}
+          {/* keyed on the view so a crash in one panel does not stick to the next */}
+          <ErrorBoundary key={`${view}:${project}`}>
+            {view === 'overview' && <Overview project={project} />}
+            {view === 'pipeline' && <PipelineDashboard project={project} tab={route.tab} />}
+            {view === 'foundation' && <FoundationView project={project} tab={route.tab} />}
+            {view === 'manuscript' && <Manuscript project={project} />}
+            {view === 'revision' && <RevisionView project={project} />}
+            {view === 'ledger' && <LedgerView project={project} />}
+            {view === 'arena' && <Arena project={project} />}
+          </ErrorBoundary>
         </main>
       </div>
     </div>

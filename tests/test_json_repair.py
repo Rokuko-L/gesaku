@@ -1,11 +1,11 @@
-"""JSON-repair parser tests (core.llm.parse_json_response).
+"""JSON-repair parser tests (core.llm.parse_json_response) + encoding healing.
 
-Offline and LLM-free: each case feeds a malformed judge payload and asserts the
-healed parse. Exposed as a TestCase so CI discovers it (the script-style
-`main()` below stays for running the file directly).
+Offline and LLM-free: each case feeds a malformed judge payload and asserts
+the healed parse. Also covers UTF-16 source self-heal in evaluate.load_file.
 """
 from core import llm
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -89,37 +89,25 @@ class JsonRepairTest(unittest.TestCase):
                     self.assertEqual(v, parsed.get(k), f"key '{k}' mismatch")
 
 
-def run_test(name, raw_input, expected_dict):
-    try:
-        parsed = llm.parse_json_response(raw_input)
-        # Check keys and structure
-        for k, v in expected_dict.items():
-            assert parsed.get(k) == v, f"Key '{k}' mismatch: expected {v}, got {parsed.get(k)}"
-        print(f"SUCCESS: {name}")
-        return True
-    except Exception as e:
-        print(f"FAILED: {name}")
-        print(f"   Input: {raw_input}")
-        print(f"   Error: {type(e).__name__}: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+class EncodingHealingTest(unittest.TestCase):
+    """A UTF-16 source document must not kill a run (evaluate.load_file)."""
 
+    def test_utf16_file_is_healed_to_utf8(self):
+        import pipeline.evaluate as evaluate
+        text = "Hello, this is a UTF-16 encoded text to test self-healing."
+        with tempfile.TemporaryDirectory(prefix="gesaku_enc_") as tmp:
+            test_file = Path(tmp) / "utf16_dummy.md"
+            test_file.write_bytes(text.encode("utf-16"))
+            loaded = evaluate.load_file(test_file)
+            self.assertEqual(text, loaded.lstrip("﻿"))
+            healed = test_file.read_text(encoding="utf-8")
+            self.assertEqual(text, healed.lstrip("﻿"))
 
-def main():
-    print("Running JSON repair parser unit tests...\n")
-    success = True
-    for name, raw_input, expected in CASES:
-        success &= run_test(name, raw_input, expected)
-
-    print("\n-------------------------------------------")
-    if success:
-        print("ALL TESTS PASSED SUCCESSFULLY!")
-        sys.exit(0)
-    else:
-        print("SOME TESTS FAILED.")
-        sys.exit(1)
+    def test_missing_file_returns_empty(self):
+        import pipeline.evaluate as evaluate
+        with tempfile.TemporaryDirectory(prefix="gesaku_enc_") as tmp:
+            self.assertEqual("", evaluate.load_file(Path(tmp) / "nope.md"))
 
 
 if __name__ == "__main__":
-    main()
+    unittest.main()

@@ -34,6 +34,11 @@ const PROSE_MODES = {
 }
 const DEFAULT_PROSE = { first_person: 'first_voicey', third_person: 'third_close' }
 
+const PERSPECTIVE_LABELS = {
+  first_person: { label: 'first person (MC-locked)', hint: '"I" is always the MC; side-char focus uses a short third interlude, never a new I' },
+  third_person: { label: 'third person (close)', hint: 'one Focus head per scene; no first-person leaks' },
+}
+
 const AWARENESS = [
   { id: 'unaware', label: 'unaware', hint: 'does not know the secret' },
   { id: 'suspects', label: 'suspects', hint: 'has doubts, no proof' },
@@ -426,8 +431,9 @@ function Wizard({ onClose, onLaunch }) {
                       key={pv}
                       onClick={() => setForm({ ...form, perspective: pv, proseMode: DEFAULT_PROSE[pv] })}
                       className={SEG.btn(form.perspective === pv)}
+                      title={PERSPECTIVE_LABELS[pv]?.hint}
                     >
-                      {pv}
+                      {PERSPECTIVE_LABELS[pv]?.label || pv}
                     </button>
                   ))}
                 </div>

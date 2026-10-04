@@ -71,6 +71,16 @@ class MockLLM:
         """Context manager: rebind call_llm everywhere it's referenced."""
         return _Patched(self)
 
+    def install_tools(self, tool_script=None):
+        """Context manager: rebind call_llm_tools to a scripted tool loop.
+
+        tool_script: optional list of turns. Each turn is either
+          {"text": str, "tool_calls": None}  → natural end
+          {"text": str, "tool_calls": [{"id","name","input"}, ...]}
+        If omitted, a single end turn with empty text is used.
+        """
+        return _PatchedTools(self, tool_script)
+
     # --- introspection helpers ---
 
     @property
@@ -105,6 +115,118 @@ class _Patched:
         llm.call_llm = self._original
         for name in self._patched_modules:
             setattr(sys.modules[name], "call_llm", self._original)
+        return False
+
+
+class _MockToolLLM:
+    """Scripted replacement for llm.call_llm_tools."""
+
+    def __init__(self, mock: MockLLM, tool_script=None):
+        self.mock = mock
+        self.script = list(tool_script or [{"text": "", "tool_calls": None}])
+        self.calls = []
+
+    def __call__(self, messages, tools, executor, **kwargs):
+        budget = kwargs.get("budget")
+        if budget is None:
+            from core.llm import DEFAULT_TOOL_BUDGET
+            budget = DEFAULT_TOOL_BUDGET
+        self.calls.append({"messages": messages, "tools": tools, "kwargs": kwargs})
+        from core.llm import ToolLoopResult
+        import time
+        trace = []
+        used = 0
+        text = ""
+        agent_stop = "end_turn"
+        stop_reason = "end_turn"
+        for turn in self.script:
+            text = turn.get("text") or ""
+            calls = turn.get("tool_calls") or []
+            if not calls:
+                agent_stop = "end_turn"
+                stop_reason = "end_turn"
+                break
+            for tc in calls:
+                if used >= budget:
+                    agent_stop = "budget_exhausted"
+                    stop_reason = "tool_use"
+                    trace.append({
+                        "ts": "mock",
+                        "tool": "(none)",
+                        "input": {"skipped_tool_calls": [tc.get("name")]},
+                        "output_chars": 0,
+                        "ok": False,
+                        "error": "budget_exhausted_before_execution",
+                    })
+                    return ToolLoopResult(
+                        text=text,
+                        stop_reason=stop_reason,
+                        agent_stop=agent_stop,
+                        tool_calls_used=used,
+                        budget=budget,
+                        trace=trace,
+                        model="mock",
+                        provider="mock",
+                    )
+                used += 1
+                try:
+                    out = executor(tc.get("name", ""), tc.get("input") or {})
+                    out_s = out if isinstance(out, str) else str(out)
+                    ok = True
+                except Exception as e:
+                    out_s = f"ERROR: {e}"
+                    ok = False
+                trace.append({
+                    "ts": "mock",
+                    "tool": tc.get("name", ""),
+                    "input": tc.get("input") or {},
+                    "output_chars": len(out_s),
+                    "ok": ok,
+                })
+            if used >= budget:
+                agent_stop = "budget_exhausted"
+                stop_reason = "tool_use"
+                # Mirror real loop: harvest a final tool-free verdict turn.
+                if turn.get("final_text"):
+                    text = turn["final_text"]
+                break
+        return ToolLoopResult(
+            text=text,
+            stop_reason=stop_reason,
+            agent_stop=agent_stop,
+            tool_calls_used=used,
+            budget=budget,
+            trace=trace,
+            model="mock",
+            provider="mock",
+        )
+
+
+class _PatchedTools:
+    def __init__(self, mock: MockLLM, tool_script=None):
+        self.mock = mock
+        self.tool_mock = _MockToolLLM(mock, tool_script)
+        self._patched_modules = []
+
+    def __enter__(self):
+        from core import llm
+        original = getattr(llm, "call_llm_tools", None)
+        self._original = original
+        llm.call_llm_tools = self.tool_mock
+        self._patched_modules = [
+            name for name, mod in sys.modules.items()
+            if getattr(mod, "call_llm_tools", None) is original and original is not None
+        ]
+        for name in self._patched_modules:
+            setattr(sys.modules[name], "call_llm_tools", self.tool_mock)
+        return self.tool_mock
+
+    def __exit__(self, *exc):
+        from core import llm
+        if self._original is not None:
+            llm.call_llm_tools = self._original
+            for name in self._patched_modules:
+                setattr(sys.modules[name], "call_llm_tools", self._original)
         return False
 
 

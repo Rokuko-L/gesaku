@@ -41,6 +41,33 @@ API-shape mapping (snake_case → camelCase). Both `GET /api/llm-events` and the
 SSE `llm` frames go through it; when only one did, live rows rendered blank
 while the same call looked correct after a reload.
 
+### Progress events (`core/progress.py`)
+
+The log pane is only as good as what reaches the log. Two things made a run
+unobservable, and both are fixed at the source:
+
+- `run_tool` used `capture_output=True`, so a subprocess wrote nothing until
+  it exited. A 10-minute chapter draft looked identical to a hung run. It now
+  streams each line as it arrives, via a reader thread plus a queue — the
+  thread is required, because iterating `proc.stdout` blocks until a line
+  arrives and a *silent* child would never reach the timeout check.
+- Long stages announce themselves. `core.progress.emit` writes one parseable
+  line per event:
+
+  ```
+  #GESAKU: {"ts":"2026-09-27T23:01:35","event":"stage_start","stage":"gen_outline"}
+  ```
+
+  `stage_start` / `stage_done` (with `elapsed_s`) bracket every `uv_run`;
+  `chapter_start` / `chapter_done` bracket each chapter; retry events name the
+  attempt. `core.progress` owns the format rather than `pipeline/` because
+  `foundation/` cannot import `pipeline/` — with two emitters the webui would
+  silently lose half its events.
+
+  The SSE `log` frames render these through `_format_progress`, so the pane
+  shows `▶ start: gen_outline` the moment it begins. `parse_line` is the single
+  parser; consumers never regex the prefix themselves.
+
 CORS is restricted to the loopback origins the console is served from
 (`:5175` vite, `:8600` bridge). It was `allow_origins=["*"]`, which let any page
 the operator visited POST `/api/settings` — repointing `ANTHROPIC_BASE_URL` at
@@ -96,15 +123,22 @@ an attacker endpoint — or spawn and kill runs.
 | `GET /api/score-history?project=` | keep/discard points from `results.tsv` |
 | `GET /api/llm-events?project=` | `llm_events.jsonl` in contract camelCase (incl. `error`) |
 | `GET /api/foundation?project=` | entity graph nodes/edges + world/characters/canon/voice docs |
-| `GET /api/ledger?project=` | premise beats, roadmap, foreshadowing threads, `chaptersTotal` |
+| `GET /api/ledger?project=` | premise beats, roadmap, planned threads, foreshadowing threads, callbacks, `chaptersTotal`, `settled`. Each thread row carries `status` (`matched` / `plant-only` / `harvest-only`), `matchMethod` (`declared` / `slug` / `inferred`, or `null` when nothing is paired), and `span` (arc length, `null` unless both ends are known). A payoff with no setup is an **orphan**, drawn as a lone marker — not a closed loop |
 | `GET /api/entity-graph?project=` | LLM-arranged graph if cached, else heuristic co-mention graph |
 | `POST /api/entity-graph?project=` | ask the writer model to arrange the graph (registry + world bible + canon excerpt); cached to `.entity_graph.json` with an inputs fingerprint — `stale: true` when the source docs change |
 | `GET /api/chapters?project=` | chapters + per-attempt history + full prose |
 | `GET /api/evals?project=` | eval-log map keyed by eval-log chapter key (`ch01`) |
 | `GET /api/revision?project=` | revision briefs, adversarial cuts, novel reviews |
 | `GET /api/tournament?project=` | synthesized A/B matches from discard/keep pairs |
-| `GET /api/settings` | live `.env` + env-aware gate constants (models, thresholds, defaults, `prices`) |
-| `POST /api/settings` | merge payload into `.env` (baseUrl, optional full apiKey, models, thresholds, heuristics, defaults, prices) and return refreshed settings |
+| `GET /api/settings` | live `.env` + env-aware gate constants (models, thresholds, heuristics, **agentic**, defaults, prices) |
+| `POST /api/settings` | merge payload into `.env` (baseUrl, optional full apiKey, models, thresholds, heuristics, **agentic** → `GESAKU_RETRIEVAL_MODE` / `GESAKU_JUDGE_TOOL_BUDGET` / `GESAKU_REQUIRE_TOOLS`, defaults, prices) and return refreshed settings |
+
+**Settings env ownership:** while the bridge process lives, GET merges
+process env *over* the file — a manual `.env` edit is invisible until
+restart. Settings POST writes the file *and* process env; it is a full-state
+write for keys present in the payload. Agentic tool budget is clamped 0–200
+on read (`judge_tool_budget()`); on write an out-of-range value is
+**rejected** with 400 rather than clamped.
 
 ## Frontend architecture
 
@@ -124,6 +158,10 @@ an attacker endpoint — or spawn and kill runs.
   demo-shaped endpoints (`/api/projects`, `/api/settings`) pass
   `fixtureOnError: true` and also fall back on HTTP error — a fabricated shelf
   is acceptable there, a fabricated manuscript is not.
+- A view that throws on unexpected data is caught by `components/ErrorBoundary.jsx`
+  (keyed per view+project), which reports the error in place and leaves the rest
+  of the console usable. Without it a single bad payload — a ledger of `null` —
+  unmounted the whole app to a blank page.
 - Screens under `src/screens/project/` — the pipeline dashboard merges the
   former Monitor/Inspector/Costs screens into tabbed panes (run log, scores,
   evaluations, llm calls, telemetry). Ledger and Arena are inspection tools,

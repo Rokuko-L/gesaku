@@ -10,6 +10,8 @@ sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
 
 from core.llm import TruncationError, call_llm
 from core.paths import get_novel_title
+import hashlib
+import json
 import re
 from pathlib import Path
 from dotenv import load_dotenv
@@ -17,6 +19,54 @@ from core.genre import load_genre
 from core import paths
 
 load_dotenv()
+
+# Cache of chapter-text-hash -> rendered arc entry. A 30-chapter run re-ran
+# this pass 4 times (once per revision cycle plus export) for 120 calls over
+# only 46 distinct chapter texts; 74 calls summarized a chapter that had not
+# changed. Keyed on CONTENT, not mtime: `git_reset_hard` reverts file mtimes
+# constantly in this pipeline, so an mtime key would miss on every re-run and
+# quietly cost the whole saving.
+ARC_CACHE_PATH = paths.get_arc_summary_cache_path
+
+
+def _load_cache() -> dict:
+    try:
+        p = ARC_CACHE_PATH()
+        if p.exists():
+            return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        pass
+    return {}
+
+
+def _save_cache(cache: dict) -> None:
+    try:
+        ARC_CACHE_PATH().write_text(
+            json.dumps(cache, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass  # a cache that cannot be written is a slowdown, never a failure
+
+
+# A revision cycle adds one key per changed chapter and never removes any, so
+# without a bound the file grows for the life of the project while only the
+# current chapter texts are ever read back. Keep a small multiple of the
+# chapter count; the surplus is entries for chapters that were revised away.
+CACHE_MAX_ENTRIES_MULTIPLE = 6
+CACHE_MIN_ENTRIES = 200
+
+
+def _prune_cache(cache: dict, keep: int) -> None:
+    """Trim the cache to the most recent `keep` entries.
+
+    dict preserves insertion order, so the tail is the oldest. Called with
+    `keep` sized from the live chapter count, so it can never evict anything
+    this run is about to read.
+    """
+    limit = max(CACHE_MIN_ENTRIES, keep * CACHE_MAX_ENTRIES_MULTIPLE)
+    if len(cache) <= limit:
+        return
+    for key in list(cache)[: len(cache) - limit]:
+        cache.pop(key, None)
 
 def call_writer(prompt, max_tokens=4000):
     return call_llm(prompt=prompt, system="You summarize novel chapters precisely. State what HAPPENS, what CHANGES, and what QUESTIONS are left open. No evaluation. No praise. Just events and shifts.", model_key="writer", max_tokens=max_tokens, timeout_role="short", temperature=0.1)
@@ -35,8 +85,20 @@ def extract_key_passages(text):
     
     return opening, closing, top_dialogue
 
-def process_chapter_arc_summary(path, ch):
+def process_chapter_arc_summary(path, ch, cache=None):
     text = path.read_text(encoding="utf-8")
+    # Key on the chapter NUMBER as well as the text. The rendered entry embeds
+    # `### Chapter {ch}`, so two chapters that happen to hold identical text
+    # would otherwise share one cache entry and the second chapter would be
+    # written into the document under the first chapter's heading — the reader
+    # panel is then told to target rewrites by chapter number, so it can aim
+    # at the wrong one. Content hash, not mtime: this pipeline reverts mtimes
+    # constantly via git_reset_hard.
+    digest = hashlib.sha256(f"{ch}\x00{text}".encode("utf-8")).hexdigest()
+    if cache is not None and digest in cache:
+        entry = cache[digest]
+        print(f"Ch {ch}: cached ({len(text.split())}w)")
+        return ch, entry
     wc = len(text.split())
     opening, closing, dialogue = extract_key_passages(text)
     
@@ -66,6 +128,8 @@ def process_chapter_arc_summary(path, ch):
         entry += f'> "{d}"\n\n'
     
     print(f"Ch {ch}: summarized ({wc}w)")
+    if cache is not None:
+        cache[digest] = entry
     return ch, entry
 
 def main():
@@ -77,6 +141,9 @@ def main():
 
     from concurrent.futures import ThreadPoolExecutor
 
+    cache = _load_cache()
+    before = len(cache)
+
     pairs = []
     for path in chapter_files:
         m = re.search(r"ch_(\d+)\.md", path.name)
@@ -85,7 +152,7 @@ def main():
         pairs.append((int(m.group(1)), path))
 
     with ThreadPoolExecutor(max_workers=4) as executor:
-        futures = [(ch, executor.submit(process_chapter_arc_summary, path, ch))
+        futures = [(ch, executor.submit(process_chapter_arc_summary, path, ch, cache))
                    for ch, path in pairs]
 
     results = []
@@ -113,7 +180,7 @@ def main():
             if entry is None:
                 break
             try:
-                recovered = process_chapter_arc_summary(entry, ch)
+                recovered = process_chapter_arc_summary(entry, ch, cache)
                 break
             except Exception as e:
                 print(f"  chapter {ch} retry {attempt + 1} failed: {e}",
@@ -153,7 +220,12 @@ PREMISE: {load_genre()["generation"]["arc_summary_premise"]}
     
     out_path = paths.get_arc_summary_path()
     out_path.write_text(full, encoding="utf-8")
-    print(f"\nSaved to {out_path} ({len(full.split())} words)")
+    _prune_cache(cache, len(chapter_files))
+    _save_cache(cache)
+    reused = len(cache) - before
+    print(f"\nSaved to {out_path} ({len(full.split())} words); "
+          f"{reused} chapter summary(ies) reused from cache, "
+          f"{len(cache)} cached total")
 
 if __name__ == "__main__":
     main()

@@ -143,7 +143,23 @@ Loop:
   3. gen_canon.py        → canon.md (hard facts tagged visible_from=N;
                            sealed facts stay out of drafting until chapter N)
   4. gen_outline.py      → outline.md part 1 (beats; plant-hygiene gated)
-  5. gen_outline_part2.py → outline.md part 2 (foreshadowing ledger)
+  5. gen_outline_part2.py → outline.md part 2 (adds per-chapter
+                           `[Plant:]`/`[Harvest:]` tags; it does NOT write a
+                           ledger — the ledger is rebuilt at export, see
+                           "Plants & harvests" below). Refinement is
+                           **per-block**: a block that fails its
+                           `REFINEMENT_ATTEMPTS` writer calls keeps its
+                           unpolished chapters, the outline is still written,
+                           and the script then exits non-zero **without
+                           writing the `.outline_part2.done` marker** — the
+                           phase aborts and a resume re-runs the polish, rather
+                           than recording an unrefined outline as finished.
+                           Blocks with no source chapters are skipped (part 1
+                           writes the Detailed section in blocks, so a
+                           truncated part 1 reaches here with the tail absent).
+                           The phase derives the subprocess cap from
+                           `blocks × REFINEMENT_ATTEMPTS × standard budget`
+                           (`foundation._refinement_subprocess_cap`).
   6. Voice discovery: write 5 trial passages in different registers,
      select best, fill voice.md Part 2 with exemplars + anti-exemplars
   7. Define MYSTERY.md (the central secret the reader discovers)
@@ -239,6 +255,14 @@ For each chapter in outline order:
      - Canon view as of this chapter (public foundation + core +
        prior As-of only — sealed visible_from>N facts withheld)
   2. draft_chapter.py → chapters/ch_NN.md
+     Length band before quality eval (`pipeline_infra.chapter_length_bounds`):
+     min = 0.60× target, max = 1.45× target (1.55× climax). Outside the band
+     the draft is discarded with expansion/compression feedback and retried
+     inside the same infra attempt — an outlier never reaches the judge.
+     Eval's own length *penalty* (80–125%) is a separate, softer signal.
+     A chapter is climax only if it is the finale, or its outline carries an
+     explicit `Scene type: climax|finale` label (which `gen_outline` asks for).
+     A word like "climax" inside a beat is not a signal.
   3. evaluate.py --chapter=NN  (judge sees the same chapter-scoped canon view)
   4. If score > 6.0 → keep, commit. If < 6.0 → discard, retry (max 5).
   5. Extract new canon entries from eval output → append to canon.md
@@ -485,20 +509,33 @@ PHASE 3b: OPUS REVIEW LOOP (deep, prose-level refinement)
      is restored alongside so the plant store still describes the prose on
      disk — or dropped when the peak predates the store.
   1. Normalize chapter titles (all # level, consistent format)
-  2. typeset/build_tex.py → chapters_content.tex
-  3. Edit typeset/novel.tex:
+  2. Build manuscript.md: strip non-prose, then strip artifacts, then flatten
+     markdown. `_export_clean` exists for projects drafted before the artifact
+     guard (it runs at every save site now) and stays **presentation-only**:
+     bold is unwrapped, and an em dash **preceded by whitespace** (< `Wait — no`
+     or `Wait —no`) becomes a comma. The lookbehind anchors on that leading
+     space but cannot consume it, so a `(?<=\S)\s+,` cleanup is what keeps
+     `Wait , no` from shipping; the double-space and double-comma cleanups fold
+     the other runs. A dash with **no** preceding space is a dialogue interrupt
+     ("Catch me if you—") and keeps its dash — in the markdown that means a raw
+     U+2014 stays, which is correct there. `typeset/build_tex.py` applies the
+     same pause rule and maps every surviving U+2014 to `---`, since pdflatex+T1
+     has no glyph for the raw character. When the pass drops anything, the run
+     log names the chapters it changed.
+  3. typeset/build_tex.py → chapters_content.tex
+  4. Edit typeset/novel.tex:
      - Set title, author name
      - Choose epigraph (from novel text, NOT a spoiler)
      - Set end-page text
-  4. tectonic novel.tex → novel.pdf
-  5. typeset/build_epub.py → novel.epub
+  5. tectonic novel.tex → novel.pdf
+  6. typeset/build_epub.py → novel.epub
      EPUB 3, structured as mimetype (first, STORED) + container.xml +
      content.opf + nav.xhtml + toc.ncx + one XHTML per chapter. Pure stdlib,
      so it needs no toolchain and is attempted unconditionally; a failure
      warns and continues (a book without an e-book edition is still a book).
      Skip with `--no-epub`. The identifier is a UUIDv5 of project+title, so
      re-exporting does not mint a new book identity.
-  6. Git commit: "export: manuscript, outline, arc summary, PDF[, EPUB]"
+  7. Git commit: "export: manuscript, outline, arc summary, PDF[, EPUB]"
 ```
 
 ---
@@ -510,8 +547,10 @@ PHASE 3b: OPUS REVIEW LOOP (deep, prose-level refinement)
     central question. Build the magic system AS the theme.
   - Voice consistency (9) holds if you never break POV and keep the
     craft vocabulary native.
-  - Foreshadowing (9) requires a ledger maintained from foundation
-    through drafting. Every plant needs a payoff.
+  - Foreshadowing (9) rewards a ledger kept from foundation through drafting.
+    Every plant needs a payoff — but the pipeline only *measures* that at
+    export, and a plant with no payoff is surfaced, not enforced. See
+    "Plants & harvests (outline tags)".
 
 ### What the evaluator penalizes
   - Pacing (7) is structurally stubborn. Investigation chapters
@@ -692,22 +731,95 @@ Separate from outline-tag debts (`state["debts"]` / `[Plant: slug]`).
   leaves the previous store intact.
 - Extract asks the judge for **at most 1** concrete callback candidate
   (object / phrase / promise / injury) and which open callback ids were paid off
-  with changed meaning.
+  with changed meaning. `MicroPlantCandidate.text` truncates at 600 characters
+  rather than failing: the judge writes ~300-character plants in practice, and
+  v5 lost the extract on 22 of 24 chapters to that one over-length field.
+  A schema failure is **retried twice with its feedback appended**, the same
+  self-correction shape the judge paths use; only then is the chapter skipped.
+  The retry catches every `ValueError` — an unhealed `JSONDecodeError` used to
+  escape the `OutputValidationError` handler and crash the subprocess.
 - Store: `projects/<name>/open_callbacks.json` via `core/micro_plants.py`
   (atomic writes; max 8 open; expire after 12 chapters; near-dup filter).
+- **The extractor sees the whole chapter.** It used to send only the first 400
+  and last 800 words of anything over 1200, so a payoff landing mid-chapter was
+  invisible and the plant stayed open forever.
+- **`expired` is a nudge state, not a verdict.** Expiry stops the revision
+  suggestion; `mark_harvested` still records a payoff for an expired plant
+  because a late payoff is a fact. A payoff dated *before* its own plant is
+  refused (v4's store contains exactly that error), while a same-chapter one is
+  allowed. `expire_stale` honours the per-item `window` it stores.
 - **Drafting does not inject callbacks.** Soft optional list appears only in
   `pipeline/gen_revision.py` (`soft_inject_block`) with
   “prefer nothing over a forced reference.”
 - Targeted revision keeps re-extract with `--reextract` (drops plants whose
   `source_chapter` matches the revised chapter).
 
-Export `pipeline/build_outline.py` clusters free-text plants/harvests by token
-Jaccard + union-find (near-duplicates collapse; plant only links to a later or
-same-chapter harvest). Statuses: `paid off` (plant+harvest), `open` (plant
-only), `recalled` (harvest only). The webui ledger surfaces planned major
-threads, the clustered emergent ledger, and open callbacks.
+Export `pipeline/build_outline.py` clusters plants/harvests with union-find
+(near-duplicates collapse; a plant links only to a later or same-chapter
+harvest). Statuses: `paid off` (plant+harvest), `open` (plant only),
+`recalled` (harvest only); each thread also reports `match`: **`declared`** when
+a payoff named the chapter that set it up, **`inferred`** when the link is only
+token overlap. The webui ledger surfaces planned major threads, the clustered
+emergent ledger, and open callbacks.
 
-Offline tests: `tests/test_micro_plants.py`.
+Offline tests: `tests/test_micro_plants.py`, `tests/test_declared_plants.py`.
+
+---
+
+## Plants & harvests (outline tags)
+
+Separate from the micro-plant store above, and the pair is easy to confuse.
+
+**One owner for the tag format.** `core.outline.parse_plant_tags` is the only
+parser of `[Plant: slug - "desc"]` / `[Harvest: slug - "desc"]`. The validator,
+`extract_outline_debts` and gen_outline's carry-forward each had their own regex
+and they disagreed about quotes, hyphens and separators — so whether a tag
+existed depended on which caller you asked. The description runs to the closing
+bracket and may contain apostrophes; a class that excluded them silently dropped
+every tag with a possessive (`"Baal II's soul"`), which is how 42 real tags
+became 19 visible ones.
+
+**The ledger is rebuilt at export, and it says how it knows.**
+`pipeline/build_outline.py` summarizes each chapter and then runs a second,
+small **attribution pass**: each chapter's payoffs are shown the plants declared
+in *earlier* chapters and asked which one they resolve. A declared link is
+honoured by the clusterer with no similarity test, and the thread records
+`match: declared`. Everything else is token overlap and records `inferred`.
+Ordering holds in both cases — a payoff cannot resolve its own, a later, or an
+invented chapter — and the declared source rides in the outline bullet as
+`[payoff of chN] text` so consumers read identity off the file.
+
+**Why the attribution pass exists.** The chapter summarizer runs in isolation,
+so it can only describe a payoff in that chapter's own vocabulary. Measurement
+on v4: 97% of harvests shared a content token with an earlier plant and only 3
+shared none, yet the matcher left 101 of 111 plantless — the published rule
+("≥2 shared tokens **and** overlap ≥0.40") binds at ~40% of the *shorter*
+description, i.e. roughly 5 shared words, so the token floor was dead code. The
+pairing was the problem, not the prose.
+
+**Debts are delivered to the drafter and the judge.** A debt is by construction
+a plant that appears in no harvest, so the old consumer — matching a chapter's
+*harvest* slugs against the debt strings — could never fire, and nothing in the
+pipeline could cause an unpaid plant to be paid off.
+`core.outline.open_debts_for_chapter` surfaces the setups declared before the
+chapter being written; `pipeline/draft_chapter.py` offers them as material with
+the same "prefer nothing over a forced reference" framing as the callback list,
+and `pipeline/evaluate.py` passes the same list to the judge.
+
+**Hygiene.** `core/plant_hygiene.py` reports pre-reveal leaks and action-plant
+coverage. The required-character list is derived from sealed facts and tested
+against the registry with a **word boundary** — a substring test admitted "I"
+and "Arc" — and canon terminology is excluded (article-led or enumerated: "the
+Law", "Law III"). The coverage floor stays at **1**: the data does not support
+raising it, and floor 1 already catches a character absent from every pre-reveal
+chapter. `plant_hygiene.json` is a snapshot from foundation time; it goes stale
+when canon.md is edited.
+
+**Non-prose output never reaches a chapter.** See
+[core/prose-guard.md](../core/prose-guard.md).
+
+Offline tests: `tests/test_plant_tags.py`, `tests/test_attribution.py`,
+`tests/test_hygiene_names.py`.
 
 ---
 

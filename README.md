@@ -205,7 +205,7 @@ Copy `.env.example` → `.env`.
 | `GESAKU_GENRE` | — | Default genre |
 | `GESAKU_CHAPTERS` | `24` | Default chapter count |
 | `GESAKU_NOTES` | — | Default premise |
-| `GESAKU_PERSPECTIVE` | — | `first_person` \| `third_person` (empty = foundation decides) |
+| `GESAKU_PERSPECTIVE` | — | `first_person` \| `third_person` (empty = foundation decides). **`first_person` is MC-locked**: "I" is always the MC; a chapter may *Focus* on a side character, but that never becomes a new "I". Off-MC scenes use a short third-person interlude across a hard scene break (`---`). |
 | `GESAKU_PROSE_MODE` | — | `first_intimate` \| `first_voicey` \| `third_close` \| `third_scene` — prose-distance pack from `fuel/prose/` |
 | `GESAKU_FOUNDATION_THRESHOLD` | `7.5` | Foundation exit gate |
 | `GESAKU_CHAPTER_THRESHOLD` | `6.5` | Per-chapter keep gate |

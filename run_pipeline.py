@@ -54,6 +54,7 @@ FROM_SCRATCH_STALE_FILES = (
     "results.tsv", "state.json", "active_genre.json", "seed.txt",
     "open_callbacks.json", "plant_hygiene.json",
     "premise_validation.json", "retrofit_report.json",
+    "arc_summary_cache.json",
     ".outline_roadmap.md", ".outline_part1.md", ".outline_part2.done",
 )
 
@@ -351,7 +352,7 @@ Examples:
         help="Run only a specific phase")
     parser.add_argument(
         "--max-cycles", type=int, default=None,
-        help=f"Maximum revision cycles (deprecated synonym for --revision-cycles)")
+        help="Maximum revision cycles (deprecated synonym for --revision-cycles)")
     parser.add_argument(
         "--revision-cycles", type=int, default=6,
         help="Number of revision cycles (default: 6)")

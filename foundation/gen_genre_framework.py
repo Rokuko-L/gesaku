@@ -177,17 +177,19 @@ def main():
         if args.perspective == "first_person":
             perspective_directive = (
                 "\n=== MANDATORY PERSPECTIVE ===\n"
-                "The novel MUST be written in FIRST-PERSON narration. All chapters are narrated "
-                "by the POV character using 'I/me/my', in close first-person limited. The outline "
-                "writer must assign a POV character per chapter and the draft instructions must "
-                "require strict first-person. Never use third-person narration in any chapter."
+                "The novel MUST be written in FIRST-PERSON, MC-LOCKED narration. "
+                "\"I/me/my\" is always the main character. The outline writer names a "
+                "Focus (who the scene is about) plus MC presence per chapter — Focus "
+                "may be a side character but never becomes \"I\". Off-MC scenes use a "
+                "short third-person interlude across a hard scene break, never a second "
+                "first-person narrator. Draft instructions must require this lock."
             )
         else:
             perspective_directive = (
                 "\n=== MANDATORY PERSPECTIVE ===\n"
                 "The novel MUST be written in THIRD-PERSON narration. All chapters are narrated in "
-                "close third-person limited, anchored to the assigned POV character ('he/she/they', "
-                "character name). The outline writer must assign a POV character per chapter and the "
+                "close third-person limited, anchored to the assigned Focus character ('he/she/they', "
+                "character name). The outline writer must assign a Focus per chapter and the "
                 "draft instructions must require strict third-person. Never switch to first-person."
             )
 

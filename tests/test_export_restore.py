@@ -105,5 +105,39 @@ class ExportRestoreTest(unittest.TestCase):
         self.assertFalse(export_mod._restore_best_novel("deadbeef"))
 
 
+class EmDashTest(unittest.TestCase):
+    """Export em-dash treatment — three production bugs, pinned.
+
+    Calls `export_mod.clean_em_dashes` (the single owner). A private copy of
+    the regex chain would stay green while production drifts.
+    """
+
+    def export_clean(self, text: str) -> str:
+        return export_mod.clean_em_dashes(text)
+
+    def test_a_spaced_dash_becomes_a_tight_comma(self):
+        self.assertEqual("Wait, no, stay.", self.export_clean("Wait — no, stay."))
+        self.assertEqual("a, b", self.export_clean("a — b"))
+        self.assertEqual("two, dashes, here.", self.export_clean("two — dashes — here."))
+
+    def test_no_space_before_comma_survives(self):
+        for source in ("Wait — no", "a — b", "x —  y"):
+            out = self.export_clean(source)
+            self.assertNotIn(" ,", out, f"{source!r} -> {out!r}")
+            self.assertNotIn("  ", out, f"{source!r} -> {out!r}")
+
+    def test_an_interrupt_keeps_its_dash(self):
+        for source in ("Catch me if you—", "and then—nothing."):
+            self.assertEqual(source, self.export_clean(source))
+
+    def test_a_dash_after_an_existing_comma_does_not_double_it(self):
+        self.assertEqual("he paused, then ran.", self.export_clean("he paused, — then ran."))
+
+    def test_the_pdf_path_has_no_raw_dash_left(self):
+        source = Path("typeset/build_tex.py").read_text(encoding="utf-8")
+        self.assertIn("'---'", source)
+        self.assertNotIn("s.replace('—', ', ')", source)
+
+
 if __name__ == "__main__":
     unittest.main()

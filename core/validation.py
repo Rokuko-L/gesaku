@@ -77,6 +77,30 @@ class NovelScoreOutput(BaseModel):
         return v
 
 
+class ContinuityFinding(BaseModel):
+    """One continuity finding (closed or open pass)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    kind: str = "continuity"
+    claim: str
+    chapters: list[int] = Field(default_factory=list)
+    evidence: list[str] = Field(default_factory=list)
+    severity: str = "warn"
+    author_only: bool = False
+    trust: str = "low"
+
+
+class ContinuityVerdict(BaseModel):
+    """Open-pass continuity judge verdict (host appends stop/trace/overlap)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    findings: list[ContinuityFinding] = Field(default_factory=list)
+    leads_exhausted: bool = False
+    notes: str = ""
+
+
 class CompareOutput(BaseModel):
     """Head-to-head chapter comparison verdict."""
 
@@ -161,10 +185,29 @@ def parse_validated(model_cls: type[BaseModel], text: str, context: str = "") ->
 
 
 class MicroPlantCandidate(BaseModel):
-    """One concrete prose detail that could pay off in a later chapter."""
+    """One concrete prose detail that could pay off in a later chapter.
 
-    text: str = Field(min_length=1, max_length=240)
+    `text` is truncated rather than rejected: the extractor writes vivid
+    run-ons well past the cap in practice, and failing the whole extract threw
+    away every other plant in the same response.
+    """
+
+    text: str = Field(min_length=1, max_length=600)
     kind: str = Field(default="object", max_length=24)
+
+    @field_validator("text", mode="before")
+    @classmethod
+    def _truncate_overlong(cls, v):
+        if isinstance(v, str) and len(v) > 600:
+            head = v[:600]
+            # Cut on the last word boundary when one is near enough to be
+            # useful; otherwise take the whole window rather than gutting the
+            # value to the first stray space.
+            boundary = head.rsplit(" ", 1)[0].rstrip(",;:")
+            if len(boundary) >= 400:
+                head = boundary
+            return head[:599] + "…"
+        return v
 
 
 class MicroPlantExtract(BaseModel):
@@ -257,6 +300,23 @@ class ChapterOutlineEntry(BaseModel):
     harvests: list[str] = Field(default_factory=list)
     emotional_arc: str = ""
     chapter_question: str = ""
+
+
+class HarvestAttribution(BaseModel):
+    """One payoff matched to the chapter whose plant it resolves."""
+
+    model_config = ConfigDict(extra="allow")
+
+    index: int
+    planted_chapter: int | None = None
+
+
+class HarvestAttributions(BaseModel):
+    """Output of the attribution pass: which earlier plant each payoff resolves."""
+
+    model_config = ConfigDict(extra="allow")
+
+    attributions: list[HarvestAttribution] = Field(default_factory=list)
 
 
 class CutEntry(BaseModel):

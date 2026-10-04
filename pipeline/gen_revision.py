@@ -14,8 +14,10 @@ from core import textstats
 import sys
 from pathlib import Path
 from dotenv import load_dotenv
-from core.genre import load_genre, prose_mode_system_block
+from core.genre import load_genre, perspective_system_block, prose_mode_system_block
 from core import paths
+from core import prose
+from core import retrieval
 
 load_dotenv()
 
@@ -24,13 +26,7 @@ def call_writer(prompt, max_tokens=16000):
     system = genre_cfg["identity"]["revision_system"]
     perspective = genre_cfg.get("perspective", "")
     if perspective:
-        if perspective == "first_person":
-            system += ("\n\nMANDATORY PERSPECTIVE: Keep the chapter in STRICT FIRST-PERSON "
-                       "limited narration from the POV character ('I/me/my'). No third-person narration.")
-        else:
-            system += ("\n\nMANDATORY PERSPECTIVE: Keep the chapter in STRICT THIRD-PERSON "
-                       "limited narration anchored to the POV character ('he/she/they' or the "
-                       "character's name). Never switch to first-person narration.")
+        system += perspective_system_block(perspective)
     system += prose_mode_system_block(genre_cfg)
     return call_llm(prompt=prompt, system=system, model_key="writer", max_tokens=max_tokens, beta_context=True, timeout_role="standard", temperature=0.8, raise_on_truncation=True)
 
@@ -91,6 +87,30 @@ def main():
     except Exception:
         pass
 
+    chapter_outline = ""
+    try:
+        outline_text = paths.get_outline_path().read_text(encoding="utf-8")
+        from core.outline import extract_chapter_outline
+        chapter_outline = extract_chapter_outline(outline_text, ch_num)
+    except (OSError, ValueError) as e:
+        print(f"WARN: revision could not load chapter {ch_num} outline: {e}", file=sys.stderr)
+        chapter_outline = ""
+
+    pack = retrieval.build_retrieval_pack(
+        chapter_num=ch_num,
+        chapter_outline=chapter_outline,
+        characters_text=characters,
+        world_text=world,
+        extra_texts=[brief, old_text[:2000]],
+    )
+    retrieval.write_retrieval_telemetry(
+        pack,
+        ch_num,
+        paths.get_eval_logs_dir() / f"retrieval_ch{ch_num:02d}_telemetry.json",
+    )
+    characters_block = pack.characters_block or characters
+    world_block = pack.world_block or world
+
     prompt = f"""Rewrite Chapter {ch_num} of "{title}."
 
 REVISION BRIEF (follow this exactly):
@@ -100,10 +120,10 @@ VOICE DEFINITION:
 {voice}
 
 CHARACTER REGISTRY:
-{characters}
+{characters_block}
 
 WORLD BIBLE:
-{world}
+{world_block}
 
 PREVIOUS CHAPTER ENDING (maintain continuity):
 {prev_tail}
@@ -130,9 +150,23 @@ Write the FULL revised chapter now."""
     result = call_writer(prompt)
     
     out_path = chapters_dir / f"ch_{ch_num:02d}.md"
-    out_path.write_text(outline.normalize_chapter_heading(result, ch_num), encoding="utf-8")
+    body = outline.normalize_chapter_heading(result, ch_num)
+    if prose.needs_redraft(body):
+        # Never replace a good chapter on disk with a derailed fragment.
+        print(f"NON_PROSE_FRAGMENT: revision of ch{ch_num} derailed after "
+              f"{prose.prose_words(body)} words; keeping the chapter on disk",
+              file=sys.stderr)
+        sys.exit(3)
+    if prose.cut_reason(body) == "derail":
+        print("NON_PROSE_DERAIL: revision interrupted by model output", file=sys.stderr)
+    body = prose.strip_non_prose(body)
+    body, removed = prose.strip_artifacts(body)
+    if removed:
+        print(f"ARTIFACTS: {len(removed)} removal(s): {removed}", file=sys.stderr)
+    body = body.rstrip() + "\n"
+    out_path.write_text(body, encoding="utf-8")
     print(f"Saved to {out_path}", file=sys.stderr)
-    print(f"Word count: {len(result.split())}", file=sys.stderr)
+    print(f"Word count: {len(body.split())}", file=sys.stderr)
 
 if __name__ == "__main__":
     main()

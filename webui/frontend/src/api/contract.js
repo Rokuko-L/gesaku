@@ -88,6 +88,8 @@
  * @property {{writer: string, judge: string, review: string}} models
  * @property {{foundation: number, chapter: number}} thresholds  // 0-10 gates
  * @property {{maxChapterAttempts: number, revisionCycles: number, plateauDelta: number}} heuristics
+ * @property {{retrievalMode: "dump"|"scoped", judgeToolBudget: number, requireTools: boolean}} agentic
+ *   // GESAKU_RETRIEVAL_MODE, GESAKU_JUDGE_TOOL_BUDGET, GESAKU_REQUIRE_TOOLS
  * @property {{inputPerMTok: number|null, outputPerMTok: number|null}} prices
  *   // USD per 1M tokens (GESAKU_PRICE_*); null = not configured, so telemetry
  *   // omits cost instead of inventing one
@@ -183,13 +185,29 @@
 
 /**
  * Beats & harvests ledger (GET /api/ledger).
+ *
+ * `status` describes the data only: `matched` needs a plant AND a payoff at
+ * both ends; `plant-only` is an unpaid setup; `harvest-only` is a payoff with
+ * no setup found ("orphan"). `matchMethod` is "declared" when a payoff named
+ * the plant it resolves, "slug" when the row carries a stable slug, else
+ * "inferred" — the pairing came from token overlap rather than identity.
+ * `span` is the arc length in chapters, or null.
+ * @typedef {Object} LedgerThread
+ * @property {string} thread
+ * @property {number|null} planted
+ * @property {number|null} harvest
+ * @property {"matched"|"plant-only"|"harvest-only"} status
+ * @property {"declared"|"slug"|"inferred"|null} matchMethod  // null when nothing is paired
+ * @property {number|null} span
+ *
  * @typedef {Object} Ledger
- * @property {Array<{label: string, done: boolean}>} premiseBeats
+ * @property {Array<{label: string}>} premiseBeats
  * @property {Array<{chapter: number, title: string, beats: string[]}>} roadmap
- * @property {Array<{thread: string, planted: number|null, harvest: number|null, status: "paid off"|"open"}>} threads
- * @property {Array<{thread: string, planted: number|null, harvest: number|null, status: "paid off"|"open"}>} [plannedThreads]
+ * @property {Array<LedgerThread>} threads
+ * @property {Array<LedgerThread>} plannedThreads
  * @property {Array<{id: string, text: string, kind: string, sourceChapter: number|null, harvestChapter: number|null, status: string}>} [callbacks]
  * @property {number} chaptersTotal
+ * @property {boolean} settled   // the book is finished, so unpaid plants shipped that way
  */
 
 /**
